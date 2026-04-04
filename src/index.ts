@@ -265,11 +265,12 @@ async function main() {
     }
   }
 
-  // Hide cursor + graceful shutdown
+  // Hide cursor + graceful shutdown (swarm-aware handler installed after swarm is created)
   process.stdout.write("\x1B[?25l");
   const restore = () => process.stdout.write("\x1B[?25h\n");
   process.on("SIGINT", () => { restore(); process.exit(0); });
   process.on("SIGTERM", () => { restore(); process.exit(0); });
+
 
   // ── Plan phase ──
   if (planMode && objective) {
@@ -309,6 +310,16 @@ async function main() {
     useWorktrees,
   });
 
+  // Replace simple SIGINT with graceful drain: first press stops queue, second force-exits
+  process.removeAllListeners("SIGINT");
+  let stopping = false;
+  process.on("SIGINT", () => {
+    if (stopping) { swarm.cleanup(); restore(); process.exit(0); }
+    stopping = true;
+    process.stdout.write(`\n  ${chalk.yellow(`Stopping... waiting for ${swarm.active} active agent(s) to finish (Ctrl+C again to force)`)}\n`);
+    swarm.abort();
+  });
+
   const stopRender = startRenderLoop(swarm);
 
   try {
@@ -326,6 +337,10 @@ async function main() {
         : "";
     console.log(`\n  ${chalk.bold("Complete:")} ${summary}${cost}`);
 
+    const elapsed = Math.round((Date.now() - swarm.startedAt) / 1000);
+    const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+    console.log(chalk.dim(`  Elapsed: ${elapsedStr}  Tokens: ${fmtTokens(swarm.totalInputTokens)} in / ${fmtTokens(swarm.totalOutputTokens)} out`));
+
     if (swarm.mergeResults.length > 0) {
       const merged = swarm.mergeResults.filter((r) => r.ok).length;
       const conflicts = swarm.mergeResults.filter((r) => !r.ok);
@@ -340,12 +355,22 @@ async function main() {
         console.log(chalk.dim("  Branches preserved — merge manually with: git merge <branch>"));
       }
     }
+
+    if (swarm.logFile) {
+      console.log(chalk.dim(`  Log: ${swarm.logFile}`));
+    }
     console.log("");
   }
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
 
 main().catch((err) => {

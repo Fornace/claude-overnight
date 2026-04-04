@@ -1,5 +1,5 @@
 import { execSync } from "child_process";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -43,6 +43,7 @@ export class Swarm {
   totalInputTokens = 0;
   totalOutputTokens = 0;
   phase: SwarmPhase = "running";
+  aborted = false;
   mergeResults: MergeResult[] = [];
 
   // Rate limit tracking for auto-concurrency
@@ -54,6 +55,8 @@ export class Swarm {
   private config: SwarmConfig;
   private nextId = 0;
   private worktreeBase?: string;
+  private cleanedUp = false;
+  logFile?: string;
 
   constructor(config: SwarmConfig) {
     this.config = config;
@@ -69,21 +72,31 @@ export class Swarm {
   }
 
   async run(): Promise<void> {
-    // Setup worktree base dir if needed
-    if (this.config.useWorktrees) {
-      this.worktreeBase = mkdtempSync(join(tmpdir(), "claude-swarm-"));
-      this.log(-1, `Worktrees: ${this.worktreeBase}`);
-    }
+    try {
+      if (this.config.useWorktrees) {
+        this.warnDirtyTree();
+        this.cleanStaleWorktrees();
+        this.worktreeBase = mkdtempSync(join(tmpdir(), "claude-swarm-"));
+        this.log(-1, `Worktrees: ${this.worktreeBase}`);
+      }
 
-    this.phase = "running";
-    const n = Math.min(this.config.concurrency, this.queue.length);
-    await Promise.all(Array.from({ length: n }, () => this.worker()));
+      this.phase = "running";
+      const n = Math.min(this.config.concurrency, this.queue.length);
+      await Promise.all(Array.from({ length: n }, () => this.worker()));
 
-    // Merge phase
-    if (this.config.useWorktrees) {
-      await this.mergeAll();
+      if (this.config.useWorktrees) {
+        await this.mergeAll();
+      }
+      this.phase = "done";
+    } finally {
+      this.cleanup();
+      this.writeLogFile();
     }
-    this.phase = "done";
+  }
+
+  abort(): void {
+    this.aborted = true;
+    this.queue.length = 0;
   }
 
   log(agentId: number, text: string) {
@@ -94,9 +107,10 @@ export class Swarm {
   // ── Worker loop with auto-concurrency throttling ──
 
   private async worker(): Promise<void> {
-    while (this.queue.length > 0) {
+    while (this.queue.length > 0 && !this.aborted) {
       await this.throttle();
-      const task = this.queue.shift()!;
+      const task = this.queue.shift();
+      if (!task) break;
       try {
         await this.runAgent(task);
       } catch (err: any) {
@@ -167,9 +181,8 @@ export class Swarm {
       }
 
       try {
-        const deadline = Date.now() + timeoutMs;
         const perm = this.config.permissionMode ?? "auto";
-        for await (const msg of query({
+        const agentQuery = query({
           prompt: this.config.useWorktrees
             ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
             : task.prompt,
@@ -182,12 +195,29 @@ export class Swarm {
             includePartialMessages: true,
             persistSession: false,
           },
-        })) {
-          this.handleMsg(agent, msg);
-          if (Date.now() > deadline) {
-            throw new AgentTimeoutError(timeoutMs);
-          }
+        });
+
+        // Race against a real timer — fires even if the SDK yields nothing
+        let timer: NodeJS.Timeout;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            agentQuery.close();
+            reject(new AgentTimeoutError(timeoutMs));
+          }, timeoutMs);
+        });
+        try {
+          await Promise.race([
+            (async () => {
+              for await (const msg of agentQuery) {
+                this.handleMsg(agent, msg);
+              }
+            })(),
+            timeout,
+          ]);
+        } finally {
+          clearTimeout(timer!);
         }
+
         if (agent.status === "running") {
           agent.status = "done";
           agent.finishedAt = Date.now();
@@ -227,8 +257,8 @@ export class Swarm {
       const lines = status.trim().split("\n").length;
       agent.filesChanged = lines;
       exec("git add -A", worktreeCwd);
-      const msg = agent.task.prompt.slice(0, 72).replace(/"/g, '\\"');
-      exec(`git commit -m "swarm: ${msg}"`, worktreeCwd);
+      const msg = agent.task.prompt.slice(0, 72).replace(/'/g, "'\\''");
+      exec(`git commit -m 'swarm: ${msg}'`, worktreeCwd);
       this.log(agent.id, `Committed ${lines} file(s)`);
     } catch {
       // No changes or commit failed — fine
@@ -266,14 +296,72 @@ export class Swarm {
       }
       this.mergeResults.push(result);
     }
+  }
 
-    // Cleanup worktrees (keep branches)
+  // ── Cleanup & diagnostics ──
+
+  cleanup(): void {
+    if (this.cleanedUp) return;
+    this.cleanedUp = true;
     if (this.worktreeBase) {
       try {
         exec("git worktree prune", this.config.cwd);
         rmSync(this.worktreeBase, { recursive: true, force: true });
       } catch {}
     }
+  }
+
+  private warnDirtyTree(): void {
+    try {
+      const status = exec("git status --porcelain", this.config.cwd);
+      if (status.trim()) {
+        const n = status.trim().split("\n").length;
+        this.log(-1, `Warning: ${n} uncommitted file(s) in working tree`);
+      }
+    } catch {}
+  }
+
+  private cleanStaleWorktrees(): void {
+    try {
+      const list = exec("git worktree list --porcelain", this.config.cwd);
+      const stale: string[] = [];
+      for (const line of list.split("\n")) {
+        if (line.startsWith("worktree ") && line.includes("claude-swarm-")) {
+          stale.push(line.slice("worktree ".length));
+        }
+      }
+      if (stale.length > 0) {
+        this.log(-1, `Cleaning ${stale.length} stale worktree(s)`);
+        for (const dir of stale) {
+          try { rmSync(dir, { recursive: true, force: true }); } catch {}
+        }
+        exec("git worktree prune", this.config.cwd);
+      }
+    } catch {}
+  }
+
+  private writeLogFile(): void {
+    try {
+      const ts = new Date(this.startedAt).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      this.logFile = join(tmpdir(), `claude-swarm-${ts}.json`);
+      writeFileSync(this.logFile, JSON.stringify({
+        startedAt: new Date(this.startedAt).toISOString(),
+        durationMs: Date.now() - this.startedAt,
+        completed: this.completed, failed: this.failed, aborted: this.aborted,
+        cost: this.totalCostUsd,
+        tokens: { input: this.totalInputTokens, output: this.totalOutputTokens },
+        agents: this.agents.map(a => ({
+          id: a.id, task: a.task.prompt, status: a.status, error: a.error,
+          toolCalls: a.toolCalls, cost: a.costUsd, branch: a.branch,
+          filesChanged: a.filesChanged,
+          durationMs: a.finishedAt && a.startedAt ? a.finishedAt - a.startedAt : undefined,
+        })),
+        merges: this.mergeResults,
+        events: this.logs.map(l => ({
+          time: new Date(l.time).toISOString(), agent: l.agentId, text: l.text,
+        })),
+      }, null, 2));
+    } catch {}
   }
 
   // ── Message handler ──
