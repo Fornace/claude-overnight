@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { execSync } from "child_process";
@@ -8,7 +8,7 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan, detectModelTier, steerWave } from "./planner.js";
+import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, orchestrate } from "./planner.js";
 import type { WaveSummary } from "./planner.js";
 import { startRenderLoop, renderSummary } from "./ui.js";
 import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
@@ -260,6 +260,16 @@ function showPlan(tasks: Task[]) {
   console.log("");
 }
 
+function readDesignDocs(dir: string): string {
+  try {
+    const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
+    return files.map(f => {
+      const content = readFileSync(join(dir, f), "utf-8");
+      return `### ${f}\n${content}`;
+    }).join("\n\n");
+  } catch { return ""; }
+}
+
 // ── Main ──
 
 async function main() {
@@ -370,21 +380,22 @@ async function main() {
       console.log(chalk.yellow('  Be specific, e.g. "refactor the auth module, add tests, and update docs"\n'));
     }
 
-    // 2. Budget — how many agent runs to spend
-    const budgetAns = await ask(chalk.dim("\n  Agent budget [10]: "));
+    // Start fetching models while user enters budget
+    const modelsPromise = fetchModels();
+
+    // 2. Budget
+    const budgetAns = await ask(chalk.dim("\n  Budget [10]: "));
     budget = parseInt(budgetAns) || 10;
     if (budget < 1) { console.error(chalk.red(`  Budget must be a positive number`)); process.exit(1); }
 
-    // 3. Worker model — planner always uses best available
-    process.stdout.write(chalk.dim("  Fetching models..."));
-    const models = await fetchModels();
-    process.stdout.write(`\x1B[2K\r`);
+    // 3. Worker model
+    const models = await modelsPromise;
 
     // Pick best model for planner (first = most capable)
     plannerModel = models[0]?.value || "claude-sonnet-4-6";
 
     if (models.length > 0) {
-      workerModel = await select("Worker model (planner always uses best available):", models.map((m) => ({
+      workerModel = await select("Worker model:", models.map((m) => ({
         name: m.displayName,
         value: m.value,
         hint: m.description,
@@ -400,7 +411,7 @@ async function main() {
     }
 
     // 4. Usage cap — how much of your plan to use
-    usageCap = await select("Usage limit:", [
+    usageCap = await select("Usage:", [
       { name: "Unlimited", value: undefined as any, hint: "use full capacity, wait through rate limits" },
       { name: "90%", value: 0.9, hint: "leave 10% for other work" },
       { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
@@ -446,6 +457,9 @@ async function main() {
 
   // ── Flex mode: adaptive multi-wave planning ──
   const flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
+  const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
+  let thinkingUsed = 0;
+  let designContext: string | undefined;
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
   const needsPlan = tasks.length === 0;
@@ -456,22 +470,72 @@ async function main() {
       process.exit(1);
     }
 
-    // In flex mode, plan ~50% of budget for wave 1, but cap per-wave to keep planning fast
-    const waveBudget = flex ? Math.min(50, Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5))) : budget;
-    const flexNote = flex
-      ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.`
-      : undefined;
-
     process.stdout.write("\x1B[?25l");
     const planRestore = () => process.stdout.write("\x1B[?25h");
 
-    console.log(chalk.magenta(`\n  Planning${flex ? " wave 1" : ""}...\n`));
+    const useThinking = flex && (budget ?? 10) > concurrency * 3;
+    const designDir = join(cwd, ".claude-overnight", "designs");
+
     try {
-      tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, (text) => {
-        process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-      }, flexNote);
-      const flexHint = flex ? chalk.dim(` (wave 1, ${(budget ?? 10) - tasks.length} remaining)`) : "";
-      process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}${flexHint}\n\n`);
+      if (useThinking) {
+        // Phase 1: Quick theme identification
+        console.log(chalk.magenta(`\n  Identifying themes...\n`));
+        const themes = await identifyThemes(objective!, concurrency, plannerModel, permissionMode);
+        process.stdout.write(`\x1B[2K\r  ${chalk.green(`${themes.length} themes`)}\n`);
+
+        // Phase 2: Thinking wave — agents explore codebase
+        mkdirSync(designDir, { recursive: true });
+        const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel);
+        console.log(chalk.magenta(`\n  Thinking: ${thinkingTasks.length} agents exploring...\n`));
+
+        const thinkingSwarm = new Swarm({
+          tasks: thinkingTasks, concurrency, cwd,
+          model: plannerModel,
+          permissionMode,
+          useWorktrees: false,
+          mergeStrategy: "yolo",
+          agentTimeoutMs,
+          usageCap,
+        });
+        const stopThinkRender = startRenderLoop(thinkingSwarm);
+        try { await thinkingSwarm.run(); } finally { stopThinkRender(); }
+        console.log(renderSummary(thinkingSwarm));
+        thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
+
+        // Phase 3: Orchestrate from design docs
+        designContext = readDesignDocs(designDir);
+        if (designContext) {
+          const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
+          const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
+          console.log(chalk.magenta(`\n  Orchestrating plan...\n`));
+          tasks = await orchestrate(objective!, designContext, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, (text) => {
+            process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
+          }, flexNote);
+          const remaining = (budget ?? 10) - thinkingUsed - tasks.length;
+          process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}${chalk.dim(` (${remaining} remaining)`)}\n\n`);
+        } else {
+          // Fallback: no design docs produced, use direct planner
+          console.log(chalk.yellow(`\n  No design docs produced — falling back to direct planning\n`));
+          const waveBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
+          tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, (text) => {
+            process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
+          });
+          process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}\n\n`);
+        }
+      } else {
+        // Small budget: direct planning (no thinking wave)
+        const waveBudget = flex ? Math.min(50, Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5))) : budget;
+        const flexNote = flex
+          ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.`
+          : undefined;
+
+        console.log(chalk.magenta(`\n  Planning${flex ? " wave 1" : ""}...\n`));
+        tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, (text) => {
+          process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
+        }, flexNote);
+        const flexHint = flex ? chalk.dim(` (wave 1, ${(budget ?? 10) - tasks.length} remaining)`) : "";
+        process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}${flexHint}\n\n`);
+      }
     } catch (err: any) {
       planRestore();
       if (isAuthError(err)) console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`));
@@ -555,12 +619,11 @@ async function main() {
   // ── Run (wave loop) ──
   process.stdout.write("\x1B[?25l");
   const restore = () => process.stdout.write("\x1B[?25h\n");
-  const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
   const runStartedAt = Date.now();
 
   // Wave-loop state
   let currentSwarm: Swarm | undefined;
-  let remaining = budget ?? tasks.length;
+  let remaining = (budget ?? tasks.length) - thinkingUsed;
   let currentTasks = tasks;
   let waveNum = 0;
   const waveHistory: WaveSummary[] = [];
@@ -650,7 +713,7 @@ async function main() {
         objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
         permissionMode, concurrency, (text) => {
           process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-        },
+        }, designContext,
       );
       process.stdout.write(`\x1B[2K\r`);
       process.stdout.write("\x1B[?25h");
@@ -669,6 +732,9 @@ async function main() {
       break;
     }
   }
+
+  // Clean up design docs
+  try { rmSync(join(cwd, ".claude-overnight", "designs"), { recursive: true, force: true }); } catch {}
 
   // Switch back if we created a run branch
   if (runBranch && originalRef) {

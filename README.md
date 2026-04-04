@@ -38,6 +38,22 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 
 The planner always runs on the best available model (Opus) regardless of which model you pick for workers. This ensures high-quality task decomposition even when workers use a cheaper model.
 
+### Thinking wave
+
+For large budgets (`budget > concurrency * 3`), the planner doesn't try to generate hundreds of tasks from scratch. Instead, it launches a **thinking wave** — a team of architect agents that explore your codebase in parallel before any code is written.
+
+```
+Identifying themes...        → splits objective into N angles (< 30s, no tools)
+Thinking: 5 agents exploring... → each agent deeply explores from its angle, writes a design doc
+Orchestrating plan...        → reads all design docs, synthesizes concrete execution tasks
+```
+
+Each thinking agent gets a different research focus (architecture, data, UI, APIs, testing, etc.), explores using Read/Glob/Grep, and writes a structured design document with findings, proposed work items, and key files. The orchestrator then reads all design docs and produces grounded, well-informed execution tasks that reference specific files and patterns the researchers found.
+
+This means a budget of 200 doesn't generate 200 tasks from a single LLM call guessing at your codebase. It sends 5 architects to study the code first, then plans 50 tasks based on their findings, executes them, steers, and repeats.
+
+For small budgets (≤ `concurrency * 3`), the planner skips the thinking wave and generates tasks directly — fast and efficient for focused work.
+
 ### Model-aware task design
 
 The planner calibrates task ambition based on your worker model:
@@ -56,9 +72,9 @@ The budget also shapes task granularity:
 
 **Medium budget (16-50)**: Autonomous missions. "Design and implement the complete favorites system: DB schema, API routes, client hooks, error handling."
 
-**Large budget (50+)**: Full workstream decomposition. Architecture, features, testing, security, UX polish, performance — everything a team would cover. Each task is a substantial work session.
+**Large budget (50+)**: Thinking wave + orchestration. Architects explore, then execution tasks are synthesized from their findings. Each task is a substantial work session grounded in real codebase analysis.
 
-A budget of 200 is not 200 micro-edits. It's 200 senior-engineer work sessions running in parallel.
+A budget of 200 is not 200 micro-edits. It's 5 architects + ~195 senior-engineer work sessions, planned in waves.
 
 ## Usage limits
 

@@ -355,6 +355,136 @@ export async function planTasks(
   return tasks;
 }
 
+// ── Thinking wave ──
+
+export async function identifyThemes(
+  objective: string,
+  count: number,
+  model: string,
+  permissionMode: PermMode,
+): Promise<string[]> {
+  let resultText = "";
+  for await (const msg of query({
+    prompt: `Split this objective into exactly ${count} independent research angles for architects exploring a codebase. Each angle should cover a distinct aspect.
+
+Objective: ${objective}
+
+Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
+    options: {
+      model,
+      permissionMode,
+      ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
+      persistSession: false,
+    },
+  })) {
+    if (msg.type === "result" && msg.subtype === "success") resultText = (msg as any).result || "";
+  }
+
+  const parsed = attemptJsonParse(resultText);
+  if (parsed?.themes && Array.isArray(parsed.themes)) return parsed.themes.slice(0, count);
+
+  const fallback = ["architecture, patterns, and conventions", "data models, state, and persistence", "user-facing flows, components, and UX", "APIs, integrations, and services", "testing, quality, and error handling", "security, performance, and infrastructure", "build, deployment, and configuration", "documentation and developer experience"];
+  return Array.from({ length: count }, (_, i) => fallback[i % fallback.length]);
+}
+
+export function buildThinkingTasks(
+  objective: string,
+  themes: string[],
+  designDir: string,
+  plannerModel: string,
+): Task[] {
+  return themes.map((theme, i) => ({
+    id: `think-${i}`,
+    prompt: `You are a senior architect exploring a codebase to design a solution.
+
+OVERALL OBJECTIVE: ${objective}
+
+YOUR FOCUS: ${theme}
+
+Explore the codebase thoroughly using Read, Glob, and Grep. Then write a design document to ${designDir}/focus-${i}.md with these sections:
+
+## Findings
+Key files, patterns, and architecture you discovered. Cite specific file paths and function names.
+
+## Proposed Work Items
+For each item:
+- **What**: What to build or change
+- **Where**: Specific file paths
+- **Why**: Why this matters
+- **Risk**: Conflicts or complications
+
+## Key Files
+Relevant files with one-line descriptions.
+
+Be thorough — your findings drive the execution plan.`,
+    model: plannerModel,
+  }));
+}
+
+export async function orchestrate(
+  objective: string,
+  designDocs: string,
+  cwd: string,
+  plannerModel: string,
+  workerModel: string,
+  permissionMode: PermMode,
+  budget: number,
+  concurrency: number,
+  onLog: (text: string) => void,
+  flexNote?: string,
+): Promise<Task[]> {
+  const capability = modelCapabilityBlock(workerModel);
+  const flexLine = flexNote ? `\n\n${flexNote}` : "";
+
+  const prompt = `You are a tech lead planning a sprint based on your team's codebase research.
+
+Objective: ${objective}
+
+Your architects explored the codebase and found:
+
+${designDocs}
+
+AGENT CAPABILITY: ${capability}
+
+Create exactly ~${budget} concrete execution tasks based on these findings.
+
+Requirements:
+- Each task is actionable by a single agent session
+- Each task MUST be independent — no dependencies between tasks
+- ${concurrency} agents run in parallel — tasks must touch DIFFERENT files
+- Trust the research — don't tell agents to re-explore what's documented
+- Reference specific files and patterns from the findings
+- Priority order: foundational first, polish last${flexLine}
+
+Respond with ONLY a JSON object (no markdown fences):
+{"tasks": [{"prompt": "..."}]}`;
+
+  onLog("Synthesizing...");
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
+
+  const parsed = await extractTaskJson(resultText, async () => {
+    onLog("Retrying...");
+    let retryText = "";
+    for await (const msg of query({
+      prompt: `Output ONLY a JSON object:\n{"tasks":[{"prompt":"..."}]}`,
+      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
+    })) {
+      if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
+    }
+    return retryText;
+  });
+
+  let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
+    id: String(i),
+    prompt: typeof t === "string" ? t : t.prompt,
+  }));
+
+  tasks = postProcess(tasks, budget, onLog);
+  if (tasks.length === 0) throw new Error("Orchestration generated 0 tasks");
+  onLog(`${tasks.length} tasks`);
+  return tasks;
+}
+
 export async function refinePlan(
   objective: string,
   previousTasks: Task[],
@@ -471,6 +601,7 @@ export async function steerWave(
   permissionMode: PermMode,
   concurrency: number,
   onLog: (text: string) => void,
+  designContext?: string,
 ): Promise<SteerResult> {
   const capability = modelCapabilityBlock(workerModel);
   const historyText = history.map(w => {
@@ -488,7 +619,7 @@ Objective: ${objective}
 
 Work completed so far:
 ${historyText}
-
+${designContext ? `\nOriginal architectural research:\n${designContext}\n` : ""}
 Remaining budget: ${remainingBudget} agent sessions. ${concurrency} agents run in parallel — tasks must touch DIFFERENT files.
 ${capability}
 
