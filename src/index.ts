@@ -8,7 +8,7 @@ import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks } from "./planner.js";
 import { startRenderLoop } from "./ui.js";
-import type { Task, TaskFile } from "./types.js";
+import type { Task, TaskFile, PermMode } from "./types.js";
 
 // ── Fetch models via SDK (works with OAuth / Max / API key) ──
 
@@ -66,6 +66,27 @@ async function pickWorktrees(): Promise<boolean> {
   return ans.toLowerCase() !== "n";
 }
 
+const PERM_MODES: { label: string; value: PermMode; desc: string }[] = [
+  { label: "Auto", value: "auto", desc: "AI decides what's safe" },
+  { label: "Bypass permissions", value: "bypassPermissions", desc: "skip all prompts (dangerous)" },
+  { label: "Default", value: "default", desc: "prompt for dangerous ops" },
+];
+
+async function pickPermissionMode(): Promise<PermMode> {
+  console.log(chalk.bold("\n  Permission mode:"));
+  for (let i = 0; i < PERM_MODES.length; i++) {
+    const marker = i === 0 ? chalk.green("→") : " ";
+    const name = i === 0 ? chalk.green(PERM_MODES[i].label) : chalk.dim(PERM_MODES[i].label);
+    const desc = chalk.dim(` — ${PERM_MODES[i].desc}`);
+    console.log(`  ${marker} ${i + 1}. ${name}${desc}`);
+  }
+  const ans = await ask(chalk.dim("  Choose [1]: "));
+  const idx = ans ? parseInt(ans) - 1 : 0;
+  const pick = PERM_MODES[idx] ?? PERM_MODES[0];
+  console.log(chalk.dim(`  Using ${pick.label}`));
+  return pick.value;
+}
+
 async function pickObjective(): Promise<string> {
   console.log("");
   const ans = await ask(chalk.bold("  What should the swarm do?\n  > "));
@@ -78,6 +99,7 @@ interface FileArgs {
   tasks: Task[];
   concurrency?: number;
   model?: string;
+  permissionMode?: PermMode;
   cwd?: string;
   allowedTools?: string[];
   useWorktrees?: boolean;
@@ -85,7 +107,7 @@ interface FileArgs {
 
 function loadTaskFile(file: string): FileArgs {
   const raw = readFileSync(resolve(file), "utf-8");
-  const parsed: TaskFile & { worktrees?: boolean } = Array.isArray(JSON.parse(raw))
+  const parsed: TaskFile & { worktrees?: boolean; permissionMode?: PermMode } = Array.isArray(JSON.parse(raw))
     ? { tasks: JSON.parse(raw) }
     : JSON.parse(raw);
 
@@ -104,6 +126,7 @@ function loadTaskFile(file: string): FileArgs {
     concurrency: parsed.concurrency,
     model: parsed.model,
     cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
+    permissionMode: parsed.permissionMode,
     allowedTools: parsed.allowedTools,
     useWorktrees: parsed.worktrees,
   };
@@ -147,6 +170,7 @@ async function main() {
   process.stdout.write(`\x1B[2K\r`);
 
   const model = fileCfg?.model ?? (await pickModel(models));
+  const permissionMode = fileCfg?.permissionMode ?? (await pickPermissionMode());
   const concurrency = fileCfg?.concurrency ?? (await pickConcurrency());
   const useWorktrees = fileCfg?.useWorktrees ?? (await pickWorktrees());
   const cwd = fileCfg?.cwd ?? process.cwd();
@@ -174,7 +198,7 @@ async function main() {
   if (planMode && objective) {
     console.log(chalk.magenta("\n  Planning...\n"));
     try {
-      tasks = await planTasks(objective, cwd, model, (text) => {
+      tasks = await planTasks(objective, cwd, model, permissionMode, (text) => {
         process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
       });
       process.stdout.write(
@@ -203,6 +227,7 @@ async function main() {
     concurrency,
     cwd,
     model,
+    permissionMode,
     allowedTools,
     useWorktrees,
   });

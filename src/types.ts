@@ -9,6 +9,7 @@ export interface TaskFile {
   concurrency?: number;
   cwd?: string;
   model?: string;
+  permissionMode?: PermMode;
   allowedTools?: string[];
   tasks: (string | { prompt: string; cwd?: string; model?: string })[];
 }
@@ -36,4 +37,5 @@ export interface LogEntry {
   text: string;
 }
 
+export type PermMode = "auto" | "bypassPermissions" | "default";
 export type SwarmPhase = "planning" | "running" | "merging" | "done";

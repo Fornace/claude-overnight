@@ -1,5 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { Task } from "./types.js";
+import type { Task, PermMode } from "./types.js";
 
 /**
  * Coordinator: analyzes the codebase, breaks objective into parallel tasks.
@@ -8,6 +8,7 @@ export async function planTasks(
   objective: string,
   cwd: string,
   model: string,
+  permissionMode: PermMode,
   onLog: (text: string) => void,
 ): Promise<Task[]> {
   onLog("Analyzing codebase...");
@@ -37,8 +38,8 @@ Respond with ONLY a JSON object (no markdown fences):
       model,
       tools: ["Read", "Glob", "Grep", "Bash"],
       allowedTools: ["Read", "Glob", "Grep", "Bash"],
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      permissionMode: permissionMode,
+      ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       persistSession: false,
       includePartialMessages: true,
     },

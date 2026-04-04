@@ -10,7 +10,7 @@ import type {
   SDKPartialAssistantMessage,
   SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Task, AgentState, SwarmPhase } from "./types.js";
+import type { Task, AgentState, SwarmPhase, PermMode } from "./types.js";
 
 export interface SwarmConfig {
   tasks: Task[];
@@ -19,6 +19,7 @@ export interface SwarmConfig {
   model?: string;
   allowedTools?: string[];
   useWorktrees?: boolean;
+  permissionMode?: PermMode;
 }
 
 export interface MergeResult {
@@ -146,6 +147,7 @@ export class Swarm {
     this.log(id, `Starting: ${task.prompt.slice(0, 60)}`);
 
     try {
+      const perm = this.config.permissionMode ?? "auto";
       for await (const msg of query({
         prompt: this.config.useWorktrees
           ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
@@ -153,8 +155,8 @@ export class Swarm {
         options: {
           cwd: agentCwd,
           model: task.model || this.config.model,
-          permissionMode: "bypassPermissions",
-          allowDangerouslySkipPermissions: true,
+          permissionMode: perm,
+          ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
           allowedTools: this.config.allowedTools,
           includePartialMessages: true,
           persistSession: false,
