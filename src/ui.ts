@@ -3,7 +3,7 @@ import type { Swarm } from "./swarm.js";
 import type { AgentState } from "./types.js";
 
 export function renderFrame(swarm: Swarm): string {
-  const w = Math.max(process.stdout.columns || 80, 60);
+  const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
   const out: string[] = [];
 
   // ── Header ──
@@ -14,12 +14,13 @@ export function renderFrame(swarm: Swarm): string {
     chalk.green("\u2588".repeat(filled)) +
     chalk.gray("\u2591".repeat(barW - filled));
 
+  const stoppingTag = swarm.aborted ? chalk.yellow(" STOPPING") : "";
   const phaseLabel =
-    swarm.phase === "planning"
+    (swarm.phase === "planning"
       ? chalk.magenta(" PLANNING")
       : swarm.phase === "merging"
         ? chalk.yellow(" MERGING")
-        : "";
+        : "") + stoppingTag;
 
   out.push("");
   out.push(
@@ -122,9 +123,13 @@ export function renderFrame(swarm: Swarm): string {
 function fmtRow(a: AgentState, w: number): string {
   const id = String(a.id).padStart(3);
 
+  const elapsed =
+    a.status === "running" && a.startedAt
+      ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt))
+      : "";
   const icon =
     a.status === "running"
-      ? chalk.blue("\u27F3 run ")
+      ? chalk.blue("\u27F3 run") + elapsed
       : a.status === "done"
         ? chalk.green("\u2713 done")
         : chalk.red("\u2717 err ");
@@ -173,17 +178,20 @@ function fmtDur(ms: number): string {
 }
 
 export function startRenderLoop(swarm: Swarm): () => void {
-  process.stdout.write("\x1B[?25l\x1B[2J\x1B[H");
+  const isTTY = process.stdout.isTTY && process.stdout.columns != null;
+  const write = (s: string) => process.stdout.write(s);
+
+  if (isTTY) write("\x1B[?25l\x1B[2J\x1B[H");
 
   const interval = setInterval(() => {
-    process.stdout.write("\x1B[H\x1B[J");
-    process.stdout.write(renderFrame(swarm));
+    if (isTTY) write("\x1B[H\x1B[J");
+    write(renderFrame(swarm) + "\n");
   }, 250);
 
   return () => {
     clearInterval(interval);
-    process.stdout.write("\x1B[H\x1B[J");
-    process.stdout.write(renderFrame(swarm));
-    process.stdout.write("\x1B[?25h");
+    if (isTTY) write("\x1B[H\x1B[J");
+    write(renderFrame(swarm) + "\n");
+    if (isTTY) write("\x1B[?25h");
   };
 }
