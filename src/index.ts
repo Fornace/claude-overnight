@@ -373,6 +373,14 @@ async function main() {
     }
     console.log("");
   }
+
+  // Exit codes: 0 = all succeeded, 1 = some failed, 2 = all failed or aborted
+  if (swarm.aborted || swarm.completed === 0) {
+    process.exit(2);
+  }
+  if (swarm.failed > 0) {
+    process.exit(1);
+  }
 }
 
 function sleep(ms: number): Promise<void> {
