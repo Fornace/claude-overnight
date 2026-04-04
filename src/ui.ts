@@ -2,6 +2,16 @@ import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
 import type { AgentState } from "./types.js";
 
+const SPINNER = ["|", "/", "-", "\\"] as const;
+
+function colorEvent(text: string): string {
+  if (text === "Done" || text.startsWith("Merged ") || text.startsWith("Committed ")) return chalk.green(text);
+  if (text.startsWith("Rate:") || text.startsWith("Rate limited") || text.startsWith("Soft throttle")) return chalk.magenta(text);
+  if (/error|fail|conflict/i.test(text)) return chalk.red(text);
+  if (!text.includes(" ") && text.length <= 40) return chalk.yellow(text);
+  return text;
+}
+
 export function renderFrame(swarm: Swarm): string {
   const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
   const out: string[] = [];
@@ -22,9 +32,11 @@ export function renderFrame(swarm: Swarm): string {
         ? chalk.yellow(" MERGING")
         : "") + stoppingTag;
 
+  const modelTag = swarm.model ? chalk.dim(` [${swarm.model}]`) : "";
+
   out.push("");
   out.push(
-    `  ${chalk.bold.white("CLAUDE SWARM")}${phaseLabel}  ${bar}  ` +
+    `  ${chalk.bold.white("CLAUDE SWARM")}${modelTag}${phaseLabel}  ${bar}  ` +
       `${swarm.completed}/${swarm.total}  ` +
       chalk.cyan(`${swarm.active} active`) +
       "  " +
@@ -112,7 +124,7 @@ export function renderFrame(swarm: Swarm): string {
         ? chalk.magenta("[sys]")
         : chalk.cyan(`[${entry.agentId}]`);
     out.push(
-      chalk.gray(`  ${t} `) + tag + ` ${truncate(entry.text, w - 22)}`,
+      chalk.gray(`  ${t} `) + tag + ` ${colorEvent(truncate(entry.text, w - 22))}`,
     );
   }
 
@@ -127,9 +139,10 @@ function fmtRow(a: AgentState, w: number): string {
     a.status === "running" && a.startedAt
       ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt))
       : "";
+  const spin = SPINNER[Math.floor(Date.now() / 250) % SPINNER.length];
   const icon =
     a.status === "running"
-      ? chalk.blue("\u27F3 run") + elapsed
+      ? chalk.blue(`${spin} run`) + elapsed
       : a.status === "done"
         ? chalk.green("\u2713 done")
         : chalk.red("\u2717 err ");
@@ -239,40 +252,53 @@ export function renderSummary(swarm: Swarm): string {
   out.push(hdr);
   out.push(sep);
 
+  const groups: AgentState[][] = [
+    swarm.agents.filter(a => a.status === "running"),
+    swarm.agents.filter(a => a.status === "done"),
+    swarm.agents.filter(a => a.status === "error"),
+  ].filter(g => g.length > 0);
+
+  const thinSep = chalk.gray("  " + "\u254C".repeat(Math.min(w - 4, fixedW + taskW)));
+
   let totalDurMs = 0;
   let totalFiles = 0;
   let totalTools = 0;
   let totalCost = 0;
 
-  for (const a of swarm.agents) {
-    const id = String(a.id).padStart(3);
-    const ok = a.status === "done";
-    const status = ok
-      ? chalk.green("\u2713 done")
-      : chalk.red("\u2717 err ");
-    const task = truncate(a.task.prompt, taskW).padEnd(taskW);
+  for (let gi = 0; gi < groups.length; gi++) {
+    if (gi > 0) out.push(thinSep);
+    for (const a of groups[gi]) {
+      const id = String(a.id).padStart(3);
+      const ok = a.status === "done";
+      const status = ok
+        ? chalk.green("\u2713 done")
+        : a.status === "running"
+          ? chalk.blue("~ run ")
+          : chalk.red("\u2717 err ");
+      const task = truncate(a.task.prompt, taskW).padEnd(taskW);
 
-    const durMs =
-      a.startedAt != null
-        ? (a.finishedAt ?? Date.now()) - a.startedAt
-        : 0;
-    const dur = fmtDur(durMs).padStart(8);
-    const files = String(a.filesChanged ?? 0).padStart(5);
-    const tools = String(a.toolCalls).padStart(5);
-    const cost =
-      a.costUsd != null ? `$${a.costUsd.toFixed(3)}`.padStart(8) : "".padStart(8);
+      const durMs =
+        a.startedAt != null
+          ? (a.finishedAt ?? Date.now()) - a.startedAt
+          : 0;
+      const dur = fmtDur(durMs).padStart(8);
+      const files = String(a.filesChanged ?? 0).padStart(5);
+      const tools = String(a.toolCalls).padStart(5);
+      const cost =
+        a.costUsd != null ? `$${a.costUsd.toFixed(3)}`.padStart(8) : "".padStart(8);
 
-    totalDurMs += durMs;
-    totalFiles += a.filesChanged ?? 0;
-    totalTools += a.toolCalls;
-    totalCost += a.costUsd ?? 0;
+      totalDurMs += durMs;
+      totalFiles += a.filesChanged ?? 0;
+      totalTools += a.toolCalls;
+      totalCost += a.costUsd ?? 0;
 
-    const color = ok ? chalk.white : chalk.red;
-    out.push(
-      color(
-        `  ${id}  ${status}  ${task}  ${dur}  ${files}  ${tools}  ${cost}`,
-      ),
-    );
+      const color = ok ? chalk.white : a.status === "running" ? chalk.blue : chalk.red;
+      out.push(
+        color(
+          `  ${id}  ${status}  ${task}  ${dur}  ${files}  ${tools}  ${cost}`,
+        ),
+      );
+    }
   }
 
   out.push(sep);

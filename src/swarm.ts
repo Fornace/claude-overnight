@@ -61,6 +61,7 @@ export class Swarm {
   private activeQueries = new Set<{ close: () => void }>();
   private cleanedUp = false;
   logFile?: string;
+  readonly model: string | undefined;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) {
@@ -83,6 +84,7 @@ export class Swarm {
     }
 
     this.config = config;
+    this.model = config.model;
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
   }
@@ -269,7 +271,7 @@ export class Swarm {
           agent.status = "done";
           agent.finishedAt = Date.now();
           this.completed++;
-          this.log(id, "Done");
+          this.log(id, this.agentSummary(agent));
         }
         break; // Success — exit retry loop
       } catch (err: any) {
@@ -422,7 +424,8 @@ export class Swarm {
         try { exec(`git branch -d "${r.branch}"`, this.config.cwd); } catch {}
       }
 
-      this.log(-1, `Merged ${merged.length}/${branches.length} branches${failed.length > 0 ? ` (${failed.length} unresolved)` : ""}`);
+      const totalFilesChanged = this.mergeResults.reduce((sum, r) => sum + (r.ok ? r.filesChanged : 0), 0);
+      this.log(-1, `Merged ${merged.length}/${branches.length} branches, ${totalFilesChanged} files changed${failed.length > 0 ? ` (${failed.length} unresolved)` : ""}`);
 
       if (strategy === "branch" && this.mergeBranch) {
         // Switch back to the original branch
@@ -522,7 +525,15 @@ export class Swarm {
           time: new Date(l.time).toISOString(), agent: l.agentId, text: l.text,
         })),
       }, null, 2));
+      process.stderr.write(`Log: ${this.logFile}\n`);
     } catch {}
+  }
+
+  private agentSummary(agent: AgentState): string {
+    const dur = (agent.finishedAt ?? Date.now()) - (agent.startedAt ?? Date.now());
+    const m = Math.floor(dur / 60000);
+    const s = Math.round((dur % 60000) / 1000);
+    return `Agent ${agent.id} done: ${m}m ${s}s, ${agent.toolCalls} tools, ${agent.filesChanged ?? 0} files changed`;
   }
 
   // ── Message handler ──
@@ -581,7 +592,7 @@ export class Swarm {
         if (r.subtype === "success") {
           agent.status = "done";
           this.completed++;
-          this.log(agent.id, "Done");
+          this.log(agent.id, this.agentSummary(agent));
         } else {
           agent.status = "error";
           agent.error = r.subtype;

@@ -147,8 +147,15 @@ async function pickPermissionMode(): Promise<PermMode> {
 
 async function pickObjective(): Promise<string> {
   console.log("");
-  const ans = await ask(chalk.bold("  What should the swarm do?\n  > "));
-  return ans;
+  while (true) {
+    const ans = await ask(chalk.bold("  What should the swarm do?\n  > "));
+    if (!ans) return ans;
+    if (ans.split(/\s+/).length < 5) {
+      console.log(chalk.yellow('  Tip: be specific about what you want, e.g. "refactor auth module and add tests"'));
+      continue;
+    }
+    return ans;
+  }
 }
 
 // ── File-based task loading (non-interactive) ──
@@ -264,8 +271,10 @@ function isGitRepo(cwd: string): boolean {
 function validateGitRepo(cwd: string): void {
   if (!isGitRepo(cwd)) {
     throw new Error(
-      `Worktrees require a git repository, but ${cwd} is not inside one. ` +
-      `Run "git init" first or disable worktrees.`,
+      `Worktrees require a git repository, but ${cwd} is not inside one.\n` +
+      `  Run this to initialize one:\n\n` +
+      `    cd ${cwd} && git init\n\n` +
+      `  Or disable worktrees (set "worktrees": false in your task file).`,
     );
   }
 }
@@ -333,10 +342,22 @@ async function main() {
   let tasks: Task[] = [];
   let fileCfg: FileArgs | undefined;
 
+  const jsonFiles = args.filter((a) => a.endsWith(".json"));
+  if (jsonFiles.length > 1) {
+    console.error(chalk.red(`  Multiple task files provided: ${jsonFiles.join(", ")}`));
+    console.error(chalk.red(`  Only one .json task file is supported at a time.`));
+    process.exit(1);
+  }
+
   for (const arg of args) {
     if (arg.endsWith(".json")) {
       fileCfg = loadTaskFile(arg);
       tasks = fileCfg.tasks;
+    } else if (!arg.startsWith("-") && existsSync(resolve(arg))) {
+      console.error(chalk.red(`  "${arg}" looks like a file path but doesn't end in .json.`));
+      console.error(chalk.red(`  To use it as a task file, rename it: mv ${arg} ${arg.replace(/(\.\w+)?$/, ".json")}`));
+      console.error(chalk.red(`  To run it as an inline task prompt, ignore this message and quote the string.`));
+      process.exit(1);
     } else {
       tasks.push({ id: String(tasks.length), prompt: arg });
     }
@@ -350,6 +371,13 @@ async function main() {
   const cwd = fileCfg?.cwd ?? process.cwd();
   const allowedTools = fileCfg?.allowedTools;
   validateCwd(cwd);
+
+  if (!nonInteractive) {
+    console.log(chalk.dim("  Run parallel Claude Code agents with real-time UI.\n"));
+    console.log(chalk.dim("    • Interactive  — describe an objective, auto-plan into tasks"));
+    console.log(chalk.dim("    • Task file    — claude-swarm tasks.json"));
+    console.log(chalk.dim("    • Inline args  — claude-swarm \"fix auth\" \"add tests\""));
+  }
 
   if (noTTY) {
     console.log(chalk.dim("  Non-interactive mode — using defaults"));
@@ -418,7 +446,14 @@ async function main() {
         console.log(chalk.dim(`    ${t.id}. ${t.prompt.slice(0, 70)}`));
       }
       console.log("");
-      await sleep(1500);
+      process.stdout.write("\x1B[?25h"); // show cursor for prompt
+      const confirm = await ask(`  Run ${tasks.length} task${tasks.length === 1 ? "" : "s"} with concurrency ${concurrency}? [Y/n] `);
+      if (confirm.toLowerCase() === "n") {
+        restore();
+        console.log(chalk.dim("  Aborted.\n"));
+        process.exit(0);
+      }
+      process.stdout.write("\x1B[?25l"); // re-hide cursor
     } catch (err: any) {
       restore();
       if (isAuthError(err)) {
@@ -509,15 +544,27 @@ async function main() {
 
     console.log(renderSummary(swarm));
 
+    const failedAgents = swarm.agents.filter((a) => a.status === "error");
     const summary =
-      swarm.failed > 0
-        ? chalk.yellow(`${swarm.completed} done, ${swarm.failed} failed`)
+      failedAgents.length > 0
+        ? chalk.yellow(`${swarm.completed} done, ${failedAgents.length} failed`)
         : chalk.green(`${swarm.completed} done`);
     const cost =
       swarm.totalCostUsd > 0
         ? ` ($${swarm.totalCostUsd.toFixed(3)})`
         : "";
     console.log(`\n  ${chalk.bold("Complete:")} ${summary}${chalk.dim(cost)}`);
+
+    if (failedAgents.length > 0) {
+      console.log(chalk.red(`\n  Failed agents:`));
+      for (const a of failedAgents) {
+        const prompt = a.task.prompt;
+        const label = prompt.slice(0, 60) + (prompt.length > 60 ? "…" : "");
+        const reason = a.error || "unknown error";
+        console.log(chalk.red(`    ✗ Agent ${a.id + 1}: ${label}`));
+        console.log(chalk.dim(`      ${reason}`));
+      }
+    }
 
     const elapsed = Math.round((Date.now() - swarm.startedAt) / 1000);
     const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;

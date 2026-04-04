@@ -123,6 +123,48 @@ Respond with ONLY a JSON object (no markdown fences):
     onLog(`Filtered ${before - tasks.length} task(s) with fewer than 3 words`);
   }
 
+  // Deduplicate tasks with very similar prompts (>80% word overlap)
+  {
+    const dominated = new Set<number>();
+    for (let i = 0; i < tasks.length; i++) {
+      if (dominated.has(i)) continue;
+      const setA = new Set(tasks[i].prompt.toLowerCase().split(/\s+/));
+      for (let j = i + 1; j < tasks.length; j++) {
+        if (dominated.has(j)) continue;
+        const setB = new Set(tasks[j].prompt.toLowerCase().split(/\s+/));
+        const shared = [...setA].filter((w) => setB.has(w)).length;
+        const overlap = shared / Math.min(setA.size, setB.size);
+        if (overlap > 0.8) {
+          // Keep the more specific (longer) prompt
+          const drop = setA.size >= setB.size ? j : i;
+          const keep = drop === j ? i : j;
+          onLog(
+            `Dedup: task ${tasks[drop].id} >${Math.round(overlap * 100)}% overlap with ${tasks[keep].id}, dropping`,
+          );
+          dominated.add(drop);
+          if (drop === i) break;
+        }
+      }
+    }
+    if (dominated.size) {
+      tasks = tasks.filter((_, i) => !dominated.has(i));
+      onLog(`Deduplicated to ${tasks.length} tasks`);
+    }
+  }
+
+  // Warn on compound tasks joining unrelated changes with 'and'
+  for (const t of tasks) {
+    const parts = t.prompt.split(/\s+and\s+/i);
+    if (
+      parts.length >= 2 &&
+      parts.every((p) => p.trim().split(/\s+/).length >= 3)
+    ) {
+      onLog(
+        `⚠ Task ${t.id} looks compound ("…and…") — consider splitting into separate tasks`,
+      );
+    }
+  }
+
   // Warn on file overlap between tasks
   const fileRe = /(?:^|\s)((?:[\w.-]+\/)+[\w.-]+\.\w+)/g;
   const pathToTasks = new Map<string, string[]>();
@@ -150,6 +192,13 @@ Respond with ONLY a JSON object (no markdown fences):
   }
 
   if (tasks.length === 0) throw new Error("Planner generated 0 tasks");
+
+  // Sort test-related tasks last — they benefit from other changes landing first
+  tasks.sort(
+    (a, b) =>
+      Number(/\btest/i.test(a.prompt)) - Number(/\btest/i.test(b.prompt)),
+  );
+
   onLog(`Generated ${tasks.length} tasks`);
   return tasks;
 }
