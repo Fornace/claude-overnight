@@ -346,14 +346,36 @@ async function main() {
     useWorktrees,
   });
 
-  // Replace simple SIGINT with graceful drain: first press stops queue, second force-exits
+  // Replace simple handlers with graceful drain: first signal stops queue, second force-exits
   process.removeAllListeners("SIGINT");
+  process.removeAllListeners("SIGTERM");
   let stopping = false;
-  process.on("SIGINT", () => {
+
+  const gracefulStop = (signal: string) => {
     if (stopping) { swarm.cleanup(); restore(); process.exit(0); }
     stopping = true;
-    process.stdout.write(`\n  ${chalk.yellow(`Stopping... waiting for ${swarm.active} active agent(s) to finish (Ctrl+C again to force)`)}\n`);
+    process.stdout.write(`\n  ${chalk.yellow(`${signal}: stopping... waiting for ${swarm.active} active agent(s) to finish (send again to force)`)}\n`);
     swarm.abort();
+  };
+
+  process.on("SIGINT", () => gracefulStop("SIGINT"));
+  process.on("SIGTERM", () => gracefulStop("SIGTERM"));
+
+  process.on("uncaughtException", (err) => {
+    swarm.abort();
+    swarm.cleanup();
+    restore();
+    console.error(chalk.red(`\n  Uncaught exception: ${err.message}`));
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    swarm.abort();
+    swarm.cleanup();
+    restore();
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    console.error(chalk.red(`\n  Unhandled rejection: ${msg}`));
+    process.exit(1);
   });
 
   const stopRender = startRenderLoop(swarm);
