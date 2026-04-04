@@ -1,10 +1,10 @@
 {
-  "name": "claude-swarm",
+  "name": "claude-overnight",
   "version": "0.1.0",
-  "description": "Run parallel Claude Code agents with real-time terminal UI",
+  "description": "Fire off parallel Claude Code agents, come back to shipped work",
   "type": "module",
   "bin": {
-    "claude-swarm": "./dist/index.js"
+    "claude-overnight": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -21,12 +21,12 @@
   },
   "license": "MIT",
   "author": "Francesco Fornace",
-  "homepage": "https://github.com/Fornace/claude-swarm",
+  "homepage": "https://github.com/Fornace/claude-overnight",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Fornace/claude-swarm.git"
+    "url": "https://github.com/Fornace/claude-overnight.git"
   },
-  "keywords": ["claude", "ai", "agents", "parallel", "swarm", "cli"],
+  "keywords": ["claude", "ai", "agents", "parallel", "autonomous", "background", "overnight", "cli", "orchestration"],
   "engines": {
     "node": ">=20"
   },

@@ -36,7 +36,7 @@ export function renderFrame(swarm: Swarm): string {
 
   out.push("");
   out.push(
-    `  ${chalk.bold.white("CLAUDE SWARM")}${modelTag}${phaseLabel}  ${bar}  ` +
+    `  ${chalk.bold.white("CLAUDE OVERNIGHT")}${modelTag}${phaseLabel}  ${bar}  ` +
       `${swarm.completed}/${swarm.total}  ` +
       chalk.cyan(`${swarm.active} active`) +
       "  " +

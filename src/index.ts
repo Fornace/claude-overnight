@@ -287,18 +287,18 @@ async function main() {
   if (argv.includes("-v") || argv.includes("--version")) {
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
-    console.log(`claude-swarm v${pkg.version}`);
+    console.log(`claude-overnight v${pkg.version}`);
     process.exit(0);
   }
 
   if (argv.includes("-h") || argv.includes("--help")) {
     console.log(`
-  ${chalk.bold("claude-swarm")} — parallel Claude Code agents with real-time UI
+  ${chalk.bold("claude-overnight")} — fire off Claude agents, come back to shipped work
 
   ${chalk.dim("Usage:")}
-    claude-swarm                          ${chalk.dim("interactive — pick model, concurrency, objective")}
-    claude-swarm tasks.json               ${chalk.dim("run tasks defined in a JSON file")}
-    claude-swarm "fix auth" "add tests"   ${chalk.dim("run inline tasks in parallel")}
+    claude-overnight                          ${chalk.dim("interactive — pick model, concurrency, objective")}
+    claude-overnight tasks.json               ${chalk.dim("run tasks defined in a JSON file")}
+    claude-overnight "fix auth" "add tests"   ${chalk.dim("run inline tasks in parallel")}
 
   ${chalk.dim("Flags:")}
     -h, --help             Show this help
@@ -364,7 +364,7 @@ async function main() {
   }
 
   // ── Config: defaults for non-interactive, prompts for interactive ──
-  console.log(chalk.bold("\n  🐝 claude-swarm\n"));
+  console.log(chalk.bold("\n  🌙 claude-overnight\n"));
 
   const noTTY = !process.stdin.isTTY;
   const nonInteractive = noTTY || fileCfg !== undefined || tasks.length > 0;
@@ -375,8 +375,8 @@ async function main() {
   if (!nonInteractive) {
     console.log(chalk.dim("  Run parallel Claude Code agents with real-time UI.\n"));
     console.log(chalk.dim("    • Interactive  — describe an objective, auto-plan into tasks"));
-    console.log(chalk.dim("    • Task file    — claude-swarm tasks.json"));
-    console.log(chalk.dim("    • Inline args  — claude-swarm \"fix auth\" \"add tests\""));
+    console.log(chalk.dim("    • Task file    — claude-overnight tasks.json"));
+    console.log(chalk.dim("    • Inline args  — claude-overnight \"fix auth\" \"add tests\""));
   }
 
   if (noTTY) {

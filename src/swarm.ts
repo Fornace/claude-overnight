@@ -101,7 +101,7 @@ export class Swarm {
       if (this.config.useWorktrees) {
         this.warnDirtyTree();
         this.cleanStaleWorktrees();
-        this.worktreeBase = mkdtempSync(join(tmpdir(), "claude-swarm-"));
+        this.worktreeBase = mkdtempSync(join(tmpdir(), "claude-overnight-"));
         this.log(-1, `Worktrees: ${this.worktreeBase}`);
       }
 
@@ -356,7 +356,7 @@ export class Swarm {
     try {
       const status = exec("git status --porcelain", this.config.cwd);
       if (status.trim()) {
-        exec("git stash push -m 'claude-swarm: pre-merge stash'", this.config.cwd);
+        exec("git stash push -m 'claude-overnight: pre-merge stash'", this.config.cwd);
         stashed = true;
         this.log(-1, "Stashed dirty working tree");
       }
@@ -472,7 +472,7 @@ export class Swarm {
       const list = exec("git worktree list --porcelain", this.config.cwd);
       const stale: string[] = [];
       for (const line of list.split("\n")) {
-        if (line.startsWith("worktree ") && line.includes("claude-swarm-")) {
+        if (line.startsWith("worktree ") && line.includes("claude-overnight-")) {
           stale.push(line.slice("worktree ".length));
         }
       }
@@ -500,7 +500,7 @@ export class Swarm {
   private writeLogFile(): void {
     try {
       const ts = new Date(this.startedAt).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      this.logFile = join(tmpdir(), `claude-swarm-${ts}.json`);
+      this.logFile = join(tmpdir(), `claude-overnight-${ts}.json`);
       writeFileSync(this.logFile, JSON.stringify({
         version: "1",
         config: {

@@ -1,4 +1,4 @@
-# claude-swarm
+# claude-overnight
 
 Run parallel Claude Code agents with a real-time terminal UI.
 
@@ -7,7 +7,7 @@ Give it an objective and it plans, executes, and merges the results — or feed 
 ## Install
 
 ```bash
-npm install -g claude-swarm
+npm install -g claude-overnight
 ```
 
 Requires Node.js >= 20 and a valid Claude authentication (OAuth via `claude` CLI login, or `ANTHROPIC_API_KEY` env var).
@@ -17,7 +17,7 @@ Requires Node.js >= 20 and a valid Claude authentication (OAuth via `claude` CLI
 ### Interactive (planner mode)
 
 ```bash
-claude-swarm
+claude-overnight
 ```
 
 Prompts for model, concurrency, and permission mode, then asks for an objective. A planner agent analyzes your codebase and breaks it into parallel tasks.
@@ -25,13 +25,13 @@ Prompts for model, concurrency, and permission mode, then asks for an objective.
 ### Task file
 
 ```bash
-claude-swarm tasks.json
+claude-overnight tasks.json
 ```
 
 ### Inline tasks
 
 ```bash
-claude-swarm "fix auth bug in src/auth.ts" "add tests for user model"
+claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 ```
 
 Each quoted argument becomes one parallel task.
