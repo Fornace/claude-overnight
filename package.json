@@ -1,10 +1,10 @@
 {
   "name": "claude-overnight",
-  "version": "0.1.0",
-  "description": "Fire off parallel Claude Code agents, come back to shipped work",
+  "version": "0.1.2",
+  "description": "Fire off Claude agents, come back days later to shipped work. Maximizes every token in your plan.",
   "type": "module",
   "bin": {
-    "claude-overnight": "./dist/index.js"
+    "claude-overnight": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -24,11 +24,26 @@
   "homepage": "https://github.com/Fornace/claude-overnight",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Fornace/claude-overnight.git"
+    "url": "git+https://github.com/Fornace/claude-overnight.git"
   },
-  "keywords": ["claude", "ai", "agents", "parallel", "autonomous", "background", "overnight", "cli", "orchestration"],
+  "keywords": [
+    "claude",
+    "ai",
+    "agents",
+    "parallel",
+    "autonomous",
+    "background",
+    "overnight",
+    "cli",
+    "orchestration"
+  ],
   "engines": {
     "node": ">=20"
   },
-  "files": ["dist", "README.md", "LICENSE"]
+  "files": [
+    "dist",
+    "!dist/__tests__",
+    "README.md",
+    "LICENSE"
+  ]
 }
