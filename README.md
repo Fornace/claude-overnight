@@ -2,7 +2,7 @@
 
 Fire off Claude agents, come back to shipped work.
 
-Describe what to build. Set a budget — 10 agents, 100, 1000. A planner agent analyzes your codebase, breaks the objective into that many independent tasks, and launches them all. Each agent runs in its own git worktree with full tooling (Read, Edit, Bash, Grep — everything). Rate limits? It waits. Windows reset? It resumes. It doesn't stop until every task is done.
+Describe what to build. Set a budget — 10 agents, 100, 1000. A planner agent analyzes your codebase, breaks the objective into independent tasks, and launches them all. Each agent runs in its own git worktree with full tooling (Read, Edit, Bash, Grep — everything). Rate limits? It waits. Windows reset? It resumes. It doesn't stop until every task is done.
 
 ## Install
 
@@ -20,7 +20,32 @@ Requires Node.js >= 20 and Claude authentication (OAuth via `claude` CLI, or `AN
 claude-overnight
 ```
 
-Describe your objective, set a budget, pick a worker model, set a usage limit. The planner generates tasks — review, edit, or chat about them, then run.
+A guided flow walks you through each step:
+
+```
+🌙  claude-overnight
+────────────────────────────────────
+
+① What should the agents do?
+  > refactor auth, add tests, update docs
+
+② Budget [10]: 50
+
+③ Worker model:
+  ● Sonnet — Sonnet 4.6 · Best for everyday tasks
+  ○ Opus — Opus 4.6 · Most capable
+  ○ Haiku — Haiku 4.5 · Fastest
+
+④ Usage:
+  ● Unlimited · full capacity, wait through rate limits
+  ○ 90% · leave 10% for other work
+
+╭────────────────────────────────────╮
+│  sonnet · budget 50 · 5× · flex   │
+╰────────────────────────────────────╯
+```
+
+The planner generates tasks — review, edit, or chat about them, then run.
 
 ### Task file
 
@@ -43,9 +68,9 @@ The planner always runs on the best available model (Opus) regardless of which m
 For large budgets (`budget > concurrency * 3`), the planner doesn't try to generate hundreds of tasks from scratch. Instead, it launches a **thinking wave** — a team of architect agents that explore your codebase in parallel before any code is written.
 
 ```
-Identifying themes...        → splits objective into N angles (< 30s, no tools)
-Thinking: 5 agents exploring... → each agent deeply explores from its angle, writes a design doc
-Orchestrating plan...        → reads all design docs, synthesizes concrete execution tasks
+⠋ identifying themes...        → splits objective into N angles (< 30s)
+◆ Thinking: 5 agents exploring  → each explores from its angle, writes a design doc
+◆ Orchestrating plan...         → reads all design docs, synthesizes execution tasks
 ```
 
 Each thinking agent gets a different research focus (architecture, data, UI, APIs, testing, etc.), explores using Read/Glob/Grep, and writes a structured design document with findings, proposed work items, and key files. The orchestrator then reads all design docs and produces grounded, well-informed execution tasks that reference specific files and patterns the researchers found.
@@ -78,14 +103,14 @@ A budget of 200 is not 200 micro-edits. It's 5 architects + ~195 senior-engineer
 
 ## Usage limits
 
-Control how much of your plan capacity the run consumes. In interactive mode, you'll be asked:
+Control how much of your plan capacity the run consumes:
 
 ```
-Usage limit:
-→ Unlimited — use full capacity, wait through rate limits
-  90%       — leave 10% for other work
-  75%       — conservative, plenty of headroom
-  50%       — use half, keep the rest
+④ Usage:
+  ● Unlimited · full capacity, wait through rate limits
+  ○ 90% · leave 10% for other work
+  ○ 75% · conservative, plenty of headroom
+  ○ 50% · use half, keep the rest
 ```
 
 When utilization hits your cap, the swarm stops dispatching new tasks and lets active agents finish gracefully. This way you can run a big overnight job and still have capacity left for manual Claude usage.
