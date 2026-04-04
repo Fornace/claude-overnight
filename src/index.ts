@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, existsSync } from "fs";
-import { resolve } from "path";
+import { resolve, dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { execSync } from "child_process";
 import { createInterface } from "readline";
 import chalk from "chalk";
@@ -216,6 +217,13 @@ function validateGitRepo(cwd: string): void {
 async function main() {
   const argv = process.argv.slice(2);
 
+  if (argv.includes("-v") || argv.includes("--version")) {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+    console.log(`claude-swarm v${pkg.version}`);
+    process.exit(0);
+  }
+
   if (argv.includes("-h") || argv.includes("--help")) {
     console.log(`
   ${chalk.bold("claude-swarm")} — parallel Claude Code agents with real-time UI
@@ -224,15 +232,22 @@ async function main() {
     claude-swarm                                   ${chalk.dim("# interactive mode")}
     claude-swarm tasks.json                        ${chalk.dim("# run task file")}
     claude-swarm "fix auth" "add tests"            ${chalk.dim("# inline tasks")}
+
+  ${chalk.dim("Flags:")}
+    -v, --version                                  ${chalk.dim("# print version and exit")}
+    --dry-run                                      ${chalk.dim("# show planned tasks without running")}
     `);
     process.exit(0);
   }
+
+  const dryRun = argv.includes("--dry-run");
+  const args = argv.filter((a) => a !== "--dry-run");
 
   // ── Load tasks from file or inline args ──
   let tasks: Task[] = [];
   let fileCfg: FileArgs | undefined;
 
-  for (const arg of argv) {
+  for (const arg of args) {
     if (arg.endsWith(".json")) {
       fileCfg = loadTaskFile(arg);
       tasks = fileCfg.tasks;
@@ -309,6 +324,16 @@ async function main() {
     restore();
     console.error("No tasks provided.");
     process.exit(1);
+  }
+
+  if (dryRun) {
+    restore();
+    console.log(chalk.bold("  Tasks:"));
+    for (const t of tasks) {
+      console.log(`  ${chalk.dim(`${Number(t.id) + 1}.`)} ${t.prompt}`);
+    }
+    console.log("");
+    process.exit(0);
   }
 
   const swarm = new Swarm({
