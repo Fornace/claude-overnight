@@ -18,5 +18,17 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
-  }
+  },
+  "license": "MIT",
+  "author": "Francesco Fornace",
+  "homepage": "https://github.com/Fornace/claude-swarm",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fornace/claude-swarm.git"
+  },
+  "keywords": ["claude", "ai", "agents", "parallel", "swarm", "cli"],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": ["dist", "README.md", "LICENSE"]
 }

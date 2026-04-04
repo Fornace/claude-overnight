@@ -63,18 +63,123 @@ Respond with ONLY a JSON object (no markdown fences):
     }
   }
 
-  // Extract JSON from result — handle markdown fences or raw JSON
-  const cleaned = resultText.replace(/```json?\s*/g, "").replace(/```/g, "");
-  const jsonMatch = cleaned.match(/\{[\s\S]*"tasks"[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("Planner did not return valid task JSON");
+  const parsed = await extractTaskJson(resultText, async () => {
+    onLog("Retrying for valid JSON...");
+    let retryText = "";
+    for await (const msg of query({
+      prompt: `Your previous response did not contain valid JSON. Output ONLY a JSON object with this shape, nothing else:\n{"tasks":[{"prompt":"..."}]}`,
+      options: {
+        cwd,
+        model,
+        permissionMode,
+        ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
+        persistSession: false,
+      },
+    })) {
+      if (msg.type === "result" && msg.subtype === "success") {
+        retryText = (msg as any).result || "";
+      }
+    }
+    return retryText;
+  });
 
-  const parsed = JSON.parse(jsonMatch[0]);
-  const tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
+  let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
     id: String(i),
     prompt: typeof t === "string" ? t : t.prompt,
   }));
 
+  // Filter garbage tasks (prompts < 10 chars)
+  const before = tasks.length;
+  tasks = tasks.filter((t) => t.prompt && t.prompt.length >= 10);
+  if (tasks.length < before) {
+    onLog(`Filtered ${before - tasks.length} task(s) with prompts shorter than 10 chars`);
+  }
+
+  // Warn on file overlap between tasks
+  const fileRe = /(?:^|\s)((?:[\w.-]+\/)+[\w.-]+\.\w+)/g;
+  const pathToTasks = new Map<string, string[]>();
+  for (const t of tasks) {
+    for (const m of t.prompt.matchAll(fileRe)) {
+      const ids = pathToTasks.get(m[1]);
+      if (ids) ids.push(t.id);
+      else pathToTasks.set(m[1], [t.id]);
+    }
+  }
+  for (const [path, ids] of pathToTasks) {
+    if (ids.length > 1) onLog(`Overlap risk: ${path} in tasks ${ids.join(", ")}`);
+  }
+
+  // Cap at 20 tasks
+  if (tasks.length > 20) {
+    onLog(`Too many tasks (${tasks.length}), truncating to 20`);
+    tasks = tasks.slice(0, 20);
+  }
+
   if (tasks.length === 0) throw new Error("Planner generated 0 tasks");
   onLog(`Generated ${tasks.length} tasks`);
   return tasks;
+}
+
+/** Find the outermost balanced { } substring. */
+function extractOutermostBraces(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") depth--;
+    if (depth === 0) return text.slice(start, i + 1);
+  }
+  return null;
+}
+
+/** Try multiple strategies to parse task JSON, with one retry callback. */
+async function extractTaskJson(
+  raw: string,
+  retry: () => Promise<string>,
+): Promise<{ tasks: any[] }> {
+  const attempt = (text: string): { tasks: any[] } | null => {
+    // 1) Direct parse
+    try {
+      const obj = JSON.parse(text);
+      if (obj?.tasks) return obj;
+    } catch {}
+
+    // 2) Outermost braces
+    const braces = extractOutermostBraces(text);
+    if (braces) {
+      try {
+        const obj = JSON.parse(braces);
+        if (obj?.tasks) return obj;
+      } catch {}
+    }
+
+    // 3) Strip markdown fences and retry
+    const stripped = text.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
+    if (stripped !== text) {
+      try {
+        const obj = JSON.parse(stripped);
+        if (obj?.tasks) return obj;
+      } catch {}
+      const braces2 = extractOutermostBraces(stripped);
+      if (braces2) {
+        try {
+          const obj = JSON.parse(braces2);
+          if (obj?.tasks) return obj;
+        } catch {}
+      }
+    }
+
+    return null;
+  };
+
+  const first = attempt(raw);
+  if (first) return first;
+
+  // One retry with a shorter prompt
+  const retryText = await retry();
+  const second = attempt(retryText);
+  if (second) return second;
+
+  throw new Error("Planner did not return valid task JSON after retry");
 }

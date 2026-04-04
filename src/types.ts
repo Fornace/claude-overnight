@@ -22,6 +22,8 @@ export interface TaskFile {
   permissionMode?: PermMode;
   /** Allowlist of SDK tool names agents are permitted to use. */
   allowedTools?: string[];
+  /** Merge strategy: "yolo" merges into current branch, "branch" creates a new branch. */
+  mergeStrategy?: MergeStrategy;
   /** Tasks to execute — either plain prompt strings or objects with per-task overrides. */
   tasks: (string | { prompt: string; cwd?: string; model?: string })[];
 }
@@ -83,3 +85,10 @@ export type PermMode = "auto" | "bypassPermissions" | "default";
  * - "done": Swarm has completed all work.
  */
 export type SwarmPhase = "planning" | "running" | "merging" | "done";
+
+/**
+ * How worktree branches are merged after agents complete.
+ * - "yolo": Merge directly into the current branch.
+ * - "branch": Create a new branch, merge everything there (main untouched).
+ */
+export type MergeStrategy = "yolo" | "branch";

@@ -1,5 +1,5 @@
 import { execSync } from "child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -10,7 +10,7 @@ import type {
   SDKPartialAssistantMessage,
   SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Task, AgentState, SwarmPhase, PermMode } from "./types.js";
+import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy } from "./types.js";
 
 export interface SwarmConfig {
   tasks: Task[];
@@ -22,11 +22,13 @@ export interface SwarmConfig {
   permissionMode?: PermMode;
   agentTimeoutMs?: number;
   maxRetries?: number;
+  mergeStrategy?: MergeStrategy;
 }
 
 export interface MergeResult {
   branch: string;
   ok: boolean;
+  autoResolved?: boolean;
   error?: string;
   filesChanged: number;
 }
@@ -59,6 +61,25 @@ export class Swarm {
   logFile?: string;
 
   constructor(config: SwarmConfig) {
+    if (!config.tasks.length) {
+      throw new Error("SwarmConfig: tasks array must not be empty");
+    }
+    if (config.concurrency < 1) {
+      throw new Error("SwarmConfig: concurrency must be >= 1");
+    }
+    if (!config.cwd) {
+      throw new Error("SwarmConfig: cwd must be a non-empty string");
+    }
+
+    // Warn on duplicate prompts (non-fatal)
+    const seen = new Set<string>();
+    for (const task of config.tasks) {
+      if (seen.has(task.prompt)) {
+        console.warn(`SwarmConfig: duplicate task prompt: "${task.prompt.slice(0, 80)}"`);
+      }
+      seen.add(task.prompt);
+    }
+
     this.config = config;
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
@@ -107,6 +128,7 @@ export class Swarm {
   // ── Worker loop with auto-concurrency throttling ──
 
   private async worker(): Promise<void> {
+    let tasksProcessed = 0;
     while (this.queue.length > 0 && !this.aborted) {
       await this.throttle();
       const task = this.queue.shift();
@@ -117,7 +139,9 @@ export class Swarm {
         // Safety net: one agent must never kill the worker loop
         this.log(-1, `Worker error: ${String(err?.message || err).slice(0, 80)}`);
       }
+      tasksProcessed++;
     }
+    this.log(-1, `Worker finished (${tasksProcessed} tasks)`);
   }
 
   private async throttle(): Promise<void> {
@@ -130,10 +154,11 @@ export class Swarm {
       }
       this.rateLimitResetsAt = undefined;
     }
-    // Soft throttle: high utilization — add proportional delay
+    // Soft throttle: 0-15s proportional to 75-100% utilization
     else if (this.rateLimitUtilization > 0.75) {
-      const delay = Math.floor((this.rateLimitUtilization - 0.5) * 15000);
-      if (delay > 0) await sleep(delay);
+      const delay = Math.floor((this.rateLimitUtilization - 0.75) * 60000);
+      this.log(-1, `Soft throttle: ${Math.round(this.rateLimitUtilization * 100)}% utilization, pausing ${(delay / 1000).toFixed(1)}s`);
+      await sleep(delay);
     }
   }
 
@@ -248,24 +273,49 @@ export class Swarm {
   // ── Auto-commit changes in worktree ──
 
   private autoCommit(agent: AgentState, worktreeCwd: string): void {
+    if (!existsSync(worktreeCwd)) {
+      this.log(agent.id, "Worktree directory gone, skipping commit");
+      return;
+    }
+
+    let status: string;
     try {
-      const status = exec("git status --porcelain", worktreeCwd);
-      if (!status.trim()) {
-        agent.filesChanged = 0;
-        return;
-      }
-      const lines = status.trim().split("\n").length;
-      agent.filesChanged = lines;
+      status = exec("git status --porcelain", worktreeCwd);
+    } catch (err: any) {
+      this.log(agent.id, `git status failed: ${String(err.message || err).slice(0, 120)}`);
+      return;
+    }
+
+    if (!status.trim()) {
+      agent.filesChanged = 0;
+      return;
+    }
+
+    const lines = status.trim().split("\n").length;
+    agent.filesChanged = lines;
+
+    try {
       exec("git add -A", worktreeCwd);
+    } catch (err: any) {
+      this.log(agent.id, `git add failed: ${String(err.message || err).slice(0, 120)}`);
+      return;
+    }
+
+    try {
       const msg = agent.task.prompt.slice(0, 72).replace(/'/g, "'\\''");
       exec(`git commit -m 'swarm: ${msg}'`, worktreeCwd);
       this.log(agent.id, `Committed ${lines} file(s)`);
-    } catch {
-      // No changes or commit failed — fine
+    } catch (err: any) {
+      const msg = String(err.message || err);
+      if (!msg.includes("nothing to commit")) {
+        this.log(agent.id, `git commit failed: ${msg.slice(0, 120)}`);
+      }
     }
   }
 
   // ── Merge all worktree branches back ──
+
+  mergeBranch?: string; // set when mergeStrategy is "branch"
 
   private async mergeAll(): Promise<void> {
     this.phase = "merging";
@@ -275,6 +325,15 @@ export class Swarm {
     if (branches.length === 0) {
       this.log(-1, "No changes to merge");
       return;
+    }
+
+    // "branch" strategy: create a new branch, merge there (current branch untouched)
+    const strategy = this.config.mergeStrategy ?? "yolo";
+    if (strategy === "branch") {
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      this.mergeBranch = `swarm/run-${ts}`;
+      exec(`git checkout -b "${this.mergeBranch}"`, this.config.cwd);
+      this.log(-1, `Created branch: ${this.mergeBranch}`);
     }
 
     this.log(-1, `Merging ${branches.length} branch(es)...`);
@@ -289,12 +348,36 @@ export class Swarm {
         result.ok = true;
         this.log(agent.id, `Merged ${agent.branch}`);
       } catch (e: any) {
-        // Abort failed merge
+        // Abort failed merge, then retry with theirs strategy (keep agent's version)
         try { exec("git merge --abort", this.config.cwd); } catch {}
-        result.error = e.message?.slice(0, 80);
-        this.log(agent.id, `Merge conflict: ${agent.branch}`);
+        try {
+          exec(`git merge --no-edit -X theirs "${agent.branch}"`, this.config.cwd);
+          result.ok = true;
+          result.autoResolved = true;
+          this.log(agent.id, `Auto-resolved conflict: ${agent.branch}`);
+        } catch (e2: any) {
+          try { exec("git merge --abort", this.config.cwd); } catch {}
+          result.error = e.message?.slice(0, 80);
+          this.log(agent.id, `Merge conflict: ${agent.branch}`);
+        }
       }
       this.mergeResults.push(result);
+    }
+
+    // Clean up successfully merged task branches
+    const merged = this.mergeResults.filter((r) => r.ok);
+    const failed = this.mergeResults.filter((r) => !r.ok);
+    for (const r of merged) {
+      try { exec(`git branch -d "${r.branch}"`, this.config.cwd); } catch {}
+    }
+
+    this.log(-1, `Merged ${merged.length}/${branches.length} branches${failed.length > 0 ? ` (${failed.length} unresolved)` : ""}`);
+
+    if (strategy === "branch" && this.mergeBranch) {
+      // Switch back to the original branch
+      try {
+        exec("git checkout -", this.config.cwd);
+      } catch {}
     }
   }
 
@@ -304,10 +387,9 @@ export class Swarm {
     if (this.cleanedUp) return;
     this.cleanedUp = true;
     if (this.worktreeBase) {
-      try {
-        exec("git worktree prune", this.config.cwd);
-        rmSync(this.worktreeBase, { recursive: true, force: true });
-      } catch {}
+      // rmSync FIRST (remove dirs), then prune (clean git refs to removed dirs)
+      try { rmSync(this.worktreeBase, { recursive: true, force: true }); } catch {}
+      try { exec("git worktree prune", this.config.cwd); } catch {}
     }
   }
 
@@ -336,6 +418,17 @@ export class Swarm {
           try { rmSync(dir, { recursive: true, force: true }); } catch {}
         }
         exec("git worktree prune", this.config.cwd);
+      }
+      // Also clean orphaned swarm branches from previous runs
+      const branches = exec("git branch", this.config.cwd)
+        .split("\n")
+        .map((b) => b.trim().replace(/^\* /, ""))
+        .filter((b) => b.startsWith("swarm/"));
+      for (const b of branches) {
+        try { exec(`git branch -D "${b}"`, this.config.cwd); } catch {}
+      }
+      if (branches.length > 0) {
+        this.log(-1, `Cleaned ${branches.length} stale swarm branch(es)`);
       }
     } catch {}
   }
@@ -458,15 +551,26 @@ function isTransientError(err: unknown): boolean {
   ).toLowerCase();
   const status: number | undefined =
     (err as any)?.status ?? (err as any)?.statusCode;
-  return (
+  if (
     status === 429 ||
     (status != null && status >= 500 && status < 600) ||
     msg.includes("rate limit") ||
     msg.includes("overloaded") ||
     msg.includes("econnreset") ||
     msg.includes("etimedout") ||
-    msg.includes("socket hang up")
-  );
+    msg.includes("socket hang up") ||
+    msg.includes("epipe") ||
+    msg.includes("econnrefused") ||
+    msg.includes("ehostunreach") ||
+    msg.includes("network error") ||
+    msg.includes("fetch failed") ||
+    msg.includes("aborted")
+  ) {
+    return true;
+  }
+  const cause = (err as any)?.cause;
+  if (cause && cause !== err) return isTransientError(cause);
+  return false;
 }
 
 function exec(cmd: string, cwd: string): string {

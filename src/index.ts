@@ -10,7 +10,7 @@ import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks } from "./planner.js";
 import { startRenderLoop } from "./ui.js";
-import type { Task, TaskFile, PermMode } from "./types.js";
+import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
 
 // ── Fetch models via SDK (works with OAuth / Max / API key) ──
 
@@ -68,6 +68,16 @@ async function pickWorktrees(): Promise<boolean> {
   return ans.toLowerCase() !== "n";
 }
 
+async function pickMergeStrategy(): Promise<MergeStrategy> {
+  console.log(chalk.bold("\n  Merge strategy:"));
+  console.log(`  ${chalk.green("→")} 1. ${chalk.green("YOLO")}${chalk.dim(" — merge into current branch")}`);
+  console.log(`    2. ${chalk.dim("New branch")}${chalk.dim(" — merge into a new branch (safe for PRs)")}`);
+  const ans = await ask(chalk.dim("  Choose [1]: "));
+  const pick = ans === "2" ? "branch" : "yolo";
+  console.log(chalk.dim(`  Using ${pick === "yolo" ? "YOLO (merge into current)" : "new branch"}`));
+  return pick;
+}
+
 const PERM_MODES: { label: string; value: PermMode; desc: string }[] = [
   { label: "Auto", value: "auto", desc: "AI decides what's safe" },
   { label: "Bypass permissions", value: "bypassPermissions", desc: "skip all prompts (dangerous)" },
@@ -105,10 +115,11 @@ interface FileArgs {
   cwd?: string;
   allowedTools?: string[];
   useWorktrees?: boolean;
+  mergeStrategy?: MergeStrategy;
 }
 
 const KNOWN_TASK_FILE_KEYS = new Set([
-  "tasks", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees",
+  "tasks", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy",
 ]);
 
 function loadTaskFile(file: string): FileArgs {
@@ -177,6 +188,7 @@ function loadTaskFile(file: string): FileArgs {
     permissionMode: parsed.permissionMode,
     allowedTools: parsed.allowedTools,
     useWorktrees: parsed.worktrees,
+    mergeStrategy: (parsed as any).mergeStrategy,
   };
 }
 
@@ -229,19 +241,28 @@ async function main() {
   ${chalk.bold("claude-swarm")} — parallel Claude Code agents with real-time UI
 
   ${chalk.dim("Usage:")}
-    claude-swarm                                   ${chalk.dim("# interactive mode")}
-    claude-swarm tasks.json                        ${chalk.dim("# run task file")}
-    claude-swarm "fix auth" "add tests"            ${chalk.dim("# inline tasks")}
+    claude-swarm                          ${chalk.dim("interactive — pick model, concurrency, objective")}
+    claude-swarm tasks.json               ${chalk.dim("run tasks defined in a JSON file")}
+    claude-swarm "fix auth" "add tests"   ${chalk.dim("run inline tasks in parallel")}
 
   ${chalk.dim("Flags:")}
-    -v, --version                                  ${chalk.dim("# print version and exit")}
-    --dry-run                                      ${chalk.dim("# show planned tasks without running")}
+    -h, --help       Show this help
+    -v, --version    Print version
+    --dry-run        Show planned tasks without running them
+
+  ${chalk.dim("Permission modes")} ${chalk.dim("(task file: \"permissionMode\", interactive: prompted)")}
+    auto               AI decides which ops are safe ${chalk.dim("(default)")}
+    bypassPermissions  Skip all permission prompts ${chalk.yellow("(dangerous)")}
+    default            Prompt before destructive operations
+
+  ${chalk.dim("Non-interactive defaults (task file / inline / piped):")}
+    model: first available    concurrency: 5    worktrees: auto (git repo)    perms: auto
     `);
     process.exit(0);
   }
 
   const dryRun = argv.includes("--dry-run");
-  const args = argv.filter((a) => a !== "--dry-run");
+  const args = argv.filter((a) => !a.startsWith("--"));
 
   // ── Load tasks from file or inline args ──
   let tasks: Task[] = [];
@@ -282,9 +303,10 @@ async function main() {
   validateConcurrency(concurrency);
   const useWorktrees = fileCfg?.useWorktrees ?? (nonInteractive ? (noTTY ? false : isGitRepo(cwd)) : await pickWorktrees());
   if (useWorktrees) validateGitRepo(cwd);
+  const mergeStrategy = fileCfg?.mergeStrategy ?? (useWorktrees && !nonInteractive ? await pickMergeStrategy() : "yolo");
 
   if (nonInteractive) {
-    console.log(chalk.dim(`  ${model}  concurrency=${concurrency}  worktrees=${useWorktrees}  perms=${permissionMode}`));
+    console.log(chalk.dim(`  ${model}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}  perms=${permissionMode}`));
   }
 
   // If no tasks yet, ask for an objective and plan
@@ -356,6 +378,7 @@ async function main() {
     permissionMode,
     allowedTools,
     useWorktrees,
+    mergeStrategy,
   });
 
   // Replace simple handlers with graceful drain: first signal stops queue, second force-exits
@@ -413,15 +436,21 @@ async function main() {
     console.log(chalk.dim(`  ${elapsedStr}  ${fmtTokens(swarm.totalInputTokens)} in / ${fmtTokens(swarm.totalOutputTokens)} out  ${tools} tool calls`));
 
     if (swarm.mergeResults.length > 0) {
-      const merged = swarm.mergeResults.filter((r) => r.ok).length;
+      const merged = swarm.mergeResults.filter((r) => r.ok);
+      const autoResolved = merged.filter((r) => r.autoResolved).length;
       const conflicts = swarm.mergeResults.filter((r) => !r.ok);
-      if (merged > 0) {
-        console.log(chalk.green(`  Merged ${merged} branch(es) into HEAD`));
+      const target = swarm.mergeBranch || "HEAD";
+      if (merged.length > 0) {
+        const extra = autoResolved > 0 ? chalk.yellow(` (${autoResolved} auto-resolved)`) : "";
+        console.log(chalk.green(`  Merged ${merged.length} branch(es) into ${target}`) + extra);
+      }
+      if (swarm.mergeBranch) {
+        console.log(chalk.dim(`  Branch: ${swarm.mergeBranch} — create a PR or: git merge ${swarm.mergeBranch}`));
       }
       if (conflicts.length > 0) {
-        console.log(chalk.red(`  ${conflicts.length} branch(es) had merge conflicts:`));
+        console.log(chalk.red(`  ${conflicts.length} branch(es) had unresolved conflicts:`));
         for (const c of conflicts) {
-          console.log(chalk.red(`    ${c.branch}: ${c.error}`));
+          console.log(chalk.red(`    ${c.branch}`));
         }
         console.log(chalk.dim("  Branches preserved — merge manually with: git merge <branch>"));
       }

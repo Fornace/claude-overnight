@@ -178,20 +178,60 @@ function fmtDur(ms: number): string {
 }
 
 export function startRenderLoop(swarm: Swarm): () => void {
-  const isTTY = process.stdout.isTTY && process.stdout.columns != null;
-  const write = (s: string) => process.stdout.write(s);
+  if (!process.stdout.isTTY) {
+    return startPlainLog(swarm);
+  }
 
-  if (isTTY) write("\x1B[?25l\x1B[2J\x1B[H");
+  try {
+    process.stdout.write("\x1B[?25l\x1B[2J\x1B[H");
+  } catch {
+    return () => {};
+  }
 
   const interval = setInterval(() => {
-    if (isTTY) write("\x1B[H\x1B[J");
-    write(renderFrame(swarm) + "\n");
+    try {
+      process.stdout.write("\x1B[H\x1B[J");
+      process.stdout.write(renderFrame(swarm));
+    } catch {
+      clearInterval(interval);
+    }
   }, 250);
 
   return () => {
     clearInterval(interval);
-    if (isTTY) write("\x1B[H\x1B[J");
-    write(renderFrame(swarm) + "\n");
-    if (isTTY) write("\x1B[?25h");
+    try {
+      process.stdout.write("\x1B[H\x1B[J");
+      process.stdout.write(renderFrame(swarm));
+      process.stdout.write("\x1B[?25h");
+    } catch {}
+  };
+}
+
+function startPlainLog(swarm: Swarm): () => void {
+  let lastLogLen = 0;
+  let lastCompleted = -1;
+
+  const write = (line: string) => {
+    try { process.stdout.write(line + "\n"); } catch { clearInterval(interval); }
+  };
+
+  const interval = setInterval(() => {
+    if (swarm.logs.length > lastLogLen) {
+      for (const entry of swarm.logs.slice(lastLogLen)) {
+        const t = new Date(entry.time).toLocaleTimeString("en", { hour12: false });
+        const tag = entry.agentId < 0 ? "[sys]" : `[${entry.agentId}]`;
+        write(`${t} ${tag} ${entry.text}`);
+      }
+      lastLogLen = swarm.logs.length;
+    }
+    if (swarm.completed !== lastCompleted) {
+      lastCompleted = swarm.completed;
+      write(`progress: ${swarm.completed}/${swarm.total} done, ${swarm.active} active, ${swarm.pending} queued`);
+    }
+  }, 500);
+
+  return () => {
+    clearInterval(interval);
+    write(`done: ${swarm.completed}/${swarm.total} tasks, ${fmtDur(Date.now() - swarm.startedAt)}`);
   };
 }
