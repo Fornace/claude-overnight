@@ -91,10 +91,11 @@ async function select<T>(label: string, items: { name: string; value: T; hint?: 
   const draw = (first = false) => {
     if (!first) stdout.write(`\x1B[${items.length}A`);
     for (let i = 0; i < items.length; i++) {
-      const arrow = i === idx ? chalk.green("  → ") : "    ";
-      const name = i === idx ? chalk.green(items[i].name) : chalk.dim(items[i].name);
-      const hint = items[i].hint ? chalk.dim(` — ${items[i].hint}`) : "";
-      stdout.write(`\x1B[2K${arrow}${name}${hint}\n`);
+      const sel = i === idx;
+      const radio = sel ? chalk.cyan("  ● ") : chalk.dim("  ○ ");
+      const name = sel ? chalk.white(items[i].name) : chalk.dim(items[i].name);
+      const hint = items[i].hint ? chalk.dim(` · ${items[i].hint}`) : "";
+      stdout.write(`\x1B[2K${radio}${name}${hint}\n`);
     }
   };
 
@@ -128,7 +129,8 @@ async function select<T>(label: string, items: { name: string; value: T; hint?: 
 async function selectKey(label: string, options: { key: string; desc: string }[]): Promise<string> {
   const { stdin, stdout } = process;
   const keys = options.map((o) => o.key.toLowerCase());
-  stdout.write(`\n  ${label}  ${options.map((o) => `[${chalk.bold(o.key.toUpperCase())}]${chalk.dim(o.desc)}`).join("  ")}\n  `);
+  const optStr = options.map((o) => `${chalk.cyan.bold(o.key.toUpperCase())}${chalk.dim(o.desc)}`).join(chalk.dim("  │  "));
+  stdout.write(`\n  ${label}\n  ${optStr}\n  `);
 
   return new Promise((resolve) => {
     stdin.setRawMode!(true);
@@ -254,10 +256,14 @@ function validateGitRepo(cwd: string): void {
 // ── Show plan ──
 
 function showPlan(tasks: Task[]) {
+  const w = Math.max((process.stdout.columns ?? 80) - 6, 40);
+  const ruleLen = Math.min(w, 70);
+  console.log(chalk.dim(`  ─── ${tasks.length} tasks ${"─".repeat(Math.max(0, ruleLen - String(tasks.length).length - 10))}`));
   for (const t of tasks) {
-    console.log(chalk.dim(`    ${Number(t.id) + 1}. ${t.prompt.slice(0, 90)}`));
+    const num = chalk.dim(String(Number(t.id) + 1).padStart(4) + ".");
+    console.log(`${num} ${t.prompt.slice(0, w)}`);
   }
-  console.log("");
+  console.log(chalk.dim(`  ${"─".repeat(ruleLen)}\n`));
 }
 
 function readDesignDocs(dir: string): string {
@@ -284,25 +290,26 @@ async function main() {
 
   if (argv.includes("-h") || argv.includes("--help")) {
     console.log(`
-  ${chalk.bold("claude-overnight")} — fire off Claude agents, come back to shipped work
+  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("— fire off Claude agents, come back to shipped work")}
+  ${chalk.dim("─".repeat(60))}
 
-  ${chalk.dim("Usage:")}
-    claude-overnight                          ${chalk.dim("interactive — describe what to do, review plan, run")}
-    claude-overnight tasks.json               ${chalk.dim("run tasks defined in a JSON file")}
-    claude-overnight "fix auth" "add tests"   ${chalk.dim("run inline tasks in parallel")}
+  ${chalk.cyan("Usage")}
+    claude-overnight                          ${chalk.dim("interactive mode")}
+    claude-overnight tasks.json               ${chalk.dim("task file mode")}
+    claude-overnight "fix auth" "add tests"   ${chalk.dim("inline tasks")}
 
-  ${chalk.dim("Flags:")}
+  ${chalk.cyan("Flags")}
     -h, --help             Show this help
     -v, --version          Print version
     --dry-run              Show planned tasks without running them
-    --budget=N             Target number of agent runs ${chalk.dim("(planner aims for this many tasks)")}
+    --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
     --model=NAME           Worker model override ${chalk.dim("(planner always uses best available)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 300s, kills only silent agents)")}
     --no-flex              Disable adaptive multi-wave planning ${chalk.dim("(run all tasks in one shot)")}
 
-  ${chalk.dim("Non-interactive defaults (task file / inline / piped):")}
+  ${chalk.cyan("Defaults")} ${chalk.dim("(non-interactive)")}
     model: first available    concurrency: 5    worktrees: auto    perms: auto
     `);
     process.exit(0);
@@ -351,7 +358,8 @@ async function main() {
   }
 
   // ── Determine mode ──
-  console.log(chalk.bold("\n  \uD83C\uDF19 claude-overnight\n"));
+  console.log(`\n  ${chalk.bold("🌙  claude-overnight")}`);
+  console.log(chalk.dim(`  ${"─".repeat(36)}`));
 
   const noTTY = !process.stdin.isTTY;
   const nonInteractive = noTTY || fileCfg !== undefined || tasks.length > 0;
@@ -370,61 +378,64 @@ async function main() {
   let usageCap: number | undefined;
 
   if (!nonInteractive) {
-    console.log(chalk.dim("  Fire off Claude agents, come back to shipped work.\n"));
-
-    // 1. Objective first — it's the whole point
+    // ① Objective
     while (true) {
-      objective = await ask(chalk.bold("  What should the agents do?\n  > "));
+      objective = await ask(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")}\n  ${chalk.cyan(">")} `);
       if (!objective) { console.error(chalk.red("\n  No objective provided.")); process.exit(1); }
       if (objective.split(/\s+/).length >= 5) break;
-      console.log(chalk.yellow('  Be specific, e.g. "refactor the auth module, add tests, and update docs"\n'));
+      console.log(chalk.yellow('  Be specific, e.g. "refactor the auth module, add tests, and update docs"'));
     }
 
     // Start fetching models while user enters budget
     const modelsPromise = fetchModels();
 
-    // 2. Budget
-    const budgetAns = await ask(chalk.dim("\n  Budget [10]: "));
+    // ② Budget
+    const budgetAns = await ask(`\n  ${chalk.cyan("②")} ${chalk.dim("Budget")} ${chalk.dim("[")}${chalk.white("10")}${chalk.dim("]:")} `);
     budget = parseInt(budgetAns) || 10;
     if (budget < 1) { console.error(chalk.red(`  Budget must be a positive number`)); process.exit(1); }
 
-    // 3. Worker model
+    // ③ Worker model
     const models = await modelsPromise;
-
-    // Pick best model for planner (first = most capable)
     plannerModel = models[0]?.value || "claude-sonnet-4-6";
 
     if (models.length > 0) {
-      workerModel = await select("Worker model:", models.map((m) => ({
+      workerModel = await select(`${chalk.cyan("③")} Worker model:`, models.map((m) => ({
         name: m.displayName,
         value: m.value,
         hint: m.description,
       })));
     } else {
-      const ans = await ask(chalk.dim("  Worker model [claude-sonnet-4-6]: "));
+      const ans = await ask(`  ${chalk.cyan("③")} ${chalk.dim("Worker model [claude-sonnet-4-6]:")} `);
       workerModel = ans || "claude-sonnet-4-6";
     }
 
-    if (workerModel !== plannerModel) {
-      const tier = detectModelTier(workerModel);
-      console.log(chalk.dim(`\n  Planner: ${plannerModel} · Workers: ${workerModel} (${tier})`));
-    }
-
-    // 4. Usage cap — how much of your plan to use
-    usageCap = await select("Usage:", [
-      { name: "Unlimited", value: undefined as any, hint: "use full capacity, wait through rate limits" },
+    // ④ Usage
+    usageCap = await select(`${chalk.cyan("④")} Usage:`, [
+      { name: "Unlimited", value: undefined as any, hint: "full capacity, wait through rate limits" },
       { name: "90%", value: 0.9, hint: "leave 10% for other work" },
       { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
       { name: "50%", value: 0.5, hint: "use half, keep the rest" },
     ]);
 
-    // Concurrency defaults based on budget
     concurrency = Math.min(5, budget);
 
-    // Show config summary immediately
-    const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
-    const flexStr = budget > 2 ? "  flex=on" : "";
-    console.log(chalk.dim(`\n  ${workerModel}  budget=${budget}  concurrency=${concurrency}${flexStr}${capStr}`));
+    // Config summary box
+    const parts: string[] = [];
+    if (workerModel !== plannerModel) {
+      const tier = detectModelTier(workerModel);
+      parts.push(`${tier} → ${detectModelTier(plannerModel)}`);
+    } else {
+      parts.push(detectModelTier(workerModel));
+    }
+    parts.push(`budget ${budget}`);
+    parts.push(`${concurrency}×`);
+    if (budget > 2) parts.push("flex");
+    if (usageCap != null) parts.push(`cap ${Math.round(usageCap * 100)}%`);
+    const inner = parts.join(chalk.dim(" · "));
+    const innerLen = parts.join(" · ").length;
+    console.log(chalk.dim(`\n  ╭${"─".repeat(innerLen + 4)}╮`));
+    console.log(chalk.dim("  │") + `  ${inner}  ` + chalk.dim("│"));
+    console.log(chalk.dim(`  ╰${"─".repeat(innerLen + 4)}╯`));
   } else {
     // Non-interactive: resolve config from file/flags/defaults
     let models: ModelInfo[] = [];
@@ -479,14 +490,14 @@ async function main() {
     try {
       if (useThinking) {
         // Phase 1: Quick theme identification
-        console.log(chalk.magenta(`\n  Identifying themes...\n`));
+        console.log(chalk.cyan(`\n  ◆ Identifying themes...\n`));
         const themes = await identifyThemes(objective!, concurrency, plannerModel, permissionMode);
-        process.stdout.write(`\x1B[2K\r  ${chalk.green(`${themes.length} themes`)}\n`);
+        process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n`);
 
         // Phase 2: Thinking wave — agents explore codebase
         mkdirSync(designDir, { recursive: true });
         const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel);
-        console.log(chalk.magenta(`\n  Thinking: ${thinkingTasks.length} agents exploring...\n`));
+        console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
 
         const thinkingSwarm = new Swarm({
           tasks: thinkingTasks, concurrency, cwd,
@@ -507,7 +518,7 @@ async function main() {
         if (designContext) {
           const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
           const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
-          console.log(chalk.magenta(`\n  Orchestrating plan...\n`));
+          console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
           tasks = await orchestrate(objective!, designContext, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, (text) => {
             process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
           }, flexNote);
@@ -529,7 +540,7 @@ async function main() {
           ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.`
           : undefined;
 
-        console.log(chalk.magenta(`\n  Planning${flex ? " wave 1" : ""}...\n`));
+        console.log(chalk.cyan(`\n  ◆ Planning${flex ? " wave 1" : ""}...\n`));
         tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, (text) => {
           process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
         }, flexNote);
@@ -550,7 +561,7 @@ async function main() {
       showPlan(tasks);
 
       const action = await selectKey(
-        `${tasks.length} tasks, concurrency ${concurrency}.`,
+        `${chalk.white(`${tasks.length} tasks`)} ${chalk.dim(`· ${concurrency} concurrent`)}`,
         [
           { key: "r", desc: "un" },
           { key: "e", desc: "dit" },
@@ -565,9 +576,9 @@ async function main() {
           break;
 
         case "e": {
-          const feedback = await ask(chalk.bold("\n  What should change?\n  > "));
+          const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
           if (!feedback) break;
-          console.log(chalk.magenta("\n  Re-planning...\n"));
+          console.log(chalk.cyan("\n  ◆ Re-planning...\n"));
           process.stdout.write("\x1B[?25l");
           try {
             tasks = await refinePlan(objective!, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, (text) => {
@@ -582,7 +593,7 @@ async function main() {
         }
 
         case "c": {
-          const question = await ask(chalk.bold("\n  Ask about the plan:\n  > "));
+          const question = await ask(`\n  ${chalk.bold("Ask about the plan:")}\n  ${chalk.cyan(">")} `);
           if (!question) break;
           process.stdout.write("\x1B[?25l");
           try {
@@ -611,8 +622,8 @@ async function main() {
   if (tasks.length === 0) { console.error("No tasks provided."); process.exit(1); }
 
   if (dryRun) {
-    console.log(chalk.bold("  Tasks:"));
     showPlan(tasks);
+    console.log(chalk.dim("  --dry-run: exiting without running\n"));
     process.exit(0);
   }
 
@@ -662,7 +673,7 @@ async function main() {
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
 
     if (flex) {
-      console.log(chalk.magenta(`\n  \u2500\u2500 Wave ${waveNum + 1} (${currentTasks.length} tasks, ${remaining} remaining) \u2500\u2500\n`));
+      console.log(chalk.cyan(`\n  ◆ Wave ${waveNum + 1}`) + chalk.dim(` · ${currentTasks.length} tasks · ${remaining} remaining\n`));
     }
 
     const swarm = new Swarm({
@@ -706,7 +717,7 @@ async function main() {
     if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
 
     // ── Steer next wave ──
-    console.log(chalk.magenta("\n  Steering...\n"));
+    console.log(chalk.cyan("\n  ◆ Steering...\n"));
     process.stdout.write("\x1B[?25l");
     try {
       const steer = await steerWave(
@@ -747,9 +758,10 @@ async function main() {
   const summaryText = accFailed > 0
     ? chalk.yellow(`${accCompleted} done, ${accFailed} failed`) + cappedNote
     : chalk.green(`${accCompleted} done`) + cappedNote;
-  const costText = accCost > 0 ? ` ($${accCost.toFixed(3)})` : "";
-  const wavePart = waves > 1 ? `${waves} waves, ` : "";
-  console.log(`\n  ${chalk.bold("Complete:")} ${wavePart}${summaryText}${chalk.dim(costText)}`);
+  const costText = accCost > 0 ? chalk.dim(` · $${accCost.toFixed(3)}`) : "";
+  const wavePart = waves > 1 ? chalk.dim(`${waves} waves · `) : "";
+  console.log(chalk.dim(`\n  ${"─".repeat(36)}`));
+  console.log(`  ${chalk.green("✓")} ${chalk.bold("Complete")}  ${wavePart}${summaryText}${costText}`);
 
   if (accFailed > 0 && waves === 1) {
     const failedAgents = currentSwarm?.agents.filter((a) => a.status === "error") ?? [];

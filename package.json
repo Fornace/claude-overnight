@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Fire off Claude agents, come back days later to shipped work. Maximizes every token in your plan.",
   "type": "module",
   "bin": {
