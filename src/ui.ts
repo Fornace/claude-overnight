@@ -51,21 +51,39 @@ export function renderFrame(swarm: Swarm): string {
     swarm.totalCostUsd > 0
       ? chalk.yellow(`$${swarm.totalCostUsd.toFixed(3)}`)
       : "";
-  const rlPct = swarm.rateLimitUtilization;
-  const rlBar =
-    rlPct > 0
-      ? "  " +
-        (rlPct > 0.8
-          ? chalk.red(`RL ${Math.round(rlPct * 100)}%`)
-          : rlPct > 0.5
-            ? chalk.yellow(`RL ${Math.round(rlPct * 100)}%`)
-            : chalk.green(`RL ${Math.round(rlPct * 100)}%`))
-      : "";
   out.push(
     chalk.gray(`  \u2191 ${tokIn} in  \u2193 ${tokOut} out`) +
-      (cost ? `  ${cost}` : "") +
-      rlBar,
+      (cost ? `  ${cost}` : ""),
   );
+
+  // ── Usage bar ──
+  const rlPct = swarm.rateLimitUtilization;
+  if (rlPct > 0 || swarm.rateLimitResetsAt || swarm.cappedOut) {
+    const barW = Math.min(30, w - 40);
+    const filled = Math.round(rlPct * barW);
+    const capFrac = (swarm as any).config?.usageCap;
+    const capMark = capFrac != null && capFrac < 1 ? Math.round(capFrac * barW) : -1;
+
+    let barStr = "";
+    for (let i = 0; i < barW; i++) {
+      if (i === capMark) barStr += chalk.yellow("\u2502");
+      else if (i < filled) barStr += rlPct > 0.9 ? chalk.red("\u2588") : rlPct > 0.75 ? chalk.yellow("\u2588") : chalk.blue("\u2588");
+      else barStr += chalk.gray("\u2591");
+    }
+
+    let label = `${Math.round(rlPct * 100)}% used`;
+    if (swarm.cappedOut) {
+      label = chalk.yellow(`Capped at ${capFrac != null ? Math.round(capFrac * 100) : 100}% — finishing active`);
+    } else if (swarm.rateLimitResetsAt) {
+      const waitSec = Math.max(0, Math.ceil((swarm.rateLimitResetsAt - Date.now()) / 1000));
+      const mm = Math.floor(waitSec / 60);
+      const ss = waitSec % 60;
+      label = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
+    }
+
+    out.push(`  ${chalk.dim("Usage")} ${barStr}  ${label}`);
+  }
+
   out.push("");
 
   // ── Agent table ──

@@ -9,19 +9,76 @@ interface PlannerOpts {
   permissionMode: PermMode;
 }
 
-// ── Budget-aware prompt strategy ──
+// ── Model tier detection ──
 
-function plannerPrompt(objective: string, budget?: number, concurrency?: number): string {
+export type ModelTier = "opus" | "sonnet" | "haiku" | "unknown";
+
+export function detectModelTier(model: string): ModelTier {
+  const m = model.toLowerCase();
+  if (m.includes("opus")) return "opus";
+  if (m.includes("sonnet")) return "sonnet";
+  if (m.includes("haiku")) return "haiku";
+  return "unknown";
+}
+
+function modelCapabilityBlock(model: string): string {
+  switch (detectModelTier(model)) {
+    case "opus":
+      return `Each agent runs Claude Opus with 1M context — a powerhouse. It can own entire epics, do deep codebase research, make architectural decisions, implement complex multi-file systems end-to-end, use browser tools for analysis, and deliver expert-level work. These agents can work for 30+ minutes on the most complex tasks. Do NOT waste them on trivial edits — give them ownership and autonomy.`;
+    case "sonnet":
+      return `Each agent runs Claude Sonnet — capable of substantial implementation, refactoring, testing, and design work. Can work autonomously for 10-20 minutes on complex tasks. Give agents meaningful scope — not just single-line edits.`;
+    case "haiku":
+      return `Each agent runs Claude Haiku — fast and efficient, best for focused, well-specified tasks. Be explicit about files, functions, and expected changes. Keep each task scoped to a clear, concrete deliverable.`;
+    default:
+      return `Each agent has full codebase access and can work autonomously.`;
+  }
+}
+
+// ── Budget + model aware prompt strategy ──
+
+function plannerPrompt(objective: string, workerModel: string, budget?: number, concurrency?: number): string {
   const b = budget ?? 10;
+  const tier = detectModelTier(workerModel);
+  const capability = modelCapabilityBlock(workerModel);
   const concLine = concurrency
     ? `\n- ${concurrency} agents run in parallel — tasks that run concurrently must touch DIFFERENT files to avoid merge conflicts`
     : "";
 
-  // Small budget: specific tasks, one change each (original behavior)
-  if (b <= 15) {
+  // Haiku always gets specific guided tasks regardless of budget
+  if (tier === "haiku") {
     return `You are a task coordinator for a parallel agent system. Analyze this codebase and break the following objective into independent tasks.
 
 Objective: ${objective}
+
+AGENT CAPABILITY: ${capability}
+
+Requirements:
+- Target exactly ~${b} tasks
+- Each task MUST be independent — no task depends on another
+- Each task should target specific files/areas to avoid merge conflicts
+- Be specific: mention exact file paths, function names, what to change
+- Keep tasks focused: one concrete change per task — Haiku agents work best with clear, scoped instructions${concLine}
+
+Respond with ONLY a JSON object (no markdown fences):
+{
+  "tasks": [
+    { "prompt": "In src/foo.ts, refactor the bar() function to..." },
+    { "prompt": "Add unit tests for the baz module in test/baz.test.ts..." }
+  ]
+}`;
+  }
+
+  // Opus gets ambitious missions even at moderate budgets
+  const smallThreshold = tier === "opus" ? 5 : 15;
+  const mediumThreshold = tier === "opus" ? 30 : 50;
+
+  // Small budget: specific tasks
+  if (b <= smallThreshold) {
+    return `You are a task coordinator for a parallel agent system. Analyze this codebase and break the following objective into independent tasks.
+
+Objective: ${objective}
+
+AGENT CAPABILITY: ${capability}
 
 Requirements:
 - Each task MUST be independent — no task depends on another
@@ -39,14 +96,13 @@ Respond with ONLY a JSON object (no markdown fences):
 }`;
   }
 
-  // Medium budget (16-50): substantial missions, each agent gets real autonomy
-  if (b <= 50) {
+  // Medium budget: substantial missions with autonomy
+  if (b <= mediumThreshold) {
     return `You are a task coordinator for a parallel agent system with ${b} agent sessions available.
 
 Objective: ${objective}
 
-IMPORTANT — what each agent session is:
-Each task you create will be executed by a powerful AI agent (Claude with 1M context window) that has full access to the codebase, can read files, write code, run commands, and work for up to 30 minutes. These are NOT micro-tasks for humans — each agent is a capable engineer that can research, design, and implement.
+AGENT CAPABILITY: ${capability}
 
 Do NOT over-specify. Give each agent a MISSION, not step-by-step instructions. Let agents make their own decisions about implementation details.
 
@@ -68,13 +124,12 @@ Respond with ONLY a JSON object (no markdown fences):
 }`;
   }
 
-  // Large budget (50+): ambitious multi-workstream decomposition
+  // Large budget: ambitious multi-workstream decomposition
   return `You are a task coordinator for a parallel agent system with ${b} agent sessions available. This is a LARGE budget — equivalent to months of professional engineering work.
 
 Objective: ${objective}
 
-CRITICAL — what each agent session is:
-Each task you create will be executed by a powerful AI agent (Claude with 1M context window) that has full access to the codebase, can read files, write code, run commands, and work for up to 30 minutes autonomously. These are NOT micro-tasks. Each agent is a senior engineer that can research, design, architect, implement, test, and refactor independently. Do NOT waste sessions on trivial single-file edits.
+AGENT CAPABILITY: ${capability}
 
 With ${b} sessions, you should think BIG:
 - Full feature implementations spanning multiple files
@@ -246,7 +301,8 @@ function postProcess(raw: Task[], budget: number | undefined, onLog: (text: stri
 export async function planTasks(
   objective: string,
   cwd: string,
-  model: string,
+  plannerModel: string,
+  workerModel: string,
   permissionMode: PermMode,
   budget: number | undefined,
   concurrency: number,
@@ -255,8 +311,8 @@ export async function planTasks(
   onLog("Analyzing codebase...");
 
   const resultText = await runPlannerQuery(
-    plannerPrompt(objective, budget, concurrency),
-    { cwd, model, permissionMode },
+    plannerPrompt(objective, workerModel, budget, concurrency),
+    { cwd, model: plannerModel, permissionMode },
     onLog,
   );
 
@@ -265,7 +321,7 @@ export async function planTasks(
     let retryText = "";
     for await (const msg of query({
       prompt: `Your previous response did not contain valid JSON. Output ONLY a JSON object:\n{"tasks":[{"prompt":"..."}]}`,
-      options: { cwd, model, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
+      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
     })) {
       if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
     }
@@ -289,7 +345,8 @@ export async function refinePlan(
   previousTasks: Task[],
   feedback: string,
   cwd: string,
-  model: string,
+  plannerModel: string,
+  workerModel: string,
   permissionMode: PermMode,
   budget: number | undefined,
   concurrency: number,
@@ -298,11 +355,12 @@ export async function refinePlan(
   onLog("Refining plan...");
 
   const prev = previousTasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n");
+  const capability = modelCapabilityBlock(workerModel);
   const b = budget ?? 10;
   const scaleNote = b > 50
-    ? `This is a LARGE budget (${b} sessions). Each session is a powerful AI agent with 1M context that can work for 30 minutes. Think big — missions, not micro-tasks.`
+    ? `This is a LARGE budget (${b} sessions). Think big — missions, not micro-tasks.`
     : b > 15
-      ? `Each of the ${b} sessions is a capable AI agent that can work autonomously for up to 30 minutes. Give substantial missions, not trivial edits.`
+      ? `Each of the ${b} sessions is a capable AI agent. Give substantial missions, not trivial edits.`
       : `Target ~${b} tasks.`;
   const prompt = `You are a task coordinator. You previously planned these tasks for the objective:
 
@@ -313,19 +371,21 @@ ${prev}
 
 The user wants changes: ${feedback}
 
+AGENT CAPABILITY: ${capability}
+
 ${scaleNote} ${concurrency} agents run in parallel. Update the plan accordingly. Keep tasks independent and targeting different files/areas.
 
 Respond with ONLY a JSON object (no markdown):
 {"tasks":[{"prompt":"..."}]}`;
 
-  const resultText = await runPlannerQuery(prompt, { cwd, model, permissionMode }, onLog);
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
 
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
     let retryText = "";
     for await (const msg of query({
       prompt: `Output ONLY a JSON object:\n{"tasks":[{"prompt":"..."}]}`,
-      options: { cwd, model, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
+      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
     })) {
       if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
     }

@@ -23,6 +23,8 @@ export interface SwarmConfig {
   agentTimeoutMs?: number;
   maxRetries?: number;
   mergeStrategy?: MergeStrategy;
+  /** Stop dispatching new tasks when rate-limit utilization reaches this fraction (0-1). */
+  usageCap?: number;
 }
 
 export interface MergeResult {
@@ -47,12 +49,13 @@ export class Swarm {
   totalOutputTokens = 0;
   phase: SwarmPhase = "running";
   aborted = false;
+  cappedOut = false;
   mergeResults: MergeResult[] = [];
 
   // Rate limit tracking for auto-concurrency
   rateLimitUtilization = 0;
   rateLimitStatus: string = "";
-  private rateLimitResetsAt?: number;
+  rateLimitResetsAt?: number;
 
   private queue: Task[];
   private config: SwarmConfig;
@@ -137,8 +140,9 @@ export class Swarm {
 
   private async worker(): Promise<void> {
     let tasksProcessed = 0;
-    while (this.queue.length > 0 && !this.aborted) {
+    while (this.queue.length > 0 && !this.aborted && !this.cappedOut) {
       await this.throttle();
+      if (this.cappedOut) break;
       const task = this.queue.shift();
       if (!task) break;
       try {
@@ -153,6 +157,13 @@ export class Swarm {
   }
 
   private async throttle(): Promise<void> {
+    // Usage cap: stop dispatching when utilization exceeds user's cap
+    const cap = this.config.usageCap;
+    if (cap != null && cap < 1 && this.rateLimitUtilization >= cap) {
+      this.cappedOut = true;
+      this.log(-1, `Usage cap ${Math.round(cap * 100)}% reached (at ${Math.round(this.rateLimitUtilization * 100)}%) — finishing active agents, no new tasks`);
+      return;
+    }
     // Hard block: rate limit rejected — wait until reset
     if (this.rateLimitResetsAt) {
       const waitMs = this.rateLimitResetsAt - Date.now();

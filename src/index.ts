@@ -8,14 +8,14 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan } from "./planner.js";
+import { planTasks, refinePlan, detectModelTier } from "./planner.js";
 import { startRenderLoop, renderSummary } from "./ui.js";
 import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
 
 // ── CLI flag parsing ──
 
 function parseCliFlags(argv: string[]) {
-  const known = new Set(["concurrency", "model", "timeout", "budget"]);
+  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap"]);
   const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version"]);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
@@ -146,7 +146,7 @@ interface FileArgs {
 }
 
 const KNOWN_TASK_FILE_KEYS = new Set([
-  "tasks", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy",
+  "tasks", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap",
 ]);
 
 function loadTaskFile(file: string): FileArgs {
@@ -259,7 +259,8 @@ async function main() {
     --dry-run              Show planned tasks without running them
     --budget=N             Target number of agent runs ${chalk.dim("(planner aims for this many tasks)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
-    --model=NAME           Model override
+    --model=NAME           Worker model override ${chalk.dim("(planner always uses best available)")}
+    --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 300s, kills only silent agents)")}
 
   ${chalk.dim("Non-interactive defaults (task file / inline / piped):")}
@@ -313,11 +314,13 @@ async function main() {
 
   if (noTTY) console.log(chalk.dim("  Non-interactive mode — using defaults\n"));
 
-  // ── Interactive flow: Objective → Budget → Model → Plan → Review ──
-  let model: string;
+  // ── Interactive flow: Objective → Budget → Model → Usage cap → Plan → Review ──
+  let workerModel: string;
+  let plannerModel: string;
   let budget: number | undefined;
   let concurrency: number;
   let objective: string | undefined;
+  let usageCap: number | undefined;
 
   if (!nonInteractive) {
     console.log(chalk.dim("  Fire off Claude agents, come back to shipped work.\n"));
@@ -334,21 +337,37 @@ async function main() {
     const budgetAns = await ask(chalk.dim("\n  Agent budget [10]: "));
     budget = parseInt(budgetAns) || 10;
 
-    // 3. Model — arrow keys
+    // 3. Worker model — planner always uses best available
     process.stdout.write(chalk.dim("  Fetching models..."));
     const models = await fetchModels();
     process.stdout.write(`\x1B[2K\r`);
 
+    // Pick best model for planner (first = most capable)
+    plannerModel = models[0]?.value || "claude-sonnet-4-6";
+
     if (models.length > 0) {
-      model = await select("Model:", models.map((m) => ({
+      workerModel = await select("Worker model (planner always uses best available):", models.map((m) => ({
         name: m.displayName,
         value: m.value,
         hint: m.description,
       })));
     } else {
-      const ans = await ask(chalk.dim("  Model [claude-sonnet-4-6]: "));
-      model = ans || "claude-sonnet-4-6";
+      const ans = await ask(chalk.dim("  Worker model [claude-sonnet-4-6]: "));
+      workerModel = ans || "claude-sonnet-4-6";
     }
+
+    if (workerModel !== plannerModel) {
+      const tier = detectModelTier(workerModel);
+      console.log(chalk.dim(`\n  Planner: ${plannerModel} · Workers: ${workerModel} (${tier})`));
+    }
+
+    // 4. Usage cap — how much of your plan to use
+    usageCap = await select("Usage limit:", [
+      { name: "Unlimited", value: undefined as any, hint: "use full capacity, wait through rate limits" },
+      { name: "90%", value: 0.9, hint: "leave 10% for other work" },
+      { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
+      { name: "50%", value: 0.5, hint: "use half, keep the rest" },
+    ]);
 
     // Concurrency defaults based on budget
     concurrency = Math.min(5, budget);
@@ -356,9 +375,12 @@ async function main() {
     // Non-interactive: resolve config from file/flags/defaults
     let models: ModelInfo[] = [];
     if (!cliFlags.model && !fileCfg?.model) models = await fetchModels(5_000);
-    model = cliFlags.model ?? fileCfg?.model ?? (models[0]?.value || "claude-sonnet-4-6");
+    workerModel = cliFlags.model ?? fileCfg?.model ?? (models[0]?.value || "claude-sonnet-4-6");
+    plannerModel = models[0]?.value || workerModel;
     concurrency = cliFlags.concurrency ? parseInt(cliFlags.concurrency) : (fileCfg?.concurrency ?? 5);
     budget = cliFlags.budget ? parseInt(cliFlags.budget) : undefined;
+    const capFlag = cliFlags["usage-cap"];
+    usageCap = capFlag ? parseInt(capFlag) / 100 : (fileCfg as any)?.usageCap != null ? (fileCfg as any).usageCap / 100 : undefined;
   }
 
   validateConcurrency(concurrency);
@@ -368,7 +390,8 @@ async function main() {
   const mergeStrategy: MergeStrategy = fileCfg?.mergeStrategy ?? "yolo";
 
   if (nonInteractive) {
-    console.log(chalk.dim(`  ${model}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}  perms=${permissionMode}`));
+    const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
+    console.log(chalk.dim(`  ${workerModel}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}  perms=${permissionMode}${capStr}`));
   }
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
@@ -385,7 +408,7 @@ async function main() {
 
     console.log(chalk.magenta("\n  Planning...\n"));
     try {
-      tasks = await planTasks(objective!, cwd, model, permissionMode, budget, concurrency, (text) => {
+      tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, (text) => {
         process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
       });
       process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}\n\n`);
@@ -423,7 +446,7 @@ async function main() {
           console.log(chalk.magenta("\n  Re-planning...\n"));
           process.stdout.write("\x1B[?25l");
           try {
-            tasks = await refinePlan(objective!, tasks, feedback, cwd, model, permissionMode, budget, concurrency, (text) => {
+            tasks = await refinePlan(objective!, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, (text) => {
               process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
             });
             process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}\n\n`);
@@ -442,7 +465,7 @@ async function main() {
             let answer = "";
             for await (const msg of query({
               prompt: `You planned these tasks for the objective "${objective}":\n${tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n")}\n\nUser question: ${question}`,
-              options: { cwd, model, permissionMode, persistSession: false },
+              options: { cwd, model: plannerModel, permissionMode, persistSession: false },
             })) {
               if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || "";
             }
@@ -476,8 +499,8 @@ async function main() {
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
 
   const swarm = new Swarm({
-    tasks, concurrency, cwd, model, permissionMode, allowedTools,
-    useWorktrees, mergeStrategy, agentTimeoutMs,
+    tasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
+    useWorktrees, mergeStrategy, agentTimeoutMs, usageCap,
   });
 
   // Graceful drain
@@ -506,9 +529,10 @@ async function main() {
     console.log(renderSummary(swarm));
 
     const failedAgents = swarm.agents.filter((a) => a.status === "error");
+    const cappedNote = swarm.cappedOut ? chalk.yellow(` (capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%)`) : "";
     const summary = failedAgents.length > 0
-      ? chalk.yellow(`${swarm.completed} done, ${failedAgents.length} failed`)
-      : chalk.green(`${swarm.completed} done`);
+      ? chalk.yellow(`${swarm.completed} done, ${failedAgents.length} failed`) + cappedNote
+      : chalk.green(`${swarm.completed} done`) + cappedNote;
     const cost = swarm.totalCostUsd > 0 ? ` ($${swarm.totalCostUsd.toFixed(3)})` : "";
     console.log(`\n  ${chalk.bold("Complete:")} ${summary}${chalk.dim(cost)}`);
 

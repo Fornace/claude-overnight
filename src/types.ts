@@ -24,6 +24,8 @@ export interface TaskFile {
   allowedTools?: string[];
   /** Merge strategy: "yolo" merges into current branch, "branch" creates a new branch. */
   mergeStrategy?: MergeStrategy;
+  /** Stop dispatching new tasks when rate-limit utilization reaches this percentage (0-100). */
+  usageCap?: number;
   /** Tasks to execute — either plain prompt strings or objects with per-task overrides. */
   tasks: (string | { prompt: string; cwd?: string; model?: string })[];
 }
