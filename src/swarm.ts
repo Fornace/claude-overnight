@@ -289,9 +289,16 @@ export class Swarm {
         }
 
         if (agent.status === "running") {
-          agent.status = "done";
           agent.finishedAt = Date.now();
-          this.completed++;
+          const duration = agent.finishedAt - (agent.startedAt || agent.finishedAt);
+          if (agent.toolCalls === 0 && (agent.costUsd ?? 0) < 0.001 && duration < 15_000) {
+            agent.status = "error";
+            agent.error = "Agent did no work (likely rate-limited before starting)";
+            this.failed++;
+          } else {
+            agent.status = "done";
+            this.completed++;
+          }
           this.log(id, this.agentSummary(agent));
         }
         break; // Success — exit retry loop
@@ -469,11 +476,12 @@ export class Swarm {
     } finally {
       if (stashed) {
         try {
-          exec("git stash pop", this.config.cwd);
-          this.log(-1, "Restored stashed changes");
-        } catch (e: any) {
-          this.log(-1, `Stash pop failed: ${String(e.message || e).slice(0, 80)}`);
-        }
+          const stashList = exec("git stash list", this.config.cwd).trim();
+          if (stashList) {
+            exec("git stash pop", this.config.cwd);
+            this.log(-1, "Restored stashed changes");
+          }
+        } catch { /* stash already gone or empty */ }
       }
     }
   }

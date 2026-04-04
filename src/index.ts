@@ -505,21 +505,60 @@ async function main() {
     const planRestore = () => process.stdout.write("\x1B[?25h");
 
     const useThinking = flex && (budget ?? 10) > concurrency * 3;
+    const thinkingCount = useThinking ? Math.min(Math.max(concurrency, Math.ceil((budget ?? 10) * 0.005)), 10) : 0;
     const designDir = join(cwd, ".claude-overnight", "designs");
 
     try {
       if (useThinking) {
-        // Phase 1: Quick theme identification
+        // Phase 1: Quick theme identification → review → then autonomous
         let themeFrame = 0;
         const themeSpinner = setInterval(() => {
           const spin = chalk.cyan(BRAILLE[themeFrame++ % BRAILLE.length]);
           process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim("identifying themes...")}`);
         }, 120);
         let themes: string[];
-        try { themes = await identifyThemes(objective!, concurrency, plannerModel, permissionMode); } finally { clearInterval(themeSpinner); }
-        process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${themes.length} themes`)}\n`);
+        try { themes = await identifyThemes(objective!, thinkingCount, plannerModel, permissionMode); } finally { clearInterval(themeSpinner); }
+        process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${themes.length} themes`)}\n\n`);
 
-        // Phase 2: Thinking wave — agents explore codebase
+        // Show themes for review — this is the LAST user interaction
+        planRestore();
+        let reviewing = true;
+        while (reviewing) {
+          for (let i = 0; i < themes.length; i++) {
+            console.log(chalk.dim(`  ${String(i + 1).padStart(3)}.`) + ` ${themes[i]}`);
+          }
+          console.log(chalk.dim(`\n  ${thinkingCount} thinking agents → orchestrate → ${(budget ?? 10) - thinkingCount} execution sessions\n`));
+
+          const action = await selectKey(
+            `${chalk.white(`${themes.length} themes`)} ${chalk.dim(`· ${thinkingCount} thinking · ${concurrency} concurrent`)}`,
+            [
+              { key: "r", desc: "un" },
+              { key: "e", desc: "dit" },
+              { key: "q", desc: "uit" },
+            ],
+          );
+
+          switch (action) {
+            case "r": reviewing = false; break;
+            case "e": {
+              const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
+              if (!feedback) break;
+              process.stdout.write("\x1B[?25l");
+              try {
+                themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, plannerModel, permissionMode);
+                process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${themes.length} themes`)}\n\n`);
+              } catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
+              planRestore();
+              break;
+            }
+            case "q": console.log(chalk.dim("\n  Aborted.\n")); process.exit(0);
+          }
+        }
+
+        // ── From here, fully autonomous — no more user interaction ──
+        process.stdout.write("\x1B[?25l");
+
+        // Phase 2: Thinking wave
         mkdirSync(designDir, { recursive: true });
         const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel);
         console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
@@ -549,17 +588,15 @@ async function main() {
           const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
           console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
           tasks = await orchestrate(objective!, designContext, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote);
-          const remaining = (budget ?? 10) - thinkingUsed - tasks.length;
-          process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}${chalk.dim(` · ${remaining} remaining`)}\n\n`);
+          process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
         } else {
-          // Fallback: no design docs produced, use direct planner
-          console.log(chalk.yellow(`\n  No design docs produced — falling back to direct planning\n`));
+          console.log(chalk.yellow(`\n  No design docs — falling back to direct planning\n`));
           const waveBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
           tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog());
           process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
         }
       } else {
-        // Small budget: direct planning (no thinking wave)
+        // Small budget: direct planning → review → run
         const waveBudget = flex ? Math.min(50, Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5))) : budget;
         const flexNote = flex
           ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.`
@@ -567,76 +604,63 @@ async function main() {
 
         console.log(chalk.cyan(`\n  ◆ Planning${flex ? " wave 1" : ""}...\n`));
         tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), flexNote);
-        const flexHint = flex ? chalk.dim(` (wave 1, ${(budget ?? 10) - tasks.length} remaining)`) : "";
+        const flexHint = flex ? chalk.dim(` · wave 1`) : "";
         process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}${flexHint}\n\n`);
+
+        // Review loop for small-budget path
+        planRestore();
+        let reviewing = true;
+        while (reviewing) {
+          showPlan(tasks);
+          const action = await selectKey(
+            `${chalk.white(`${tasks.length} tasks`)} ${chalk.dim(`· ${concurrency} concurrent`)}`,
+            [
+              { key: "r", desc: "un" },
+              { key: "e", desc: "dit" },
+              { key: "c", desc: "hat" },
+              { key: "q", desc: "uit" },
+            ],
+          );
+          switch (action) {
+            case "r": reviewing = false; break;
+            case "e": {
+              const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
+              if (!feedback) break;
+              console.log(chalk.cyan("\n  ◆ Re-planning...\n"));
+              process.stdout.write("\x1B[?25l");
+              try {
+                tasks = await refinePlan(objective!, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, makeProgressLog());
+                process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
+              } catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
+              planRestore();
+              break;
+            }
+            case "c": {
+              const question = await ask(`\n  ${chalk.bold("Ask about the plan:")}\n  ${chalk.cyan(">")} `);
+              if (!question) break;
+              process.stdout.write("\x1B[?25l");
+              try {
+                let answer = "";
+                for await (const msg of query({
+                  prompt: `You planned these tasks for the objective "${objective}":\n${tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n")}\n\nUser question: ${question}`,
+                  options: { cwd, model: plannerModel, permissionMode, persistSession: false },
+                })) {
+                  if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || "";
+                }
+                planRestore();
+                if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
+              } catch { planRestore(); }
+              break;
+            }
+            case "q": console.log(chalk.dim("\n  Aborted.\n")); process.exit(0);
+          }
+        }
       }
     } catch (err: any) {
       planRestore();
       if (isAuthError(err)) console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`));
       else console.error(chalk.red(`\n  Planning failed: ${err.message}\n`));
       process.exit(1);
-    }
-
-    // ── Review loop ──
-    planRestore();
-    let reviewing = true;
-    while (reviewing) {
-      showPlan(tasks);
-
-      const action = await selectKey(
-        `${chalk.white(`${tasks.length} tasks`)} ${chalk.dim(`· ${concurrency} concurrent`)}`,
-        [
-          { key: "r", desc: "un" },
-          { key: "e", desc: "dit" },
-          { key: "c", desc: "hat" },
-          { key: "q", desc: "uit" },
-        ],
-      );
-
-      switch (action) {
-        case "r":
-          reviewing = false;
-          break;
-
-        case "e": {
-          const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
-          if (!feedback) break;
-          console.log(chalk.cyan("\n  ◆ Re-planning...\n"));
-          process.stdout.write("\x1B[?25l");
-          try {
-            tasks = await refinePlan(objective!, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, makeProgressLog());
-            process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
-          } catch (err: any) {
-            console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`));
-          }
-          planRestore();
-          break;
-        }
-
-        case "c": {
-          const question = await ask(`\n  ${chalk.bold("Ask about the plan:")}\n  ${chalk.cyan(">")} `);
-          if (!question) break;
-          process.stdout.write("\x1B[?25l");
-          try {
-            let answer = "";
-            for await (const msg of query({
-              prompt: `You planned these tasks for the objective "${objective}":\n${tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n")}\n\nUser question: ${question}`,
-              options: { cwd, model: plannerModel, permissionMode, persistSession: false },
-            })) {
-              if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || "";
-            }
-            planRestore();
-            if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
-          } catch {
-            planRestore();
-          }
-          break;
-        }
-
-        case "q":
-          console.log(chalk.dim("\n  Aborted.\n"));
-          process.exit(0);
-      }
     }
   }
 

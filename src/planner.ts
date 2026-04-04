@@ -28,7 +28,7 @@ export type ModelTier = "opus" | "sonnet" | "haiku" | "unknown";
 
 export function detectModelTier(model: string): ModelTier {
   const m = model.toLowerCase();
-  if (m.includes("opus")) return "opus";
+  if (m === "default" || m.includes("opus")) return "opus";
   if (m.includes("sonnet")) return "sonnet";
   if (m.includes("haiku")) return "haiku";
   return "unknown";
@@ -178,7 +178,39 @@ Respond with ONLY a JSON object (no markdown fences):
 }`;
 }
 
+const RATE_LIMIT_PATTERNS = ["rate", "limit", "overloaded", "429", "hit your limit", "too many"];
+
+function isRateLimitError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return RATE_LIMIT_PATTERNS.some((p) => msg.toLowerCase().includes(p));
+}
+
 async function runPlannerQuery(
+  prompt: string,
+  opts: PlannerOpts,
+  onLog: (text: string) => void,
+): Promise<string> {
+  const MAX_RETRIES = 3;
+  const BACKOFF = [30_000, 60_000, 120_000];
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await runPlannerQueryOnce(prompt, opts, onLog);
+    } catch (err: any) {
+      if (attempt < MAX_RETRIES && isRateLimitError(err)) {
+        const waitMs = BACKOFF[attempt];
+        const waitSec = Math.round(waitMs / 1000);
+        onLog(`Rate limited — waiting ${waitSec}s before retry ${attempt + 1}/${MAX_RETRIES}`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Planner query failed after retries");
+}
+
+async function runPlannerQueryOnce(
   prompt: string,
   opts: PlannerOpts,
   onLog: (text: string) => void,
@@ -246,7 +278,7 @@ async function runPlannerQuery(
       }
       if (msg.type === "result") {
         if (msg.subtype === "success") resultText = (msg as any).result || "";
-        else throw new Error(`Planner failed: ${msg.subtype}`);
+        else throw new Error(`Planner failed: ${(msg as any).result || msg.subtype}`);
       }
     }
   };

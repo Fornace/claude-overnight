@@ -45,7 +45,7 @@ A guided flow walks you through each step:
 ╰────────────────────────────────────╯
 ```
 
-The planner generates tasks — review, edit, or chat about them, then run.
+For large budgets, the planner identifies research themes — review them, then press Run. Everything after that is fully autonomous: thinking agents explore, the orchestrator synthesizes tasks, execution waves run, and steering adapts between waves. No further interaction needed — go to sleep.
 
 ### Task file
 
@@ -68,14 +68,17 @@ The planner always runs on the best available model (Opus) regardless of which m
 For large budgets (`budget > concurrency * 3`), the planner doesn't try to generate hundreds of tasks from scratch. Instead, it launches a **thinking wave** — a team of architect agents that explore your codebase in parallel before any code is written.
 
 ```
-⠋ identifying themes...        → splits objective into N angles (< 30s)
-◆ Thinking: 5 agents exploring  → each explores from its angle, writes a design doc
-◆ Orchestrating plan...         → reads all design docs, synthesizes execution tasks
+⠋ identifying themes...          → splits objective into N angles (< 30s)
+✓ 10 themes                      → review themes, press Run, walk away
+◆ Thinking: 10 agents exploring  → each explores from its angle, writes a design doc
+◆ Orchestrating plan...          → reads all design docs, synthesizes execution tasks
+◆ Wave 1 · 50 tasks              → fully autonomous from here
+◆ Steering...                    → adapts between waves, retries on rate limits
 ```
 
-Each thinking agent gets a different research focus (architecture, data, UI, APIs, testing, etc.), explores using Read/Glob/Grep, and writes a structured design document with findings, proposed work items, and key files. The orchestrator then reads all design docs and produces grounded, well-informed execution tasks that reference specific files and patterns the researchers found.
+The review prompt appears right after theme identification — the last thing requiring your presence. After you press Run, the thinking wave, orchestration, execution, and steering all run autonomously. Rate-limited? The planner waits and retries. Go to sleep.
 
-This means a budget of 200 doesn't generate 200 tasks from a single LLM call guessing at your codebase. It sends 5 architects to study the code first, then plans 50 tasks based on their findings, executes them, steers, and repeats.
+The number of thinking agents scales with budget: 5 for budget=50, 10 for budget=2000+. Each agent explores the codebase from a different angle and writes a structured design document. The orchestrator then reads all design docs and produces grounded execution tasks referencing real files and patterns.
 
 For small budgets (≤ `concurrency * 3`), the planner skips the thinking wave and generates tasks directly — fast and efficient for focused work.
 
@@ -99,7 +102,7 @@ The budget also shapes task granularity:
 
 **Large budget (50+)**: Thinking wave + orchestration. Architects explore, then execution tasks are synthesized from their findings. Each task is a substantial work session grounded in real codebase analysis.
 
-A budget of 200 is not 200 micro-edits. It's 5 architects + ~195 senior-engineer work sessions, planned in waves.
+A budget of 200 is not 200 micro-edits. It's ~5 architects + ~195 senior-engineer work sessions, planned in waves. A budget of 2000 gets 10 architects.
 
 ## Usage limits
 
