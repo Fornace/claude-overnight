@@ -1,0 +1,22 @@
+{
+  "name": "claude-swarm",
+  "version": "0.1.0",
+  "description": "Run parallel Claude Code agents with real-time terminal UI",
+  "type": "module",
+  "bin": {
+    "claude-swarm": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.92",
+    "chalk": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
