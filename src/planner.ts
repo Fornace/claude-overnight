@@ -199,7 +199,7 @@ async function runPlannerQuery(
     },
   });
 
-  // Progress ticker — show elapsed time so it doesn't look frozen
+  // Progress ticker — fast updates with compact format
   let lastLogText = "";
   let toolCount = 0;
   const ticker = setInterval(() => {
@@ -207,9 +207,10 @@ async function runPlannerQuery(
     const m = Math.floor(elapsed / 60);
     const s = elapsed % 60;
     const timeStr = m > 0 ? `${m}m ${s}s` : `${s}s`;
-    const extra = lastLogText ? ` — ${lastLogText}` : "";
-    onLog(`${timeStr} elapsed, ${toolCount} tool calls${extra}`);
-  }, 3000);
+    const toolStr = toolCount > 0 ? ` · ${toolCount} tools` : "";
+    const extra = lastLogText ? ` · ${lastLogText}` : "";
+    onLog(`${timeStr}${toolStr}${extra}`);
+  }, 500);
 
   let lastActivity = Date.now();
   let timer: NodeJS.Timeout;

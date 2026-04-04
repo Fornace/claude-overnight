@@ -276,6 +276,19 @@ function readDesignDocs(dir: string): string {
   } catch { return ""; }
 }
 
+const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+function makeProgressLog(): (text: string) => void {
+  let frame = 0;
+  return (text: string) => {
+    const spin = chalk.cyan(BRAILLE[frame++ % BRAILLE.length]);
+    const maxW = (process.stdout.columns ?? 80) - 6;
+    const clean = text.replace(/\n/g, " ");
+    const line = clean.length > maxW ? clean.slice(0, maxW - 1) + "\u2026" : clean;
+    process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim(line)}`);
+  };
+}
+
 // ── Main ──
 
 async function main() {
@@ -394,8 +407,15 @@ async function main() {
     budget = parseInt(budgetAns) || 10;
     if (budget < 1) { console.error(chalk.red(`  Budget must be a positive number`)); process.exit(1); }
 
-    // ③ Worker model
+    // ③ Worker model — show spinner if models aren't ready yet
+    let modelFrame = 0;
+    const modelSpinner = setInterval(() => {
+      const spin = chalk.cyan(BRAILLE[modelFrame++ % BRAILLE.length]);
+      process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim("loading models...")}`);
+    }, 120);
     const models = await modelsPromise;
+    clearInterval(modelSpinner);
+    process.stdout.write(`\x1B[2K\r`);
     plannerModel = models[0]?.value || "claude-sonnet-4-6";
 
     if (models.length > 0) {
@@ -490,9 +510,14 @@ async function main() {
     try {
       if (useThinking) {
         // Phase 1: Quick theme identification
-        console.log(chalk.cyan(`\n  ◆ Identifying themes...\n`));
+        let themeFrame = 0;
+        const themeSpinner = setInterval(() => {
+          const spin = chalk.cyan(BRAILLE[themeFrame++ % BRAILLE.length]);
+          process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim("identifying themes...")}`);
+        }, 120);
         const themes = await identifyThemes(objective!, concurrency, plannerModel, permissionMode);
-        process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n`);
+        clearInterval(themeSpinner);
+        process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${themes.length} themes`)}\n`);
 
         // Phase 2: Thinking wave — agents explore codebase
         mkdirSync(designDir, { recursive: true });
@@ -519,19 +544,15 @@ async function main() {
           const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
           const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
           console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
-          tasks = await orchestrate(objective!, designContext, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, (text) => {
-            process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-          }, flexNote);
+          tasks = await orchestrate(objective!, designContext, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote);
           const remaining = (budget ?? 10) - thinkingUsed - tasks.length;
-          process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}${chalk.dim(` (${remaining} remaining)`)}\n\n`);
+          process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}${chalk.dim(` · ${remaining} remaining`)}\n\n`);
         } else {
           // Fallback: no design docs produced, use direct planner
           console.log(chalk.yellow(`\n  No design docs produced — falling back to direct planning\n`));
           const waveBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
-          tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, (text) => {
-            process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-          });
-          process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}\n\n`);
+          tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog());
+          process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
         }
       } else {
         // Small budget: direct planning (no thinking wave)
@@ -541,11 +562,9 @@ async function main() {
           : undefined;
 
         console.log(chalk.cyan(`\n  ◆ Planning${flex ? " wave 1" : ""}...\n`));
-        tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, (text) => {
-          process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-        }, flexNote);
+        tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), flexNote);
         const flexHint = flex ? chalk.dim(` (wave 1, ${(budget ?? 10) - tasks.length} remaining)`) : "";
-        process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}${flexHint}\n\n`);
+        process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}${flexHint}\n\n`);
       }
     } catch (err: any) {
       planRestore();
@@ -581,10 +600,8 @@ async function main() {
           console.log(chalk.cyan("\n  ◆ Re-planning...\n"));
           process.stdout.write("\x1B[?25l");
           try {
-            tasks = await refinePlan(objective!, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, (text) => {
-              process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-            });
-            process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}\n\n`);
+            tasks = await refinePlan(objective!, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, makeProgressLog());
+            process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
           } catch (err: any) {
             console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`));
           }
@@ -722,9 +739,7 @@ async function main() {
     try {
       const steer = await steerWave(
         objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
-        permissionMode, concurrency, (text) => {
-          process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-        }, designContext,
+        permissionMode, concurrency, makeProgressLog(), designContext,
       );
       process.stdout.write(`\x1B[2K\r`);
       process.stdout.write("\x1B[?25h");
