@@ -236,8 +236,8 @@ async function runPlannerQuery(
         if (ev?.type === "content_block_delta") {
           const delta = (ev as any).delta;
           if (delta?.type === "text_delta" && delta.text) {
-            const snippet = delta.text.trim();
-            if (snippet.length > 3) {
+            const snippet = delta.text.trim().replace(/[{}"\\,[\]]+/g, " ").replace(/\s+/g, " ").trim();
+            if (snippet.length > 5) {
               lastLogText = snippet.slice(0, 60);
             }
           }

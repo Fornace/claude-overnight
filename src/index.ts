@@ -409,6 +409,11 @@ async function main() {
 
     // Concurrency defaults based on budget
     concurrency = Math.min(5, budget);
+
+    // Show config summary immediately
+    const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
+    const flexStr = budget > 2 ? "  flex=on" : "";
+    console.log(chalk.dim(`\n  ${workerModel}  budget=${budget}  concurrency=${concurrency}${flexStr}${capStr}`));
   } else {
     // Non-interactive: resolve config from file/flags/defaults
     let models: ModelInfo[] = [];
@@ -451,8 +456,8 @@ async function main() {
       process.exit(1);
     }
 
-    // In flex mode, plan ~50% of budget for wave 1, leaving room for steering
-    const waveBudget = flex ? Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5)) : budget;
+    // In flex mode, plan ~50% of budget for wave 1, but cap per-wave to keep planning fast
+    const waveBudget = flex ? Math.min(50, Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5))) : budget;
     const flexNote = flex
       ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.`
       : undefined;
