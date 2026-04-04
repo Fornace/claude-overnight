@@ -193,10 +193,17 @@ function validateCwd(cwd: string): void {
   }
 }
 
-function validateGitRepo(cwd: string): void {
+function isGitRepo(cwd: string): boolean {
   try {
     execSync("git rev-parse --git-dir", { cwd, encoding: "utf-8", stdio: "pipe" });
+    return true;
   } catch {
+    return false;
+  }
+}
+
+function validateGitRepo(cwd: string): void {
+  if (!isGitRepo(cwd)) {
     throw new Error(
       `Worktrees require a git repository, but ${cwd} is not inside one. ` +
       `Run "git init" first or disable worktrees.`,
@@ -234,24 +241,28 @@ async function main() {
     }
   }
 
-  // ── Interactive config ──
+  // ── Config: defaults for non-interactive, prompts for interactive ──
   console.log(chalk.bold("\n  🐝 claude-swarm\n"));
+
+  const nonInteractive = fileCfg !== undefined || tasks.length > 0;
+  const cwd = fileCfg?.cwd ?? process.cwd();
+  const allowedTools = fileCfg?.allowedTools;
+  validateCwd(cwd);
 
   process.stdout.write(chalk.dim("  Fetching available models..."));
   const models = await fetchModels();
   process.stdout.write(`\x1B[2K\r`);
 
-  const model = fileCfg?.model ?? (await pickModel(models));
-  const permissionMode = fileCfg?.permissionMode ?? (await pickPermissionMode());
-  const concurrency = fileCfg?.concurrency ?? (await pickConcurrency());
+  const model = fileCfg?.model ?? (nonInteractive ? (models[0]?.value || "claude-sonnet-4-6") : await pickModel(models));
+  const permissionMode = fileCfg?.permissionMode ?? (nonInteractive ? "auto" as PermMode : await pickPermissionMode());
+  const concurrency = fileCfg?.concurrency ?? (nonInteractive ? 5 : await pickConcurrency());
   validateConcurrency(concurrency);
-  const useWorktrees = fileCfg?.useWorktrees ?? (await pickWorktrees());
-  const cwd = fileCfg?.cwd ?? process.cwd();
-  const allowedTools = fileCfg?.allowedTools;
-
-  // Validate cwd exists and git repo if worktrees requested
-  validateCwd(cwd);
+  const useWorktrees = fileCfg?.useWorktrees ?? (nonInteractive ? isGitRepo(cwd) : await pickWorktrees());
   if (useWorktrees) validateGitRepo(cwd);
+
+  if (nonInteractive) {
+    console.log(chalk.dim(`  ${model}  concurrency=${concurrency}  worktrees=${useWorktrees}  perms=${permissionMode}`));
+  }
 
   // If no tasks yet, ask for an objective and plan
   let planMode = tasks.length === 0;
@@ -333,13 +344,14 @@ async function main() {
         : chalk.green(`${swarm.completed} done`);
     const cost =
       swarm.totalCostUsd > 0
-        ? chalk.dim(` ($${swarm.totalCostUsd.toFixed(3)})`)
+        ? ` ($${swarm.totalCostUsd.toFixed(3)})`
         : "";
-    console.log(`\n  ${chalk.bold("Complete:")} ${summary}${cost}`);
+    console.log(`\n  ${chalk.bold("Complete:")} ${summary}${chalk.dim(cost)}`);
 
     const elapsed = Math.round((Date.now() - swarm.startedAt) / 1000);
     const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
-    console.log(chalk.dim(`  Elapsed: ${elapsedStr}  Tokens: ${fmtTokens(swarm.totalInputTokens)} in / ${fmtTokens(swarm.totalOutputTokens)} out`));
+    const tools = swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+    console.log(chalk.dim(`  ${elapsedStr}  ${fmtTokens(swarm.totalInputTokens)} in / ${fmtTokens(swarm.totalOutputTokens)} out  ${tools} tool calls`));
 
     if (swarm.mergeResults.length > 0) {
       const merged = swarm.mergeResults.filter((r) => r.ok).length;

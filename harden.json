@@ -1,0 +1,43 @@
+{
+  "tasks": [
+    "In src/swarm.ts, improve the isTransientError() function (near the bottom of the file). Add detection for EPIPE, ECONNREFUSED, EHOSTUNREACH, 'network error', 'fetch failed', and 'aborted'. Also handle the case where err.cause is itself a transient error (recursive unwrap). Keep it simple — just add more string checks and the cause unwrap.",
+
+    "In src/swarm.ts, improve the autoCommit() method. Right now it silently catches all errors. Instead: (1) if git add fails, log why; (2) if git commit fails with a real error (not 'nothing to commit'), log the error. Also handle the edge case where the worktree directory has been deleted (e.g., by cleanup racing with commit).",
+
+    "In src/swarm.ts, improve the mergeAll() method. After all merges complete, log a summary line like 'Merged 3/5 branches (2 conflicts)'. Also, if ALL merges conflict, log a hint: 'All merges had conflicts — tasks may have overlapping file changes. Consider running with fewer concurrent tasks.'",
+
+    "In src/swarm.ts, improve the constructor to validate config: tasks array must be non-empty, concurrency must be >= 1, cwd must be a non-empty string. Throw clear errors. Also validate that no two tasks have the exact same prompt (warn via log, don't throw).",
+
+    "In src/planner.ts, make the JSON extraction more robust. The current regex for extracting JSON can fail on nested objects. Instead: (1) try JSON.parse on the full result first; (2) if that fails, try to find the outermost { } pair and parse that; (3) if that fails, try removing markdown fences and retry. Also add a retry: if the planner returns no valid JSON, call it once more with a shorter prompt asking it to output ONLY the JSON.",
+
+    "In src/planner.ts, after extracting tasks, validate them: (1) filter out tasks with prompts shorter than 10 characters (likely garbage); (2) warn (via onLog) if any two tasks mention the same file path (overlap risk); (3) if more than 20 tasks generated, warn and truncate to 20.",
+
+    "In src/ui.ts, improve renderFrame: (1) when swarm.aborted is true, show 'STOPPING' in yellow next to the phase label; (2) show elapsed time per running agent in the agent table (e.g., '2m 15s' next to the status); (3) protect against crash when process.stdout.columns is undefined (happens in piped/non-TTY mode) — default to 80.",
+
+    "In src/ui.ts, improve startRenderLoop: (1) detect if stdout is not a TTY (process.stdout.isTTY is falsy) — if so, skip the render loop entirely and instead log key events to stdout in plain text (no ANSI codes); (2) handle the case where writing to stdout throws (broken pipe) — just clear the interval and return silently.",
+
+    "In src/index.ts, add --version flag support. Read the version from package.json (use a relative path with import.meta.url or readFileSync). Print 'claude-swarm v0.1.0' and exit. Also add --dry-run flag: load tasks (from file or planner), print them numbered, then exit without running the swarm.",
+
+    "In src/index.ts, improve exit codes: if all agents succeeded, exit 0; if some failed, exit 1; if all failed or swarm was aborted, exit 2. Currently it always exits 0 on normal completion. Add this logic after the finally block in main().",
+
+    "In src/index.ts, fix SIGTERM handling. Currently the pre-swarm SIGTERM handler just restores cursor and exits. After the swarm is created, SIGTERM should trigger the same graceful drain as SIGINT (call swarm.abort() + swarm.cleanup()). Also add handler for 'uncaughtException' and 'unhandledRejection' that calls cleanup before crashing.",
+
+    "In src/types.ts, add JSDoc comments to every interface and type. Explain what each field means, especially non-obvious ones like: AgentState.currentTool (the tool currently being executed by the SDK), AgentState.lastText (last text snippet from the agent's streaming response), SwarmPhase values, PermMode values. Keep comments concise — one line per field.",
+
+    "Create a new file src/__tests__/validation.test.ts. Write unit tests for the loadTaskFile function's validation logic. Test: valid JSON array, valid JSON object, missing tasks key, empty tasks array, task with empty string, task object missing prompt, unknown keys, invalid concurrency. You can import and test the function — if it's not exported, describe what the test would look like with inline helpers that replicate the validation. Use Node's built-in test runner (import { describe, it } from 'node:test' and import assert from 'node:assert').",
+
+    "Create a new file src/__tests__/format.test.ts. Write unit tests for the UI formatting functions. Extract and test: fmtTokens (0, 999, 1000, 1500000), fmtDur (0, 30000, 90000, 7200000), truncate (short string, exact length, over length). Since these are not exported, copy them into the test file as standalone functions to test. Use Node's built-in test runner.",
+
+    "Create a new file src/__tests__/errors.test.ts. Write unit tests for isTransientError. Test: 429 status, 500 status, 404 status (not transient), AgentTimeoutError (not transient), error with 'rate limit' message, error with 'econnreset', regular Error with no status, null/undefined input. Since isTransientError is not exported, copy it into the test file. Use Node's built-in test runner.",
+
+    "Create a new file src/__tests__/swarm-config.test.ts. Write unit tests for Swarm construction and basic methods. Test: constructor sets correct initial state (queue length, total, phase), abort() sets aborted and clears queue, active/pending getters return correct counts. Mock the query function since we can't actually call the API. Use Node's built-in test runner.",
+
+    "In src/swarm.ts, improve the throttle() method. Currently the soft throttle formula can produce negative delays when utilization is between 0.5 and 0.75 (the condition checks > 0.75 but the formula subtracts 0.5). Fix: only throttle when utilization > 0.75, and use formula: delay = (utilization - 0.75) * 60000 (0-15s proportional to 75-100%). Also log when soft throttle kicks in so the user can see it in the event log.",
+
+    "In src/swarm.ts, improve the worker() method. After the while loop exits (either queue empty or aborted), log a system message: 'Worker finished (N tasks completed)' where N is the count of tasks this specific worker processed. This helps debug whether workers are balanced or if one worker is doing all the work.",
+
+    "In src/index.ts, improve the interactive prompts. When running in a non-interactive environment (process.stdin.isTTY is falsy), skip all interactive prompts and use sensible defaults: model=claude-sonnet-4-6, concurrency=5, permissionMode=auto, worktrees=false. Log: 'Non-interactive mode — using defaults'. This makes claude-swarm usable in CI/scripts.",
+
+    "Update the help text in src/index.ts to document the new flags (--version, --dry-run) and add examples for common workflows: running with a task file, running inline tasks, piping tasks. Also add a one-line description of what each permission mode does. Keep it concise — fit in one terminal screen."
+  ]
+}
