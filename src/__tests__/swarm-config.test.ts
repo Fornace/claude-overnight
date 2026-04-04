@@ -1,16 +1,7 @@
-import { describe, it, mock } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Task } from "../types.js";
-
-// Mock the SDK — query is never invoked in these unit tests,
-// but we must satisfy the import so no real API call can occur.
-mock.module("@anthropic-ai/claude-agent-sdk", {
-  namedExports: {
-    query: mock.fn(),
-  },
-});
-
-const { Swarm } = await import("../swarm.js");
+import { Swarm } from "../swarm.js";
 
 // ── Helpers ──
 
@@ -66,10 +57,11 @@ describe("Swarm constructor", () => {
     assert.equal(makeSwarm().aborted, false);
   });
 
-  it("handles an empty task list", () => {
-    const swarm = makeSwarm({ tasks: [] });
-    assert.equal(swarm.pending, 0);
-    assert.equal(swarm.total, 0);
+  it("throws on an empty task list", () => {
+    assert.throws(
+      () => makeSwarm({ tasks: [] }),
+      { message: /tasks array must not be empty/ },
+    );
   });
 
   it("copies the tasks array (does not alias the original)", () => {

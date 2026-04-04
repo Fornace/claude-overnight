@@ -1,6 +1,19 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Task, PermMode } from "./types.js";
 
+// ── Steering types ──
+
+export interface WaveSummary {
+  wave: number;
+  tasks: { prompt: string; status: string; filesChanged?: number; error?: string }[];
+}
+
+export interface SteerResult {
+  done: boolean;
+  tasks: Task[];
+  reasoning: string;
+}
+
 const INACTIVITY_MS = 5 * 60 * 1000;
 
 interface PlannerOpts {
@@ -36,13 +49,14 @@ function modelCapabilityBlock(model: string): string {
 
 // ── Budget + model aware prompt strategy ──
 
-function plannerPrompt(objective: string, workerModel: string, budget?: number, concurrency?: number): string {
+function plannerPrompt(objective: string, workerModel: string, budget?: number, concurrency?: number, flexNote?: string): string {
   const b = budget ?? 10;
   const tier = detectModelTier(workerModel);
   const capability = modelCapabilityBlock(workerModel);
   const concLine = concurrency
     ? `\n- ${concurrency} agents run in parallel — tasks that run concurrently must touch DIFFERENT files to avoid merge conflicts`
     : "";
+  const flexLine = flexNote ? `\n\n${flexNote}` : "";
 
   // Haiku always gets specific guided tasks regardless of budget
   if (tier === "haiku") {
@@ -57,7 +71,7 @@ Requirements:
 - Each task MUST be independent — no task depends on another
 - Each task should target specific files/areas to avoid merge conflicts
 - Be specific: mention exact file paths, function names, what to change
-- Keep tasks focused: one concrete change per task — Haiku agents work best with clear, scoped instructions${concLine}
+- Keep tasks focused: one concrete change per task — Haiku agents work best with clear, scoped instructions${concLine}${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
 {
@@ -85,7 +99,7 @@ Requirements:
 - Each task should target specific files/areas to avoid merge conflicts
 - Be specific: mention exact file paths, function names, what to change
 - Keep tasks focused: one logical change per task
-- Target exactly ~${b} tasks${concLine}
+- Target exactly ~${b} tasks${concLine}${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
 {
@@ -113,7 +127,7 @@ Requirements:
 - Tasks that run concurrently must touch DIFFERENT files/areas to avoid merge conflicts
 - Give agents scope and autonomy: "Design and implement X" not "In file Y, add function Z"
 - Include research/exploration tasks, design tasks, implementation tasks, testing tasks, and polish tasks
-- Think in terms of workstreams: architecture, features, tests, docs, UX, performance, etc.${concLine}
+- Think in terms of workstreams: architecture, features, tests, docs, UX, performance, etc.${concLine}${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
 {
@@ -152,7 +166,7 @@ Requirements:
 - Cover ALL aspects: architecture, implementation, testing, UX, performance, security, polish
 - It's OK to have multiple tasks for the same area if they target different concerns (e.g. one implements, another writes tests, another does a UX polish pass)
 - Organize by workstreams: core features, supporting infrastructure, quality, polish
-- Think about what a team of ${b} senior engineers could accomplish in parallel${concLine}
+- Think about what a team of ${b} senior engineers could accomplish in parallel${concLine}${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
 {
@@ -259,7 +273,7 @@ function postProcess(raw: Task[], budget: number | undefined, onLog: (text: stri
       if (dominated.has(j)) continue;
       const setB = new Set(tasks[j].prompt.toLowerCase().split(/\s+/));
       const shared = [...setA].filter((w) => setB.has(w)).length;
-      const overlap = shared / Math.min(setA.size, setB.size);
+      const overlap = shared / Math.max(setA.size, setB.size);
       if (overlap > 0.8) {
         const drop = setA.size >= setB.size ? j : i;
         dominated.add(drop);
@@ -307,11 +321,12 @@ export async function planTasks(
   budget: number | undefined,
   concurrency: number,
   onLog: (text: string) => void,
+  flexNote?: string,
 ): Promise<Task[]> {
   onLog("Analyzing codebase...");
 
   const resultText = await runPlannerQuery(
-    plannerPrompt(objective, workerModel, budget, concurrency),
+    plannerPrompt(objective, workerModel, budget, concurrency, flexNote),
     { cwd, model: plannerModel, permissionMode },
     onLog,
   );
@@ -417,28 +432,101 @@ function extractOutermostBraces(text: string): string | null {
   return null;
 }
 
-/** Try multiple strategies to parse task JSON, with one retry callback. */
+/** Try multiple strategies to parse JSON from LLM output. */
+function attemptJsonParse(text: string): any | null {
+  try { const obj = JSON.parse(text); if (typeof obj === "object" && obj !== null) return obj; } catch {}
+  const braces = extractOutermostBraces(text);
+  if (braces) { try { const obj = JSON.parse(braces); if (typeof obj === "object" && obj !== null) return obj; } catch {} }
+  const stripped = text.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
+  if (stripped !== text) {
+    try { const obj = JSON.parse(stripped); if (typeof obj === "object" && obj !== null) return obj; } catch {}
+    const b2 = extractOutermostBraces(stripped);
+    if (b2) { try { return JSON.parse(b2); } catch {} }
+  }
+  return null;
+}
+
+/** Extract task JSON with validation and one retry. */
 async function extractTaskJson(
   raw: string,
   retry: () => Promise<string>,
 ): Promise<{ tasks: any[] }> {
-  const attempt = (text: string): { tasks: any[] } | null => {
-    try { const obj = JSON.parse(text); if (obj?.tasks) return obj; } catch {}
-    const braces = extractOutermostBraces(text);
-    if (braces) { try { const obj = JSON.parse(braces); if (obj?.tasks) return obj; } catch {} }
-    const stripped = text.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
-    if (stripped !== text) {
-      try { const obj = JSON.parse(stripped); if (obj?.tasks) return obj; } catch {}
-      const b2 = extractOutermostBraces(stripped);
-      if (b2) { try { const obj = JSON.parse(b2); if (obj?.tasks) return obj; } catch {} }
-    }
-    return null;
-  };
-
-  const first = attempt(raw);
-  if (first) return first;
+  const first = attemptJsonParse(raw);
+  if (first?.tasks) return first;
   const retryText = await retry();
-  const second = attempt(retryText);
-  if (second) return second;
+  const second = attemptJsonParse(retryText);
+  if (second?.tasks) return second;
   throw new Error("Planner did not return valid task JSON after retry");
+}
+
+// ── Wave steering ──
+
+export async function steerWave(
+  objective: string,
+  history: WaveSummary[],
+  remainingBudget: number,
+  cwd: string,
+  plannerModel: string,
+  workerModel: string,
+  permissionMode: PermMode,
+  concurrency: number,
+  onLog: (text: string) => void,
+): Promise<SteerResult> {
+  const capability = modelCapabilityBlock(workerModel);
+  const historyText = history.map(w => {
+    const lines = w.tasks.map(t => {
+      const files = t.filesChanged ? ` (${t.filesChanged} files)` : "";
+      const err = t.error ? ` — ${t.error}` : "";
+      return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
+    }).join("\n");
+    return `Wave ${w.wave + 1}:\n${lines}`;
+  }).join("\n\n");
+
+  const prompt = `You are steering an autonomous multi-wave agent system. Read the codebase to understand current state, then decide what's next.
+
+Objective: ${objective}
+
+Work completed so far:
+${historyText}
+
+Remaining budget: ${remainingBudget} agent sessions. ${concurrency} agents run in parallel — tasks must touch DIFFERENT files.
+${capability}
+
+Read the codebase. Then decide:
+- Is the objective fully met? → {"done": true, "reasoning": "..."}
+- More work needed? Plan the next wave → {"done": false, "reasoning": "what needs doing and why", "tasks": [{"prompt": "..."}]}
+
+Think like a tech lead between sprints: what shipped, what's missing, what needs polish, what should be scrapped and redone, what's over-engineered. Less is more — don't add work for the sake of filling budget.
+
+Respond with ONLY a JSON object (no markdown fences).`;
+
+  onLog("Reading codebase...");
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
+
+  const parsed = await (async () => {
+    const first = attemptJsonParse(resultText);
+    if (first) return first;
+    onLog("Retrying...");
+    let retryText = "";
+    for await (const msg of query({
+      prompt: `Output ONLY a JSON object: {"done":true/false,"reasoning":"...","tasks":[{"prompt":"..."}]}`,
+      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
+    })) {
+      if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
+    }
+    return attemptJsonParse(retryText) ?? { done: true, reasoning: "Could not parse steering response" };
+  })();
+
+  if (parsed.done) {
+    return { done: true, tasks: [], reasoning: parsed.reasoning || "Objective complete" };
+  }
+
+  let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
+    id: String(i),
+    prompt: typeof t === "string" ? t : t.prompt,
+  }));
+
+  tasks = postProcess(tasks, remainingBudget, onLog);
+
+  return { done: tasks.length === 0, tasks, reasoning: parsed.reasoning || "" };
 }

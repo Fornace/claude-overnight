@@ -93,9 +93,24 @@ Use `--usage-cap=90` on the command line, or `"usageCap": 90` in task files.
 
 A plain array also works: `["task one", "task two"]`.
 
+For multi-wave runs from a task file, add `objective` and `flexiblePlan`:
+
+```json
+{
+  "objective": "Modernize the auth system and add comprehensive tests",
+  "flexiblePlan": true,
+  "tasks": ["Refactor auth middleware", "Add JWT validation"],
+  "usageCap": 90
+}
+```
+
+The initial tasks run first. After each wave, a steering agent reads the codebase and plans the next wave until the objective is met or the budget runs out.
+
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `tasks` | `(string \| {prompt, cwd?, model?})[]` | required | Tasks to run |
+| `objective` | `string` | — | High-level goal for multi-wave steering (required when `flexiblePlan` is true) |
+| `flexiblePlan` | `boolean` | `false` | Enable adaptive multi-wave planning from task files |
 | `model` | `string` | prompted | Worker model (per-task overridable) |
 | `concurrency` | `number` | `5` | Max parallel agents |
 | `worktrees` | `boolean` | auto (git repo) | Isolate each agent in a git worktree |
@@ -103,7 +118,7 @@ A plain array also works: `["task one", "task two"]`.
 | `cwd` | `string` | `process.cwd()` | Working directory |
 | `allowedTools` | `string[]` | all | Restrict agent tools |
 | `mergeStrategy` | `"yolo" \| "branch"` | `"yolo"` | Merge into HEAD or a new branch |
-| `usageCap` | `number` | unlimited | Stop at N% utilization (e.g. 90) |
+| `usageCap` | `number (0-100)` | unlimited | Stop at N% utilization (e.g. 90) |
 
 ## CLI flags
 
@@ -114,6 +129,7 @@ A plain array also works: `["task one", "task two"]`.
 | `--model=NAME` | prompted | Worker model (planner always uses best available) |
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
 | `--timeout=SECONDS` | `300` | Inactivity timeout (kills only silent agents) |
+| `--no-flex` | — | Disable adaptive multi-wave planning (run all tasks in one shot) |
 | `--dry-run` | — | Show planned tasks without running |
 | `-h, --help` | — | Help |
 | `-v, --version` | — | Version |

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 // Copied from src/swarm.ts (not exported)
 class AgentTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`Agent timed out after ${Math.round(timeoutMs / 1000)}s`);
+  constructor(silentMs: number) {
+    super(`Agent silent for ${Math.round(silentMs / 1000)}s — assumed hung`);
     this.name = "AgentTimeoutError";
   }
 }
@@ -14,15 +14,26 @@ function isTransientError(err: unknown): boolean {
   const msg = String((err as any)?.message || err).toLowerCase();
   const status: number | undefined =
     (err as any)?.status ?? (err as any)?.statusCode;
-  return (
+  if (
     status === 429 ||
     (status != null && status >= 500 && status < 600) ||
     msg.includes("rate limit") ||
     msg.includes("overloaded") ||
     msg.includes("econnreset") ||
     msg.includes("etimedout") ||
-    msg.includes("socket hang up")
-  );
+    msg.includes("socket hang up") ||
+    msg.includes("epipe") ||
+    msg.includes("econnrefused") ||
+    msg.includes("ehostunreach") ||
+    msg.includes("network error") ||
+    msg.includes("fetch failed") ||
+    msg.includes("aborted")
+  ) {
+    return true;
+  }
+  const cause = (err as any)?.cause;
+  if (cause && cause !== err) return isTransientError(cause);
+  return false;
 }
 
 describe("isTransientError", () => {
@@ -67,5 +78,33 @@ describe("isTransientError", () => {
 
   it("returns false for undefined input", () => {
     assert.equal(isTransientError(undefined), false);
+  });
+
+  it("returns true for 'fetch failed' message", () => {
+    assert.equal(isTransientError(new Error("fetch failed")), true);
+  });
+
+  it("returns true for 'network error' message", () => {
+    assert.equal(isTransientError(new Error("network error")), true);
+  });
+
+  it("returns true for 'econnrefused' message", () => {
+    assert.equal(isTransientError(new Error("connect ECONNREFUSED")), true);
+  });
+
+  it("returns true for 'aborted' message", () => {
+    assert.equal(isTransientError(new Error("The operation was aborted")), true);
+  });
+
+  it("follows .cause chain for transient errors", () => {
+    const inner = Object.assign(new Error("overloaded"), {});
+    const outer = Object.assign(new Error("wrapper"), { cause: inner });
+    assert.equal(isTransientError(outer), true);
+  });
+
+  it("does not infinite-loop on self-referencing cause", () => {
+    const err: any = new Error("loop");
+    err.cause = err;
+    assert.equal(isTransientError(err), false);
   });
 });

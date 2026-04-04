@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -22,7 +22,7 @@ interface FileArgs {
 }
 
 const KNOWN_TASK_FILE_KEYS = new Set([
-  "tasks", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees",
+  "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 
 function validateConcurrency(value: unknown): asserts value is number {
@@ -35,7 +35,7 @@ function loadTaskFile(file: string): FileArgs {
   const path = resolve(file);
   let raw: string;
   try {
-    raw = require("node:fs").readFileSync(path, "utf-8");
+    raw = readFileSync(path, "utf-8");
   } catch {
     throw new Error(`Cannot read task file: ${path}`);
   }
@@ -54,7 +54,7 @@ function loadTaskFile(file: string): FileArgs {
     if (unknown.length > 0) {
       throw new Error(
         `Unknown key${unknown.length > 1 ? "s" : ""} in task file: ${unknown.join(", ")}. ` +
-        `Allowed keys: ${[...KNOWN_TASK_FILE_KEYS].join(", ")}`,
+        `Allowed: ${[...KNOWN_TASK_FILE_KEYS].join(", ")}`,
       );
     }
   }
@@ -359,7 +359,7 @@ describe("loadTaskFile validation", () => {
         const file = writeTempJson("unk3.json", { tasks: ["go"], nope: true });
         assert.throws(
           () => loadTaskFile(file),
-          { message: /Allowed keys:/ },
+          { message: /Allowed:/ },
         );
       } finally {
         teardown();

@@ -65,6 +65,7 @@ export class Swarm {
   private cleanedUp = false;
   logFile?: string;
   readonly model: string | undefined;
+  readonly usageCap: number | undefined;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) {
@@ -88,6 +89,7 @@ export class Swarm {
 
     this.config = config;
     this.model = config.model;
+    this.usageCap = config.usageCap;
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
   }
@@ -129,10 +131,14 @@ export class Swarm {
     this.activeQueries.clear();
   }
 
+  /** Monotonic counter so non-TTY consumers can detect log trimming. */
+  logSequence = 0;
+
   log(agentId: number, text: string) {
     const entry = { time: Date.now(), agentId, text };
     this.logs.push(entry);
     this.allLogs.push(entry);
+    this.logSequence++;
     if (this.logs.length > 300) this.logs.splice(0, this.logs.length - 150);
   }
 
@@ -166,12 +172,16 @@ export class Swarm {
     }
     // Hard block: rate limit rejected — wait until reset
     if (this.rateLimitResetsAt) {
-      const waitMs = this.rateLimitResetsAt - Date.now();
+      const resetTarget = this.rateLimitResetsAt;
+      const waitMs = resetTarget - Date.now();
       if (waitMs > 0) {
         this.log(-1, `Rate limited, pausing ${Math.ceil(waitMs / 1000)}s`);
         await sleep(waitMs);
       }
-      this.rateLimitResetsAt = undefined;
+      // Only clear if no newer deadline arrived while we slept
+      if (this.rateLimitResetsAt === resetTarget) {
+        this.rateLimitResetsAt = undefined;
+      }
     }
     // Soft throttle: 0-15s proportional to 75-100% utilization
     else if (this.rateLimitUtilization > 0.75) {
@@ -286,7 +296,9 @@ export class Swarm {
         }
         break; // Success — exit retry loop
       } catch (err: any) {
-        const canRetry = attempt < maxRetries && isTransientError(err);
+        // If handleMsg already processed a result, don't double-count
+        if (agent.status !== "running") break;
+        const canRetry = attempt < maxRetries && !this.aborted && isTransientError(err);
         if (canRetry) {
           this.log(id, `Transient error: ${String(err.message || err).slice(0, 80)}`);
           continue;
@@ -361,6 +373,16 @@ export class Swarm {
       this.log(-1, "No changes to merge");
       return;
     }
+
+    // Remember current branch so we can return to it reliably
+    let originalRef: string | undefined;
+    try {
+      const branch = exec("git rev-parse --abbrev-ref HEAD", this.config.cwd).trim();
+      // Detached HEAD returns "HEAD" — fall back to the commit hash so we can restore it
+      originalRef = branch === "HEAD"
+        ? exec("git rev-parse HEAD", this.config.cwd).trim()
+        : branch;
+    } catch {}
 
     // Stash dirty working tree before merging
     let stashed = false;
@@ -438,10 +460,10 @@ export class Swarm {
       const totalFilesChanged = this.mergeResults.reduce((sum, r) => sum + (r.ok ? r.filesChanged : 0), 0);
       this.log(-1, `Merged ${merged.length}/${branches.length} branches, ${totalFilesChanged} files changed${failed.length > 0 ? ` (${failed.length} unresolved)` : ""}`);
 
-      if (strategy === "branch" && this.mergeBranch) {
-        // Switch back to the original branch
+      if (strategy === "branch" && this.mergeBranch && originalRef) {
+        // Switch back to the original branch (or detached commit)
         try {
-          exec("git checkout -", this.config.cwd);
+          exec(`git checkout "${originalRef}"`, this.config.cwd);
         } catch {}
       }
     } finally {
@@ -482,9 +504,14 @@ export class Swarm {
     try {
       const list = exec("git worktree list --porcelain", this.config.cwd);
       const stale: string[] = [];
+      const tmp = tmpdir();
       for (const line of list.split("\n")) {
-        if (line.startsWith("worktree ") && line.includes("claude-overnight-")) {
-          stale.push(line.slice("worktree ".length));
+        if (line.startsWith("worktree ")) {
+          const wpath = line.slice("worktree ".length);
+          // Only clean worktrees created by us in tmpdir — never touch repo dirs
+          if (wpath.startsWith(tmp) && wpath.includes("claude-overnight-")) {
+            stale.push(wpath);
+          }
         }
       }
       if (stale.length > 0) {
@@ -494,11 +521,18 @@ export class Swarm {
         }
         exec("git worktree prune", this.config.cwd);
       }
-      // Also clean orphaned swarm branches from previous runs
+      // Clean orphaned task branches from previous runs (preserve swarm/run-* user branches)
+      // Only delete branches not actively checked out in a worktree
+      const worktreeBranches = new Set<string>();
+      for (const line of list.split("\n")) {
+        if (line.startsWith("branch refs/heads/")) {
+          worktreeBranches.add(line.slice("branch refs/heads/".length));
+        }
+      }
       const branches = exec("git branch", this.config.cwd)
         .split("\n")
         .map((b) => b.trim().replace(/^\* /, ""))
-        .filter((b) => b.startsWith("swarm/"));
+        .filter((b) => b.startsWith("swarm/task-") && !worktreeBranches.has(b));
       for (const b of branches) {
         try { exec(`git branch -D "${b}"`, this.config.cwd); } catch {}
       }
@@ -536,7 +570,6 @@ export class Swarm {
           time: new Date(l.time).toISOString(), agent: l.agentId, text: l.text,
         })),
       }, null, 2));
-      process.stderr.write(`Log: ${this.logFile}\n`);
     } catch {}
   }
 
@@ -552,14 +585,12 @@ export class Swarm {
   private handleMsg(agent: AgentState, msg: SDKMessage): void {
     switch (msg.type) {
       case "assistant": {
+        // Tool calls are counted via stream_event (content_block_start) to avoid
+        // double-counting — the assistant message repeats the same tool_use blocks.
         const m = msg as SDKAssistantMessage;
         if (!m.message?.content) break;
         for (const block of m.message.content) {
-          if (block.type === "tool_use") {
-            agent.currentTool = block.name;
-            agent.toolCalls++;
-            this.log(agent.id, block.name);
-          } else if (block.type === "text" && block.text) {
+          if (block.type === "text" && block.text) {
             const line = block.text.trim().split("\n")[0]?.slice(0, 80);
             if (line) agent.lastText = line;
           }
@@ -583,8 +614,9 @@ export class Swarm {
             const t = delta.text.trim();
             if (t) agent.lastText = t.slice(0, 80);
           }
-        } else if (ev.type === "content_block_stop") {
-          agent.currentTool = undefined;
+        // Note: content_block_stop is NOT used to clear currentTool — the block
+        // finishes streaming but the tool hasn't executed yet. Clear it when the
+        // next content_block_start arrives (above) or on turn end (result handler).
         }
         break;
       }
@@ -592,6 +624,7 @@ export class Swarm {
       case "result": {
         const safeAdd = (v: unknown) => typeof v === 'number' && isFinite(v) && v >= 0 ? v : 0;
         const r = msg as SDKResultMessage;
+        agent.currentTool = undefined;
         agent.finishedAt = Date.now();
         const cost = safeAdd(r.total_cost_usd);
         agent.costUsd = cost;

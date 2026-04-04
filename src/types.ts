@@ -12,6 +12,8 @@ export interface Task {
 
 /** Schema for a JSON task file that defines a batch of work for the swarm. */
 export interface TaskFile {
+  /** High-level objective for multi-wave steering (required when flexiblePlan is true). */
+  objective?: string;
   /** Max number of agents running in parallel. */
   concurrency?: number;
   /** Default working directory for all tasks. */
@@ -26,6 +28,8 @@ export interface TaskFile {
   mergeStrategy?: MergeStrategy;
   /** Stop dispatching new tasks when rate-limit utilization reaches this percentage (0-100). */
   usageCap?: number;
+  /** Enable adaptive multi-wave planning: after each wave, a steering agent reads the codebase and plans the next wave. Default true in interactive mode. */
+  flexiblePlan?: boolean;
   /** Tasks to execute — either plain prompt strings or objects with per-task overrides. */
   tasks: (string | { prompt: string; cwd?: string; model?: string })[];
 }

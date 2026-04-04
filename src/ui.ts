@@ -61,7 +61,7 @@ export function renderFrame(swarm: Swarm): string {
   if (rlPct > 0 || swarm.rateLimitResetsAt || swarm.cappedOut) {
     const barW = Math.min(30, w - 40);
     const filled = Math.round(rlPct * barW);
-    const capFrac = (swarm as any).config?.usageCap;
+    const capFrac = swarm.usageCap;
     const capMark = capFrac != null && capFrac < 1 ? Math.round(capFrac * barW) : -1;
 
     let barStr = "";
@@ -334,7 +334,7 @@ export function renderSummary(swarm: Swarm): string {
 }
 
 function startPlainLog(swarm: Swarm): () => void {
-  let lastLogLen = 0;
+  let lastSeq = swarm.logSequence;
   let lastCompleted = -1;
 
   const write = (line: string) => {
@@ -342,13 +342,18 @@ function startPlainLog(swarm: Swarm): () => void {
   };
 
   const interval = setInterval(() => {
-    if (swarm.logs.length > lastLogLen) {
-      for (const entry of swarm.logs.slice(lastLogLen)) {
+    const currentSeq = swarm.logSequence;
+    if (currentSeq > lastSeq) {
+      // Read the most recent (currentSeq - lastSeq) entries from the tail of the log
+      const newCount = currentSeq - lastSeq;
+      const available = swarm.logs.length;
+      const toShow = Math.min(newCount, available);
+      for (const entry of swarm.logs.slice(available - toShow)) {
         const t = new Date(entry.time).toLocaleTimeString("en", { hour12: false });
         const tag = entry.agentId < 0 ? "[sys]" : `[${entry.agentId}]`;
         write(`${t} ${tag} ${entry.text}`);
       }
-      lastLogLen = swarm.logs.length;
+      lastSeq = currentSeq;
     }
     if (swarm.completed !== lastCompleted) {
       lastCompleted = swarm.completed;

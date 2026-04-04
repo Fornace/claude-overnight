@@ -8,7 +8,8 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan, detectModelTier } from "./planner.js";
+import { planTasks, refinePlan, detectModelTier, steerWave } from "./planner.js";
+import type { WaveSummary } from "./planner.js";
 import { startRenderLoop, renderSummary } from "./ui.js";
 import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
 
@@ -16,7 +17,7 @@ import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
 
 function parseCliFlags(argv: string[]) {
   const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap"]);
-  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version"]);
+  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex"]);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
 
@@ -47,18 +48,28 @@ function isAuthError(err: unknown): boolean {
 
 async function fetchModels(timeoutMs = 10_000): Promise<ModelInfo[]> {
   let q: ReturnType<typeof query> | undefined;
+  let timer: NodeJS.Timeout | undefined;
   try {
     q = query({ prompt: "", options: { persistSession: false } });
     const models = await Promise.race([
       q.supportedModels(),
-      sleep(timeoutMs).then(() => { throw new Error("model_fetch_timeout"); }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("model_fetch_timeout")), timeoutMs);
+      }),
     ]);
+    clearTimeout(timer);
     q.close();
     return models;
   } catch (err: any) {
+    clearTimeout(timer);
     q?.close();
     if (err.message === "model_fetch_timeout") {
       console.warn(chalk.yellow("\n  Model fetch timed out — continuing with defaults"));
+    } else if (isAuthError(err)) {
+      console.error(chalk.red("\n  Authentication failed — check your API key or run: claude auth\n"));
+      process.exit(1);
+    } else {
+      console.warn(chalk.yellow(`\n  Could not fetch models: ${String(err.message || err).slice(0, 80)} — continuing with defaults`));
     }
     return [];
   }
@@ -136,6 +147,7 @@ async function selectKey(label: string, options: { key: string; desc: string }[]
 
 interface FileArgs {
   tasks: Task[];
+  objective?: string;
   concurrency?: number;
   model?: string;
   permissionMode?: PermMode;
@@ -143,10 +155,12 @@ interface FileArgs {
   allowedTools?: string[];
   useWorktrees?: boolean;
   mergeStrategy?: MergeStrategy;
+  usageCap?: number;
+  flexiblePlan?: boolean;
 }
 
 const KNOWN_TASK_FILE_KEYS = new Set([
-  "tasks", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap",
+  "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 
 function loadTaskFile(file: string): FileArgs {
@@ -189,8 +203,20 @@ function loadTaskFile(file: string): FileArgs {
 
   if (parsed.concurrency !== undefined) validateConcurrency(parsed.concurrency);
 
+  const usageCap = (parsed as any).usageCap;
+  if (usageCap != null && (typeof usageCap !== "number" || usageCap < 0 || usageCap > 100)) {
+    throw new Error(`usageCap must be a number between 0 and 100 (got ${JSON.stringify(usageCap)})`);
+  }
+
+  const flexiblePlan = (parsed as any).flexiblePlan;
+  const objective = (parsed as any).objective;
+  if (flexiblePlan && typeof objective !== "string") {
+    throw new Error(`flexiblePlan requires an "objective" string in the task file`);
+  }
+
   return {
     tasks,
+    objective: typeof objective === "string" ? objective : undefined,
     concurrency: parsed.concurrency,
     model: parsed.model,
     cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
@@ -198,6 +224,8 @@ function loadTaskFile(file: string): FileArgs {
     allowedTools: parsed.allowedTools,
     useWorktrees: parsed.worktrees,
     mergeStrategy: (parsed as any).mergeStrategy,
+    usageCap,
+    flexiblePlan,
   };
 }
 
@@ -262,6 +290,7 @@ async function main() {
     --model=NAME           Worker model override ${chalk.dim("(planner always uses best available)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 300s, kills only silent agents)")}
+    --no-flex              Disable adaptive multi-wave planning ${chalk.dim("(run all tasks in one shot)")}
 
   ${chalk.dim("Non-interactive defaults (task file / inline / piped):")}
     model: first available    concurrency: 5    worktrees: auto    perms: auto
@@ -293,12 +322,20 @@ async function main() {
 
   for (const arg of args) {
     if (arg.endsWith(".json")) {
+      if (tasks.length > 0) {
+        console.error(chalk.red(`  Cannot mix inline tasks with a task file. Use one or the other.`));
+        process.exit(1);
+      }
       fileCfg = loadTaskFile(arg);
       tasks = fileCfg.tasks;
     } else if (!arg.startsWith("-") && existsSync(resolve(arg))) {
       console.error(chalk.red(`  "${arg}" looks like a file but doesn't end in .json. Rename it or quote the string.`));
       process.exit(1);
     } else {
+      if (fileCfg) {
+        console.error(chalk.red(`  Cannot mix inline tasks with a task file. Use one or the other.`));
+        process.exit(1);
+      }
       tasks.push({ id: String(tasks.length), prompt: arg });
     }
   }
@@ -319,7 +356,7 @@ async function main() {
   let plannerModel: string;
   let budget: number | undefined;
   let concurrency: number;
-  let objective: string | undefined;
+  let objective: string | undefined = fileCfg?.objective;
   let usageCap: number | undefined;
 
   if (!nonInteractive) {
@@ -336,6 +373,7 @@ async function main() {
     // 2. Budget — how many agent runs to spend
     const budgetAns = await ask(chalk.dim("\n  Agent budget [10]: "));
     budget = parseInt(budgetAns) || 10;
+    if (budget < 1) { console.error(chalk.red(`  Budget must be a positive number`)); process.exit(1); }
 
     // 3. Worker model — planner always uses best available
     process.stdout.write(chalk.dim("  Fetching models..."));
@@ -379,8 +417,15 @@ async function main() {
     plannerModel = models[0]?.value || workerModel;
     concurrency = cliFlags.concurrency ? parseInt(cliFlags.concurrency) : (fileCfg?.concurrency ?? 5);
     budget = cliFlags.budget ? parseInt(cliFlags.budget) : undefined;
+    if (budget != null && (isNaN(budget) || budget < 1)) { console.error(chalk.red(`  --budget must be a positive integer`)); process.exit(1); }
     const capFlag = cliFlags["usage-cap"];
-    usageCap = capFlag ? parseInt(capFlag) / 100 : (fileCfg as any)?.usageCap != null ? (fileCfg as any).usageCap / 100 : undefined;
+    if (capFlag != null) {
+      const capVal = parseFloat(capFlag);
+      if (isNaN(capVal) || capVal < 0 || capVal > 100) { console.error(chalk.red(`  --usage-cap must be between 0 and 100 (got ${capFlag})`)); process.exit(1); }
+      usageCap = capVal / 100;
+    } else {
+      usageCap = fileCfg?.usageCap != null ? fileCfg.usageCap / 100 : undefined;
+    }
   }
 
   validateConcurrency(concurrency);
@@ -394,6 +439,9 @@ async function main() {
     console.log(chalk.dim(`  ${workerModel}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}  perms=${permissionMode}${capStr}`));
   }
 
+  // ── Flex mode: adaptive multi-wave planning ──
+  const flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
+
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
   const needsPlan = tasks.length === 0;
 
@@ -403,24 +451,31 @@ async function main() {
       process.exit(1);
     }
 
-    process.stdout.write("\x1B[?25l");
-    const restore = () => process.stdout.write("\x1B[?25h");
+    // In flex mode, plan ~50% of budget for wave 1, leaving room for steering
+    const waveBudget = flex ? Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5)) : budget;
+    const flexNote = flex
+      ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.`
+      : undefined;
 
-    console.log(chalk.magenta("\n  Planning...\n"));
+    process.stdout.write("\x1B[?25l");
+    const planRestore = () => process.stdout.write("\x1B[?25h");
+
+    console.log(chalk.magenta(`\n  Planning${flex ? " wave 1" : ""}...\n`));
     try {
-      tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, (text) => {
+      tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, (text) => {
         process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
-      });
-      process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}\n\n`);
+      }, flexNote);
+      const flexHint = flex ? chalk.dim(` (wave 1, ${(budget ?? 10) - tasks.length} remaining)`) : "";
+      process.stdout.write(`\x1B[2K\r  ${chalk.green(`${tasks.length} tasks`)}${flexHint}\n\n`);
     } catch (err: any) {
-      restore();
+      planRestore();
       if (isAuthError(err)) console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`));
       else console.error(chalk.red(`\n  Planning failed: ${err.message}\n`));
       process.exit(1);
     }
 
     // ── Review loop ──
-    restore();
+    planRestore();
     let reviewing = true;
     while (reviewing) {
       showPlan(tasks);
@@ -453,7 +508,7 @@ async function main() {
           } catch (err: any) {
             console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`));
           }
-          restore();
+          planRestore();
           break;
         }
 
@@ -469,10 +524,10 @@ async function main() {
             })) {
               if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || "";
             }
-            restore();
+            planRestore();
             if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
           } catch {
-            restore();
+            planRestore();
           }
           break;
         }
@@ -492,50 +547,141 @@ async function main() {
     process.exit(0);
   }
 
-  // ── Run ──
+  // ── Run (wave loop) ──
   process.stdout.write("\x1B[?25l");
   const restore = () => process.stdout.write("\x1B[?25h\n");
-
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
+  const runStartedAt = Date.now();
 
-  const swarm = new Swarm({
-    tasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
-    useWorktrees, mergeStrategy, agentTimeoutMs, usageCap,
-  });
+  // Wave-loop state
+  let currentSwarm: Swarm | undefined;
+  let remaining = budget ?? tasks.length;
+  let currentTasks = tasks;
+  let waveNum = 0;
+  const waveHistory: WaveSummary[] = [];
+  let accCost = 0, accIn = 0, accOut = 0, accCompleted = 0, accFailed = 0, accTools = 0;
+  let lastCapped = false, lastAborted = false;
+
+  // For flex + branch strategy: create one target branch, waves merge via yolo into it
+  let runBranch: string | undefined;
+  let originalRef: string | undefined;
+  if (flex && mergeStrategy === "branch" && useWorktrees) {
+    try {
+      originalRef = execSync("git rev-parse --abbrev-ref HEAD", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
+      if (originalRef === "HEAD") originalRef = execSync("git rev-parse HEAD", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      runBranch = `swarm/run-${ts}`;
+      execSync(`git checkout -b "${runBranch}"`, { cwd, encoding: "utf-8", stdio: "pipe" });
+      console.log(chalk.dim(`  Branch: ${runBranch}\n`));
+    } catch {}
+  }
+  const waveMerge: MergeStrategy = (flex && runBranch) ? "yolo" : mergeStrategy;
 
   // Graceful drain
   let stopping = false;
   const gracefulStop = (signal: string) => {
-    if (stopping) { swarm.cleanup(); restore(); process.exit(0); }
+    if (stopping) { currentSwarm?.cleanup(); restore(); process.exit(0); }
     stopping = true;
-    process.stdout.write(`\n  ${chalk.yellow(`${signal}: stopping... ${swarm.active} active (send again to force)`)}\n`);
-    swarm.abort();
+    process.stdout.write(`\n  ${chalk.yellow(`${signal}: stopping... (send again to force)`)}\n`);
+    currentSwarm?.abort();
   };
-
   process.on("SIGINT", () => gracefulStop("SIGINT"));
   process.on("SIGTERM", () => gracefulStop("SIGTERM"));
-  process.on("uncaughtException", (err) => { swarm.abort(); swarm.cleanup(); restore(); console.error(chalk.red(`\n  Uncaught: ${err.message}`)); process.exit(1); });
-  process.on("unhandledRejection", (reason) => { swarm.abort(); swarm.cleanup(); restore(); console.error(chalk.red(`\n  Unhandled: ${reason instanceof Error ? reason.message : reason}`)); process.exit(1); });
+  process.on("uncaughtException", (err) => { currentSwarm?.abort(); currentSwarm?.cleanup(); restore(); console.error(chalk.red(`\n  Uncaught: ${err.message}`)); process.exit(1); });
+  process.on("unhandledRejection", (reason) => { currentSwarm?.abort(); currentSwarm?.cleanup(); restore(); console.error(chalk.red(`\n  Unhandled: ${reason instanceof Error ? reason.message : reason}`)); process.exit(1); });
 
-  const stopRender = startRenderLoop(swarm);
+  while (remaining > 0 && currentTasks.length > 0 && !stopping) {
+    if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
 
-  try {
-    await swarm.run();
-  } catch (err: unknown) {
-    if (isAuthError(err)) { stopRender(); restore(); console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`)); process.exit(1); }
-    throw err;
-  } finally {
-    stopRender();
-    console.log(renderSummary(swarm));
+    if (flex) {
+      console.log(chalk.magenta(`\n  \u2500\u2500 Wave ${waveNum + 1} (${currentTasks.length} tasks, ${remaining} remaining) \u2500\u2500\n`));
+    }
 
-    const failedAgents = swarm.agents.filter((a) => a.status === "error");
-    const cappedNote = swarm.cappedOut ? chalk.yellow(` (capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%)`) : "";
-    const summary = failedAgents.length > 0
-      ? chalk.yellow(`${swarm.completed} done, ${failedAgents.length} failed`) + cappedNote
-      : chalk.green(`${swarm.completed} done`) + cappedNote;
-    const cost = swarm.totalCostUsd > 0 ? ` ($${swarm.totalCostUsd.toFixed(3)})` : "";
-    console.log(`\n  ${chalk.bold("Complete:")} ${summary}${chalk.dim(cost)}`);
+    const swarm = new Swarm({
+      tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
+      useWorktrees, mergeStrategy: waveMerge, agentTimeoutMs, usageCap,
+    });
+    currentSwarm = swarm;
 
+    const stopRender = startRenderLoop(swarm);
+    try {
+      await swarm.run();
+    } catch (err: unknown) {
+      if (isAuthError(err)) { stopRender(); restore(); console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`)); process.exit(1); }
+      throw err;
+    } finally {
+      stopRender();
+      console.log(renderSummary(swarm));
+    }
+
+    // Accumulate
+    accCost += swarm.totalCostUsd;
+    accIn += swarm.totalInputTokens;
+    accOut += swarm.totalOutputTokens;
+    accCompleted += swarm.completed;
+    accFailed += swarm.failed;
+    accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+    remaining -= swarm.completed + swarm.failed;
+    lastCapped = swarm.cappedOut;
+    lastAborted = swarm.aborted;
+
+    waveHistory.push({
+      wave: waveNum,
+      tasks: swarm.agents.map(a => ({
+        prompt: a.task.prompt,
+        status: a.status,
+        filesChanged: a.filesChanged,
+        error: a.error,
+      })),
+    });
+
+    if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
+
+    // ── Steer next wave ──
+    console.log(chalk.magenta("\n  Steering...\n"));
+    process.stdout.write("\x1B[?25l");
+    try {
+      const steer = await steerWave(
+        objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
+        permissionMode, concurrency, (text) => {
+          process.stdout.write(`\x1B[2K\r  ${chalk.dim(text)}`);
+        },
+      );
+      process.stdout.write(`\x1B[2K\r`);
+      process.stdout.write("\x1B[?25h");
+
+      if (steer.done) {
+        console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
+        break;
+      }
+
+      console.log(chalk.dim(`  ${steer.reasoning}\n`));
+      currentTasks = steer.tasks;
+      waveNum++;
+    } catch (err: any) {
+      process.stdout.write("\x1B[?25h");
+      console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
+      break;
+    }
+  }
+
+  // Switch back if we created a run branch
+  if (runBranch && originalRef) {
+    try { execSync(`git checkout "${originalRef}"`, { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
+  }
+
+  // ── Final summary ──
+  const waves = waveNum + 1;
+  const cappedNote = lastCapped ? chalk.yellow(` (capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%)`) : "";
+  const summaryText = accFailed > 0
+    ? chalk.yellow(`${accCompleted} done, ${accFailed} failed`) + cappedNote
+    : chalk.green(`${accCompleted} done`) + cappedNote;
+  const costText = accCost > 0 ? ` ($${accCost.toFixed(3)})` : "";
+  const wavePart = waves > 1 ? `${waves} waves, ` : "";
+  console.log(`\n  ${chalk.bold("Complete:")} ${wavePart}${summaryText}${chalk.dim(costText)}`);
+
+  if (accFailed > 0 && waves === 1) {
+    const failedAgents = currentSwarm?.agents.filter((a) => a.status === "error") ?? [];
     if (failedAgents.length > 0) {
       console.log(chalk.red(`\n  Failed agents:`));
       for (const a of failedAgents) {
@@ -543,38 +689,37 @@ async function main() {
         console.log(chalk.dim(`      ${a.error || "unknown error"}`));
       }
     }
-
-    const elapsed = Math.round((Date.now() - swarm.startedAt) / 1000);
-    const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
-    const tools = swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
-    console.log(chalk.dim(`  ${elapsedStr}  ${fmtTokens(swarm.totalInputTokens)} in / ${fmtTokens(swarm.totalOutputTokens)} out  ${tools} tool calls`));
-
-    if (swarm.mergeResults.length > 0) {
-      const merged = swarm.mergeResults.filter((r) => r.ok);
-      const autoResolved = merged.filter((r) => r.autoResolved).length;
-      const conflicts = swarm.mergeResults.filter((r) => !r.ok);
-      const target = swarm.mergeBranch || "HEAD";
-      if (merged.length > 0) {
-        const extra = autoResolved > 0 ? chalk.yellow(` (${autoResolved} auto-resolved)`) : "";
-        console.log(chalk.green(`  Merged ${merged.length} branch(es) into ${target}`) + extra);
-      }
-      if (swarm.mergeBranch) console.log(chalk.dim(`  Branch: ${swarm.mergeBranch} — create a PR or: git merge ${swarm.mergeBranch}`));
-      if (conflicts.length > 0) {
-        console.log(chalk.red(`  ${conflicts.length} unresolved conflict(s):`));
-        for (const c of conflicts) console.log(chalk.red(`    ${c.branch}`));
-        console.log(chalk.dim("  Merge manually: git merge <branch>"));
-      }
-    }
-
-    if (swarm.logFile) console.log(chalk.dim(`  Log: ${swarm.logFile}`));
-    console.log("");
   }
 
-  if (swarm.aborted || swarm.completed === 0) process.exit(2);
-  if (swarm.failed > 0) process.exit(1);
-}
+  const elapsed = Math.round((Date.now() - runStartedAt) / 1000);
+  const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+  console.log(chalk.dim(`  ${elapsedStr}  ${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out  ${accTools} tool calls`));
 
-function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
+  if (runBranch) {
+    console.log(chalk.dim(`  Branch: ${runBranch} \u2014 create a PR or: git merge ${runBranch}`));
+  } else if (currentSwarm?.mergeResults && currentSwarm.mergeResults.length > 0) {
+    const merged = currentSwarm.mergeResults.filter((r) => r.ok);
+    const autoResolved = merged.filter((r) => r.autoResolved).length;
+    const conflicts = currentSwarm.mergeResults.filter((r) => !r.ok);
+    const target = currentSwarm.mergeBranch || "HEAD";
+    if (merged.length > 0) {
+      const extra = autoResolved > 0 ? chalk.yellow(` (${autoResolved} auto-resolved)`) : "";
+      console.log(chalk.green(`  Merged ${merged.length} branch(es) into ${target}`) + extra);
+    }
+    if (currentSwarm.mergeBranch) console.log(chalk.dim(`  Branch: ${currentSwarm.mergeBranch} \u2014 create a PR or: git merge ${currentSwarm.mergeBranch}`));
+    if (conflicts.length > 0) {
+      console.log(chalk.red(`  ${conflicts.length} unresolved conflict(s):`));
+      for (const c of conflicts) console.log(chalk.red(`    ${c.branch}`));
+      console.log(chalk.dim("  Merge manually: git merge <branch>"));
+    }
+  }
+
+  if (currentSwarm?.logFile) console.log(chalk.dim(`  Log: ${currentSwarm.logFile}`));
+  console.log("");
+
+  if (accFailed > 0) process.exit(1);
+  if (lastAborted || accCompleted === 0) process.exit(2);
+}
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
