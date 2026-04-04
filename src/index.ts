@@ -413,9 +413,8 @@ async function main() {
       const spin = chalk.cyan(BRAILLE[modelFrame++ % BRAILLE.length]);
       process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim("loading models...")}`);
     }, 120);
-    const models = await modelsPromise;
-    clearInterval(modelSpinner);
-    process.stdout.write(`\x1B[2K\r`);
+    let models: ModelInfo[];
+    try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
     plannerModel = models[0]?.value || "claude-sonnet-4-6";
 
     if (models.length > 0) {
@@ -490,6 +489,7 @@ async function main() {
   const flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
   let thinkingUsed = 0;
+  let thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
   let designContext: string | undefined;
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
@@ -515,8 +515,8 @@ async function main() {
           const spin = chalk.cyan(BRAILLE[themeFrame++ % BRAILLE.length]);
           process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim("identifying themes...")}`);
         }, 120);
-        const themes = await identifyThemes(objective!, concurrency, plannerModel, permissionMode);
-        clearInterval(themeSpinner);
+        let themes: string[];
+        try { themes = await identifyThemes(objective!, concurrency, plannerModel, permissionMode); } finally { clearInterval(themeSpinner); }
         process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${themes.length} themes`)}\n`);
 
         // Phase 2: Thinking wave — agents explore codebase
@@ -537,6 +537,10 @@ async function main() {
         try { await thinkingSwarm.run(); } finally { stopThinkRender(); }
         console.log(renderSummary(thinkingSwarm));
         thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
+        thinkingCost = thinkingSwarm.totalCostUsd;
+        thinkingIn = thinkingSwarm.totalInputTokens;
+        thinkingOut = thinkingSwarm.totalOutputTokens;
+        thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
 
         // Phase 3: Orchestrate from design docs
         designContext = readDesignDocs(designDir);
@@ -655,7 +659,7 @@ async function main() {
   let currentTasks = tasks;
   let waveNum = 0;
   const waveHistory: WaveSummary[] = [];
-  let accCost = 0, accIn = 0, accOut = 0, accCompleted = 0, accFailed = 0, accTools = 0;
+  let accCost = thinkingCost, accIn = thinkingIn, accOut = thinkingOut, accCompleted = 0, accFailed = 0, accTools = thinkingTools;
   let lastCapped = false, lastAborted = false;
 
   // For flex + branch strategy: create one target branch, waves merge via yolo into it
