@@ -259,20 +259,28 @@ async function main() {
   // ── Config: defaults for non-interactive, prompts for interactive ──
   console.log(chalk.bold("\n  🐝 claude-swarm\n"));
 
-  const nonInteractive = fileCfg !== undefined || tasks.length > 0;
+  const noTTY = !process.stdin.isTTY;
+  const nonInteractive = noTTY || fileCfg !== undefined || tasks.length > 0;
   const cwd = fileCfg?.cwd ?? process.cwd();
   const allowedTools = fileCfg?.allowedTools;
   validateCwd(cwd);
 
-  process.stdout.write(chalk.dim("  Fetching available models..."));
-  const models = await fetchModels();
-  process.stdout.write(`\x1B[2K\r`);
+  if (noTTY) {
+    console.log(chalk.dim("  Non-interactive mode — using defaults"));
+  }
+
+  let models: ModelInfo[] = [];
+  if (!nonInteractive) {
+    process.stdout.write(chalk.dim("  Fetching available models..."));
+    models = await fetchModels();
+    process.stdout.write(`\x1B[2K\r`);
+  }
 
   const model = fileCfg?.model ?? (nonInteractive ? (models[0]?.value || "claude-sonnet-4-6") : await pickModel(models));
   const permissionMode = fileCfg?.permissionMode ?? (nonInteractive ? "auto" as PermMode : await pickPermissionMode());
   const concurrency = fileCfg?.concurrency ?? (nonInteractive ? 5 : await pickConcurrency());
   validateConcurrency(concurrency);
-  const useWorktrees = fileCfg?.useWorktrees ?? (nonInteractive ? isGitRepo(cwd) : await pickWorktrees());
+  const useWorktrees = fileCfg?.useWorktrees ?? (nonInteractive ? (noTTY ? false : isGitRepo(cwd)) : await pickWorktrees());
   if (useWorktrees) validateGitRepo(cwd);
 
   if (nonInteractive) {
@@ -284,6 +292,10 @@ async function main() {
   let objective: string | undefined;
 
   if (planMode) {
+    if (noTTY) {
+      console.error(chalk.red("\n  No tasks provided and stdin is not a TTY. Provide tasks via args or a JSON file."));
+      process.exit(1);
+    }
     objective = await pickObjective();
     if (!objective) {
       console.error(chalk.red("\n  No objective provided."));
