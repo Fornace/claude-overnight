@@ -13,8 +13,10 @@ export async function planTasks(
 ): Promise<Task[]> {
   onLog("Analyzing codebase...");
 
+  const INACTIVITY_MS = 5 * 60 * 1000;
   let resultText = "";
-  for await (const msg of query({
+
+  const plannerQuery = query({
     prompt: `You are a task coordinator for a parallel agent swarm. Analyze this codebase and break the following objective into independent tasks.
 
 Objective: ${objective}
@@ -36,31 +38,57 @@ Respond with ONLY a JSON object (no markdown fences):
     options: {
       cwd,
       model,
-      tools: ["Read", "Glob", "Grep", "Bash"],
-      allowedTools: ["Read", "Glob", "Grep", "Bash"],
+      tools: ["Read", "Glob", "Grep"],
+      allowedTools: ["Read", "Glob", "Grep"],
       permissionMode: permissionMode,
       ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       persistSession: false,
       includePartialMessages: true,
     },
-  })) {
-    // Track planner's tool use for the UI
-    if (msg.type === "stream_event") {
-      const ev = (msg as any).event;
-      if (
-        ev?.type === "content_block_start" &&
-        ev.content_block?.type === "tool_use"
-      ) {
-        onLog(ev.content_block.name);
-      }
-    }
-    if (msg.type === "result") {
-      if (msg.subtype === "success") {
-        resultText = (msg as any).result || "";
+  });
+
+  // Inactivity watchdog — only kills planner if it goes completely silent
+  let lastActivity = Date.now();
+  let timer: NodeJS.Timeout;
+  const watchdog = new Promise<never>((_, reject) => {
+    const check = () => {
+      const silent = Date.now() - lastActivity;
+      if (silent >= INACTIVITY_MS) {
+        plannerQuery.close();
+        reject(new Error(`Planner silent for ${Math.round(silent / 1000)}s — assumed hung`));
       } else {
-        throw new Error(`Planner failed: ${msg.subtype}`);
+        timer = setTimeout(check, Math.min(30_000, INACTIVITY_MS - silent + 1000));
+      }
+    };
+    timer = setTimeout(check, INACTIVITY_MS);
+  });
+
+  const consume = async () => {
+    for await (const msg of plannerQuery) {
+      lastActivity = Date.now();
+      if (msg.type === "stream_event") {
+        const ev = (msg as any).event;
+        if (
+          ev?.type === "content_block_start" &&
+          ev.content_block?.type === "tool_use"
+        ) {
+          onLog(ev.content_block.name);
+        }
+      }
+      if (msg.type === "result") {
+        if (msg.subtype === "success") {
+          resultText = (msg as any).result || "";
+        } else {
+          throw new Error(`Planner failed: ${msg.subtype}`);
+        }
       }
     }
+  };
+
+  try {
+    await Promise.race([consume(), watchdog]);
+  } finally {
+    clearTimeout(timer!);
   }
 
   const parsed = await extractTaskJson(resultText, async () => {
@@ -88,11 +116,11 @@ Respond with ONLY a JSON object (no markdown fences):
     prompt: typeof t === "string" ? t : t.prompt,
   }));
 
-  // Filter garbage tasks (prompts < 10 chars)
+  // Filter garbage tasks (require at least 3 space-separated words)
   const before = tasks.length;
-  tasks = tasks.filter((t) => t.prompt && t.prompt.length >= 10);
+  tasks = tasks.filter((t) => t.prompt && t.prompt.trim().split(/\s+/).length >= 3);
   if (tasks.length < before) {
-    onLog(`Filtered ${before - tasks.length} task(s) with prompts shorter than 10 chars`);
+    onLog(`Filtered ${before - tasks.length} task(s) with fewer than 3 words`);
   }
 
   // Warn on file overlap between tasks
@@ -107,6 +135,12 @@ Respond with ONLY a JSON object (no markdown fences):
   }
   for (const [path, ids] of pathToTasks) {
     if (ids.length > 1) onLog(`Overlap risk: ${path} in tasks ${ids.join(", ")}`);
+  }
+
+  // Warn if every task targets the same file — high merge conflict risk
+  if (tasks.length > 1 && pathToTasks.size === 1) {
+    const [singlePath] = pathToTasks.keys();
+    onLog(`⚠ All ${tasks.length} tasks target ${singlePath} — high merge conflict risk`);
   }
 
   // Cap at 20 tasks

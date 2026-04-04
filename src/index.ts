@@ -9,18 +9,64 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks } from "./planner.js";
-import { startRenderLoop } from "./ui.js";
+import { startRenderLoop, renderSummary } from "./ui.js";
 import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
+
+// ── CLI flag parsing ──
+
+function parseCliFlags(argv: string[]) {
+  const known = new Set(["concurrency", "model", "timeout"]);
+  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version"]);
+  const flags: Record<string, string> = {};
+  const positional: string[] = [];
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (booleans.has(arg)) continue;
+    // --key=value
+    const eq = arg.match(/^--(\w[\w-]*)=(.+)$/);
+    if (eq && known.has(eq[1])) { flags[eq[1]] = eq[2]; continue; }
+    // --key value
+    const bare = arg.match(/^--(\w[\w-]*)$/);
+    if (bare && known.has(bare[1]) && i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+      flags[bare[1]] = argv[++i]; continue;
+    }
+    if (!arg.startsWith("--")) positional.push(arg);
+  }
+  return { flags, positional };
+}
+
+// ── Auth error detection ──
+
+const AUTH_PATTERNS = ["unauthorized", "forbidden", "invalid_api_key", "authentication"];
+
+function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+  return AUTH_PATTERNS.some((p) => lower.includes(p));
+}
+
+function authErrorMessage(): string {
+  return "Authentication failed — check your API key or run: claude auth";
+}
 
 // ── Fetch models via SDK (works with OAuth / Max / API key) ──
 
-async function fetchModels(): Promise<ModelInfo[]> {
+async function fetchModels(timeoutMs = 10_000): Promise<ModelInfo[]> {
+  let q: ReturnType<typeof query> | undefined;
   try {
-    const q = query({ prompt: "", options: { persistSession: false } });
-    const models = await q.supportedModels();
+    q = query({ prompt: "", options: { persistSession: false } });
+    const models = await Promise.race([
+      q.supportedModels(),
+      sleep(timeoutMs).then(() => { throw new Error("model_fetch_timeout"); }),
+    ]);
     q.close();
     return models;
-  } catch {
+  } catch (err: any) {
+    q?.close();
+    if (err.message === "model_fetch_timeout") {
+      console.warn(chalk.yellow("\n  ⚠ Model fetch timed out — continuing with defaults"));
+    }
     return [];
   }
 }
@@ -246,9 +292,12 @@ async function main() {
     claude-swarm "fix auth" "add tests"   ${chalk.dim("run inline tasks in parallel")}
 
   ${chalk.dim("Flags:")}
-    -h, --help       Show this help
-    -v, --version    Print version
-    --dry-run        Show planned tasks without running them
+    -h, --help             Show this help
+    -v, --version          Print version
+    --dry-run              Show planned tasks without running them
+    --concurrency=N        Max parallel agents ${chalk.dim("(overrides task file & defaults)")}
+    --model=NAME           Model to use ${chalk.dim("(overrides task file & defaults)")}
+    --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 300s, kills only silent agents)")}
 
   ${chalk.dim("Permission modes")} ${chalk.dim("(task file: \"permissionMode\", interactive: prompted)")}
     auto               AI decides which ops are safe ${chalk.dim("(default)")}
@@ -262,7 +311,23 @@ async function main() {
   }
 
   const dryRun = argv.includes("--dry-run");
-  const args = argv.filter((a) => !a.startsWith("--"));
+  const { flags: cliFlags, positional: args } = parseCliFlags(argv);
+
+  // Validate CLI flag values early
+  if (cliFlags.concurrency !== undefined) {
+    const n = parseInt(cliFlags.concurrency);
+    if (!Number.isInteger(n) || n < 1) {
+      console.error(chalk.red(`  --concurrency must be a positive integer (got "${cliFlags.concurrency}")`));
+      process.exit(1);
+    }
+  }
+  if (cliFlags.timeout !== undefined) {
+    const n = parseFloat(cliFlags.timeout);
+    if (isNaN(n) || n <= 0) {
+      console.error(chalk.red(`  --timeout must be a positive number (got "${cliFlags.timeout}")`));
+      process.exit(1);
+    }
+  }
 
   // ── Load tasks from file or inline args ──
   let tasks: Task[] = [];
@@ -291,15 +356,22 @@ async function main() {
   }
 
   let models: ModelInfo[] = [];
-  if (!nonInteractive) {
-    process.stdout.write(chalk.dim("  Fetching available models..."));
-    models = await fetchModels();
-    process.stdout.write(`\x1B[2K\r`);
+  // Fetch models unless already overridden by CLI/file — non-interactive uses a shorter timeout
+  const modelAlreadySet = cliFlags.model || fileCfg?.model;
+  if (!modelAlreadySet) {
+    if (nonInteractive) {
+      models = await fetchModels(5_000);
+    } else {
+      process.stdout.write(chalk.dim("  Fetching available models..."));
+      models = await fetchModels();
+      process.stdout.write(`\x1B[2K\r`);
+    }
   }
 
-  const model = fileCfg?.model ?? (nonInteractive ? (models[0]?.value || "claude-sonnet-4-6") : await pickModel(models));
+  // CLI flags override task file values, which override interactive defaults
+  const model = cliFlags.model ?? fileCfg?.model ?? (nonInteractive ? (models[0]?.value || "claude-sonnet-4-6") : await pickModel(models));
   const permissionMode = fileCfg?.permissionMode ?? (nonInteractive ? "auto" as PermMode : await pickPermissionMode());
-  const concurrency = fileCfg?.concurrency ?? (nonInteractive ? 5 : await pickConcurrency());
+  const concurrency = cliFlags.concurrency ? parseInt(cliFlags.concurrency) : (fileCfg?.concurrency ?? (nonInteractive ? 5 : await pickConcurrency()));
   validateConcurrency(concurrency);
   const useWorktrees = fileCfg?.useWorktrees ?? (nonInteractive ? (noTTY ? false : isGitRepo(cwd)) : await pickWorktrees());
   if (useWorktrees) validateGitRepo(cwd);
@@ -349,7 +421,11 @@ async function main() {
       await sleep(1500);
     } catch (err: any) {
       restore();
-      console.error(chalk.red(`\n  Planning failed: ${err.message}\n`));
+      if (isAuthError(err)) {
+        console.error(chalk.red(`\n  ${authErrorMessage()}\n`));
+      } else {
+        console.error(chalk.red(`\n  Planning failed: ${err.message}\n`));
+      }
       process.exit(1);
     }
   }
@@ -370,6 +446,8 @@ async function main() {
     process.exit(0);
   }
 
+  const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
+
   const swarm = new Swarm({
     tasks,
     concurrency,
@@ -379,6 +457,7 @@ async function main() {
     allowedTools,
     useWorktrees,
     mergeStrategy,
+    agentTimeoutMs,
   });
 
   // Replace simple handlers with graceful drain: first signal stops queue, second force-exits
@@ -417,8 +496,18 @@ async function main() {
 
   try {
     await swarm.run();
+  } catch (err: unknown) {
+    if (isAuthError(err)) {
+      stopRender();
+      restore();
+      console.error(chalk.red(`\n  ${authErrorMessage()}\n`));
+      process.exit(1);
+    }
+    throw err;
   } finally {
     stopRender();
+
+    console.log(renderSummary(swarm));
 
     const summary =
       swarm.failed > 0

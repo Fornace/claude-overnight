@@ -36,6 +36,7 @@ export interface MergeResult {
 export class Swarm {
   readonly agents: AgentState[] = [];
   readonly logs: { time: number; agentId: number; text: string }[] = [];
+  private readonly allLogs: { time: number; agentId: number; text: string }[] = [];
   readonly startedAt = Date.now();
   readonly total: number;
 
@@ -57,6 +58,7 @@ export class Swarm {
   private config: SwarmConfig;
   private nextId = 0;
   private worktreeBase?: string;
+  private activeQueries = new Set<{ close: () => void }>();
   private cleanedUp = false;
   logFile?: string;
 
@@ -118,10 +120,14 @@ export class Swarm {
   abort(): void {
     this.aborted = true;
     this.queue.length = 0;
+    this.activeQueries.forEach((q) => q.close());
+    this.activeQueries.clear();
   }
 
   log(agentId: number, text: string) {
-    this.logs.push({ time: Date.now(), agentId, text });
+    const entry = { time: Date.now(), agentId, text };
+    this.logs.push(entry);
+    this.allLogs.push(entry);
     if (this.logs.length > 300) this.logs.splice(0, this.logs.length - 150);
   }
 
@@ -187,18 +193,24 @@ export class Swarm {
         this.log(id, `Worktree: ${branch}`);
       } catch (e: any) {
         this.log(id, `Worktree failed: ${e.message?.slice(0, 60)}`);
+        agent.status = "error";
+        agent.error = "worktree creation failed";
+        agent.finishedAt = Date.now();
+        this.failed++;
+        return;
       }
     }
 
     this.log(id, `Starting: ${task.prompt.slice(0, 60)}`);
 
     const maxRetries = this.config.maxRetries ?? 2;
-    const timeoutMs = this.config.agentTimeoutMs ?? 5 * 60 * 1000;
+    // Inactivity timeout: kill agent only if it goes silent (no messages)
+    const inactivityMs = this.config.agentTimeoutMs ?? 5 * 60 * 1000;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
-        const backoffMs = 1000 * 2 ** (attempt - 1);
-        this.log(id, `Retry ${attempt}/${maxRetries} in ${backoffMs}ms`);
+        const backoffMs = Math.min(30000, 1000 * 2 ** (attempt - 1)) * (0.5 + Math.random());
+        this.log(id, `Retry ${attempt}/${maxRetries} in ${Math.round(backoffMs)}ms`);
         await sleep(backoffMs);
         agent.status = "running";
         agent.error = undefined;
@@ -222,25 +234,35 @@ export class Swarm {
           },
         });
 
-        // Race against a real timer — fires even if the SDK yields nothing
+        // Inactivity watchdog: resets on every message, only fires if agent goes silent
+        let lastActivity = Date.now();
         let timer: NodeJS.Timeout;
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            agentQuery.close();
-            reject(new AgentTimeoutError(timeoutMs));
-          }, timeoutMs);
+        const watchdog = new Promise<never>((_, reject) => {
+          const check = () => {
+            const silent = Date.now() - lastActivity;
+            if (silent >= inactivityMs) {
+              agentQuery.close();
+              reject(new AgentTimeoutError(silent));
+            } else {
+              timer = setTimeout(check, Math.min(30_000, inactivityMs - silent + 1000));
+            }
+          };
+          timer = setTimeout(check, inactivityMs);
         });
+        this.activeQueries.add(agentQuery);
         try {
           await Promise.race([
             (async () => {
               for await (const msg of agentQuery) {
+                lastActivity = Date.now();
                 this.handleMsg(agent, msg);
               }
             })(),
-            timeout,
+            watchdog,
           ]);
         } finally {
           clearTimeout(timer!);
+          this.activeQueries.delete(agentQuery);
         }
 
         if (agent.status === "running") {
@@ -327,57 +349,96 @@ export class Swarm {
       return;
     }
 
-    // "branch" strategy: create a new branch, merge there (current branch untouched)
-    const strategy = this.config.mergeStrategy ?? "yolo";
-    if (strategy === "branch") {
-      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      this.mergeBranch = `swarm/run-${ts}`;
-      exec(`git checkout -b "${this.mergeBranch}"`, this.config.cwd);
-      this.log(-1, `Created branch: ${this.mergeBranch}`);
+    // Stash dirty working tree before merging
+    let stashed = false;
+    try {
+      const status = exec("git status --porcelain", this.config.cwd);
+      if (status.trim()) {
+        exec("git stash push -m 'claude-swarm: pre-merge stash'", this.config.cwd);
+        stashed = true;
+        this.log(-1, "Stashed dirty working tree");
+      }
+    } catch (e: any) {
+      this.log(-1, `Stash failed: ${String(e.message || e).slice(0, 80)}`);
     }
 
-    this.log(-1, `Merging ${branches.length} branch(es)...`);
-    for (const agent of branches) {
-      const result: MergeResult = {
-        branch: agent.branch!,
-        ok: false,
-        filesChanged: agent.filesChanged ?? 0,
-      };
-      try {
-        exec(`git merge --no-edit "${agent.branch}"`, this.config.cwd);
-        result.ok = true;
-        this.log(agent.id, `Merged ${agent.branch}`);
-      } catch (e: any) {
-        // Abort failed merge, then retry with theirs strategy (keep agent's version)
-        try { exec("git merge --abort", this.config.cwd); } catch {}
+    try {
+      // "branch" strategy: create a new branch, merge there (current branch untouched)
+      const strategy = this.config.mergeStrategy ?? "yolo";
+      if (strategy === "branch") {
+        const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        let candidate = `swarm/run-${ts}`;
+        for (let i = 2; ; i++) {
+          try {
+            exec(`git rev-parse --verify "${candidate}"`, this.config.cwd);
+            candidate = `swarm/run-${ts}-${i}`;
+          } catch {
+            break;
+          }
+        }
+        this.mergeBranch = candidate;
+        exec(`git checkout -b "${this.mergeBranch}"`, this.config.cwd);
+        this.log(-1, `Created branch: ${this.mergeBranch}`);
+      }
+
+      this.log(-1, `Merging ${branches.length} branch(es)...`);
+      for (const agent of branches) {
+        const result: MergeResult = {
+          branch: agent.branch!,
+          ok: false,
+          filesChanged: agent.filesChanged ?? 0,
+        };
         try {
-          exec(`git merge --no-edit -X theirs "${agent.branch}"`, this.config.cwd);
+          exec(`git merge --no-edit "${agent.branch}"`, this.config.cwd);
           result.ok = true;
-          result.autoResolved = true;
-          this.log(agent.id, `Auto-resolved conflict: ${agent.branch}`);
-        } catch (e2: any) {
+          this.log(agent.id, `Merged ${agent.branch}`);
+        } catch (e: any) {
+          // Abort failed merge, then retry with theirs strategy (keep agent's version)
           try { exec("git merge --abort", this.config.cwd); } catch {}
-          result.error = e.message?.slice(0, 80);
-          this.log(agent.id, `Merge conflict: ${agent.branch}`);
+          try {
+            exec(`git merge --no-edit -X theirs "${agent.branch}"`, this.config.cwd);
+            result.ok = true;
+            result.autoResolved = true;
+            this.log(agent.id, `Auto-resolved conflict: ${agent.branch}`);
+          } catch (e2: any) {
+            try { exec("git merge --abort", this.config.cwd); } catch {}
+            result.error = e.message?.slice(0, 80);
+            this.log(agent.id, `Merge conflict: ${agent.branch}`);
+          }
+        }
+        this.mergeResults.push(result);
+      }
+
+      // Verify no partial merge left in progress
+      if (existsSync(join(this.config.cwd, ".git", "MERGE_HEAD"))) {
+        this.log(-1, "Partial merge detected — aborting");
+        try { exec("git merge --abort", this.config.cwd); } catch {}
+      }
+
+      // Clean up successfully merged task branches
+      const merged = this.mergeResults.filter((r) => r.ok);
+      const failed = this.mergeResults.filter((r) => !r.ok);
+      for (const r of merged) {
+        try { exec(`git branch -d "${r.branch}"`, this.config.cwd); } catch {}
+      }
+
+      this.log(-1, `Merged ${merged.length}/${branches.length} branches${failed.length > 0 ? ` (${failed.length} unresolved)` : ""}`);
+
+      if (strategy === "branch" && this.mergeBranch) {
+        // Switch back to the original branch
+        try {
+          exec("git checkout -", this.config.cwd);
+        } catch {}
+      }
+    } finally {
+      if (stashed) {
+        try {
+          exec("git stash pop", this.config.cwd);
+          this.log(-1, "Restored stashed changes");
+        } catch (e: any) {
+          this.log(-1, `Stash pop failed: ${String(e.message || e).slice(0, 80)}`);
         }
       }
-      this.mergeResults.push(result);
-    }
-
-    // Clean up successfully merged task branches
-    const merged = this.mergeResults.filter((r) => r.ok);
-    const failed = this.mergeResults.filter((r) => !r.ok);
-    for (const r of merged) {
-      try { exec(`git branch -d "${r.branch}"`, this.config.cwd); } catch {}
-    }
-
-    this.log(-1, `Merged ${merged.length}/${branches.length} branches${failed.length > 0 ? ` (${failed.length} unresolved)` : ""}`);
-
-    if (strategy === "branch" && this.mergeBranch) {
-      // Switch back to the original branch
-      try {
-        exec("git checkout -", this.config.cwd);
-      } catch {}
     }
   }
 
@@ -438,6 +499,13 @@ export class Swarm {
       const ts = new Date(this.startedAt).toISOString().replace(/[:.]/g, "-").slice(0, 19);
       this.logFile = join(tmpdir(), `claude-swarm-${ts}.json`);
       writeFileSync(this.logFile, JSON.stringify({
+        version: "1",
+        config: {
+          model: this.config.model,
+          concurrency: this.config.concurrency,
+          useWorktrees: this.config.useWorktrees,
+          mergeStrategy: this.config.mergeStrategy,
+        },
         startedAt: new Date(this.startedAt).toISOString(),
         durationMs: Date.now() - this.startedAt,
         completed: this.completed, failed: this.failed, aborted: this.aborted,
@@ -450,7 +518,7 @@ export class Swarm {
           durationMs: a.finishedAt && a.startedAt ? a.finishedAt - a.startedAt : undefined,
         })),
         merges: this.mergeResults,
-        events: this.logs.map(l => ({
+        events: this.allLogs.map(l => ({
           time: new Date(l.time).toISOString(), agent: l.agentId, text: l.text,
         })),
       }, null, 2));
@@ -500,13 +568,15 @@ export class Swarm {
       }
 
       case "result": {
+        const safeAdd = (v: unknown) => typeof v === 'number' && isFinite(v) && v >= 0 ? v : 0;
         const r = msg as SDKResultMessage;
         agent.finishedAt = Date.now();
-        agent.costUsd = r.total_cost_usd;
-        this.totalCostUsd += r.total_cost_usd;
+        const cost = safeAdd(r.total_cost_usd);
+        agent.costUsd = cost;
+        this.totalCostUsd += cost;
         if (r.usage) {
-          this.totalInputTokens += r.usage.input_tokens ?? 0;
-          this.totalOutputTokens += r.usage.output_tokens ?? 0;
+          this.totalInputTokens += safeAdd(r.usage.input_tokens);
+          this.totalOutputTokens += safeAdd(r.usage.output_tokens);
         }
         if (r.subtype === "success") {
           agent.status = "done";
@@ -538,8 +608,8 @@ export class Swarm {
 }
 
 class AgentTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`Agent timed out after ${Math.round(timeoutMs / 1000)}s`);
+  constructor(silentMs: number) {
+    super(`Agent silent for ${Math.round(silentMs / 1000)}s — assumed hung`);
     this.name = "AgentTimeoutError";
   }
 }

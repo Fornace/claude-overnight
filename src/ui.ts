@@ -207,6 +207,88 @@ export function startRenderLoop(swarm: Swarm): () => void {
   };
 }
 
+export function renderSummary(swarm: Swarm): string {
+  const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
+  const out: string[] = [];
+
+  // Fixed column widths: #(3) + Status(6) + Duration(8) + Files(5) + Tools(5) + Cost(8)
+  // gaps: 6×2 = 12, indent = 2 → task gets the rest
+  const fixedW = 3 + 6 + 8 + 5 + 5 + 8 + 12 + 2;
+  const taskW = Math.max(10, w - fixedW);
+
+  const hdr =
+    chalk.gray(
+      "  " +
+        "#".padStart(3) +
+        "  " +
+        "Status".padEnd(6) +
+        "  " +
+        "Task".padEnd(taskW) +
+        "  " +
+        "Duration".padStart(8) +
+        "  " +
+        "Files".padStart(5) +
+        "  " +
+        "Tools".padStart(5) +
+        "  " +
+        "Cost".padStart(8),
+    );
+  const sep = chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, fixedW + taskW)));
+
+  out.push("");
+  out.push(hdr);
+  out.push(sep);
+
+  let totalDurMs = 0;
+  let totalFiles = 0;
+  let totalTools = 0;
+  let totalCost = 0;
+
+  for (const a of swarm.agents) {
+    const id = String(a.id).padStart(3);
+    const ok = a.status === "done";
+    const status = ok
+      ? chalk.green("\u2713 done")
+      : chalk.red("\u2717 err ");
+    const task = truncate(a.task.prompt, taskW).padEnd(taskW);
+
+    const durMs =
+      a.startedAt != null
+        ? (a.finishedAt ?? Date.now()) - a.startedAt
+        : 0;
+    const dur = fmtDur(durMs).padStart(8);
+    const files = String(a.filesChanged ?? 0).padStart(5);
+    const tools = String(a.toolCalls).padStart(5);
+    const cost =
+      a.costUsd != null ? `$${a.costUsd.toFixed(3)}`.padStart(8) : "".padStart(8);
+
+    totalDurMs += durMs;
+    totalFiles += a.filesChanged ?? 0;
+    totalTools += a.toolCalls;
+    totalCost += a.costUsd ?? 0;
+
+    const color = ok ? chalk.white : chalk.red;
+    out.push(
+      color(
+        `  ${id}  ${status}  ${task}  ${dur}  ${files}  ${tools}  ${cost}`,
+      ),
+    );
+  }
+
+  out.push(sep);
+
+  // Totals row
+  const label = `${swarm.agents.length} tasks`.padEnd(taskW);
+  out.push(
+    chalk.bold(
+      `  ${"".padStart(3)}  ${"Total ".padEnd(6)}  ${label}  ${fmtDur(totalDurMs).padStart(8)}  ${String(totalFiles).padStart(5)}  ${String(totalTools).padStart(5)}  ${`$${totalCost.toFixed(3)}`.padStart(8)}`,
+    ),
+  );
+  out.push("");
+
+  return out.join("\n");
+}
+
 function startPlainLog(swarm: Swarm): () => void {
   let lastLogLen = 0;
   let lastCompleted = -1;
