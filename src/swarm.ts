@@ -20,6 +20,8 @@ export interface SwarmConfig {
   allowedTools?: string[];
   useWorktrees?: boolean;
   permissionMode?: PermMode;
+  agentTimeoutMs?: number;
+  maxRetries?: number;
 }
 
 export interface MergeResult {
@@ -95,7 +97,12 @@ export class Swarm {
     while (this.queue.length > 0) {
       await this.throttle();
       const task = this.queue.shift()!;
-      await this.runAgent(task);
+      try {
+        await this.runAgent(task);
+      } catch (err: any) {
+        // Safety net: one agent must never kill the worker loop
+        this.log(-1, `Worker error: ${String(err?.message || err).slice(0, 80)}`);
+      }
     }
   }
 
@@ -146,36 +153,60 @@ export class Swarm {
 
     this.log(id, `Starting: ${task.prompt.slice(0, 60)}`);
 
-    try {
-      const perm = this.config.permissionMode ?? "auto";
-      for await (const msg of query({
-        prompt: this.config.useWorktrees
-          ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
-          : task.prompt,
-        options: {
-          cwd: agentCwd,
-          model: task.model || this.config.model,
-          permissionMode: perm,
-          ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
-          allowedTools: this.config.allowedTools,
-          includePartialMessages: true,
-          persistSession: false,
-        },
-      })) {
-        this.handleMsg(agent, msg);
+    const maxRetries = this.config.maxRetries ?? 2;
+    const timeoutMs = this.config.agentTimeoutMs ?? 5 * 60 * 1000;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        const backoffMs = 1000 * 2 ** (attempt - 1);
+        this.log(id, `Retry ${attempt}/${maxRetries} in ${backoffMs}ms`);
+        await sleep(backoffMs);
+        agent.status = "running";
+        agent.error = undefined;
+        agent.finishedAt = undefined;
       }
-      if (agent.status === "running") {
-        agent.status = "done";
+
+      try {
+        const deadline = Date.now() + timeoutMs;
+        const perm = this.config.permissionMode ?? "auto";
+        for await (const msg of query({
+          prompt: this.config.useWorktrees
+            ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
+            : task.prompt,
+          options: {
+            cwd: agentCwd,
+            model: task.model || this.config.model,
+            permissionMode: perm,
+            ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
+            allowedTools: this.config.allowedTools,
+            includePartialMessages: true,
+            persistSession: false,
+          },
+        })) {
+          this.handleMsg(agent, msg);
+          if (Date.now() > deadline) {
+            throw new AgentTimeoutError(timeoutMs);
+          }
+        }
+        if (agent.status === "running") {
+          agent.status = "done";
+          agent.finishedAt = Date.now();
+          this.completed++;
+          this.log(id, "Done");
+        }
+        break; // Success — exit retry loop
+      } catch (err: any) {
+        const canRetry = attempt < maxRetries && isTransientError(err);
+        if (canRetry) {
+          this.log(id, `Transient error: ${String(err.message || err).slice(0, 80)}`);
+          continue;
+        }
+        agent.status = "error";
+        agent.error = String(err.message || err).slice(0, 120);
         agent.finishedAt = Date.now();
-        this.completed++;
-        this.log(id, "Done");
+        this.failed++;
+        this.log(id, agent.error);
       }
-    } catch (err: any) {
-      agent.status = "error";
-      agent.error = String(err.message || err).slice(0, 120);
-      agent.finishedAt = Date.now();
-      this.failed++;
-      this.log(id, agent.error);
     }
 
     // Auto-commit changes in worktree
@@ -323,6 +354,31 @@ export class Swarm {
       }
     }
   }
+}
+
+class AgentTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Agent timed out after ${Math.round(timeoutMs / 1000)}s`);
+    this.name = "AgentTimeoutError";
+  }
+}
+
+function isTransientError(err: unknown): boolean {
+  if (err instanceof AgentTimeoutError) return false;
+  const msg = String(
+    (err as any)?.message || err,
+  ).toLowerCase();
+  const status: number | undefined =
+    (err as any)?.status ?? (err as any)?.statusCode;
+  return (
+    status === 429 ||
+    (status != null && status >= 500 && status < 600) ||
+    msg.includes("rate limit") ||
+    msg.includes("overloaded") ||
+    msg.includes("econnreset") ||
+    msg.includes("etimedout") ||
+    msg.includes("socket hang up")
+  );
 }
 
 function exec(cmd: string, cwd: string): string {

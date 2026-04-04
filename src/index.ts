@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
+import { execSync } from "child_process";
 import { createInterface } from "readline";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -105,20 +106,66 @@ interface FileArgs {
   useWorktrees?: boolean;
 }
 
+const KNOWN_TASK_FILE_KEYS = new Set([
+  "tasks", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees",
+]);
+
 function loadTaskFile(file: string): FileArgs {
-  const raw = readFileSync(resolve(file), "utf-8");
-  const parsed: TaskFile & { worktrees?: boolean; permissionMode?: PermMode } = Array.isArray(JSON.parse(raw))
-    ? { tasks: JSON.parse(raw) }
-    : JSON.parse(raw);
+  const path = resolve(file);
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    throw new Error(`Cannot read task file: ${path}`);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(`Task file is not valid JSON: ${path}`);
+  }
+
+  const parsed: TaskFile & { worktrees?: boolean; permissionMode?: PermMode } = Array.isArray(json)
+    ? { tasks: json }
+    : json as any;
+
+  // Reject unknown top-level keys
+  if (!Array.isArray(json) && typeof json === "object" && json !== null) {
+    const unknown = Object.keys(json).filter((k) => !KNOWN_TASK_FILE_KEYS.has(k));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown key${unknown.length > 1 ? "s" : ""} in task file: ${unknown.join(", ")}. ` +
+        `Allowed keys: ${[...KNOWN_TASK_FILE_KEYS].join(", ")}`,
+      );
+    }
+  }
+
+  // Validate tasks array
+  if (!Array.isArray(parsed.tasks)) {
+    throw new Error(`Task file must contain a "tasks" array (got ${typeof parsed.tasks})`);
+  }
 
   const tasks: Task[] = [];
-  for (const t of parsed.tasks || []) {
+  for (let i = 0; i < parsed.tasks.length; i++) {
+    const t = parsed.tasks[i];
     const id = String(tasks.length);
     if (typeof t === "string") {
+      if (!t.trim()) throw new Error(`Task ${i} is an empty string`);
       tasks.push({ id, prompt: t });
-    } else {
+    } else if (typeof t === "object" && t !== null) {
+      if (typeof t.prompt !== "string" || !t.prompt.trim()) {
+        throw new Error(`Task ${i} is missing a "prompt" string`);
+      }
       tasks.push({ id, prompt: t.prompt, cwd: t.cwd ? resolve(t.cwd) : undefined, model: t.model });
+    } else {
+      throw new Error(`Task ${i} must be a string or object with a "prompt" field (got ${typeof t})`);
     }
+  }
+
+  // Validate concurrency if present
+  if (parsed.concurrency !== undefined) {
+    validateConcurrency(parsed.concurrency);
   }
 
   return {
@@ -130,6 +177,31 @@ function loadTaskFile(file: string): FileArgs {
     allowedTools: parsed.allowedTools,
     useWorktrees: parsed.worktrees,
   };
+}
+
+// ── Validation helpers ──
+
+function validateConcurrency(value: unknown): asserts value is number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error(`Concurrency must be a positive integer (got ${JSON.stringify(value)})`);
+  }
+}
+
+function validateCwd(cwd: string): void {
+  if (!existsSync(cwd)) {
+    throw new Error(`Working directory does not exist: ${cwd}`);
+  }
+}
+
+function validateGitRepo(cwd: string): void {
+  try {
+    execSync("git rev-parse --git-dir", { cwd, encoding: "utf-8", stdio: "pipe" });
+  } catch {
+    throw new Error(
+      `Worktrees require a git repository, but ${cwd} is not inside one. ` +
+      `Run "git init" first or disable worktrees.`,
+    );
+  }
 }
 
 // ── Main ──
@@ -172,9 +244,14 @@ async function main() {
   const model = fileCfg?.model ?? (await pickModel(models));
   const permissionMode = fileCfg?.permissionMode ?? (await pickPermissionMode());
   const concurrency = fileCfg?.concurrency ?? (await pickConcurrency());
+  validateConcurrency(concurrency);
   const useWorktrees = fileCfg?.useWorktrees ?? (await pickWorktrees());
   const cwd = fileCfg?.cwd ?? process.cwd();
   const allowedTools = fileCfg?.allowedTools;
+
+  // Validate cwd exists and git repo if worktrees requested
+  validateCwd(cwd);
+  if (useWorktrees) validateGitRepo(cwd);
 
   // If no tasks yet, ask for an objective and plan
   let planMode = tasks.length === 0;
