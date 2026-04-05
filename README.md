@@ -97,7 +97,12 @@ Steering isn't a checklist ("what's missing?") — it's a quality critic ("how g
 
 **Goal refinement** — the tool starts with your broad vision but evolves its definition of "amazing" as it learns the codebase. Each steering decision can refine the goal, and all future waves inherit that understanding.
 
-**Run memory** accumulates in `.claude-overnight/` — design docs from thinking, quality reports from reflections, and the evolving goal. Every wave has full context from all previous waves.
+**Three-layer context** keeps the steering sharp across long runs:
+- **Status** (`status.md`) — a living project snapshot updated every wave. What's built, what works, what's rough. Replaces raw wave history so nothing is lost to truncation.
+- **Milestones** (`milestones/`) — archived every ~5 waves. Strategic snapshots that never get truncated, giving the steering long-term memory.
+- **Goal** (`goal.md`) — the evolving north star. Starts with your objective, refined as the tool learns what "amazing" means for your codebase.
+
+Plus design docs from the thinking wave and quality reports from reflections. Every steering decision has tactical, strategic, and aspirational context.
 
 The number of thinking agents scales with budget: 5 for budget=50, 10 for budget=2000+. Reflection is capped at ~5% of total budget.
 

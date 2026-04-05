@@ -277,13 +277,31 @@ function readMdDir(dir: string): string {
 }
 
 function readRunMemory(baseDir: string): RunMemory {
-  let goal = "";
+  let goal = "", status = "";
   try { goal = readFileSync(join(baseDir, "goal.md"), "utf-8"); } catch {}
+  try { status = readFileSync(join(baseDir, "status.md"), "utf-8"); } catch {}
   return {
     designs: readMdDir(join(baseDir, "designs")),
     reflections: readMdDir(join(baseDir, "reflections")),
+    milestones: readMdDir(join(baseDir, "milestones")),
+    status,
     goal,
   };
+}
+
+function writeStatus(baseDir: string, status: string): void {
+  writeFileSync(join(baseDir, "status.md"), status, "utf-8");
+}
+
+function archiveMilestone(baseDir: string, waveNum: number): void {
+  const statusPath = join(baseDir, "status.md");
+  if (!existsSync(statusPath)) return;
+  const content = readFileSync(statusPath, "utf-8");
+  if (!content.trim()) return;
+  const milestoneDir = join(baseDir, "milestones");
+  mkdirSync(milestoneDir, { recursive: true });
+  const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
+  writeFileSync(join(milestoneDir, `wave-${waveNum}.md`), `# Milestone — Wave ${waveNum} (${ts})\n\n${content}`, "utf-8");
 }
 
 function writeGoalUpdate(baseDir: string, update: string): void {
@@ -713,6 +731,7 @@ async function main() {
   // Wave-loop state
   const baseDir = join(cwd, ".claude-overnight");
   mkdirSync(join(baseDir, "reflections"), { recursive: true });
+  mkdirSync(join(baseDir, "milestones"), { recursive: true });
   // Seed goal.md with original objective
   if (objective && !existsSync(join(baseDir, "goal.md"))) {
     writeFileSync(join(baseDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
@@ -822,10 +841,15 @@ async function main() {
         process.stdout.write(`\x1B[2K\r`);
         process.stdout.write("\x1B[?25h");
 
+        // Persist context layers
+        if (steer.statusUpdate) writeStatus(baseDir, steer.statusUpdate);
         if (steer.goalUpdate) {
           writeGoalUpdate(baseDir, steer.goalUpdate);
           console.log(chalk.dim(`  Goal refined: ${steer.goalUpdate.slice(0, 100)}\n`));
         }
+        // Archive milestone every ~5 execution waves
+        const execWaves = waveHistory.filter(w => w.kind === "execute").length;
+        if (execWaves > 0 && execWaves % 5 === 0) archiveMilestone(baseDir, waveNum);
 
         if (steer.done || steer.action === "done") {
           console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));

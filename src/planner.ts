@@ -15,11 +15,14 @@ export interface SteerResult {
   tasks: Task[];
   reasoning: string;
   goalUpdate?: string;
+  statusUpdate?: string;
 }
 
 export interface RunMemory {
   designs: string;
   reflections: string;
+  milestones: string;
+  status: string;
   goal: string;
 }
 
@@ -692,10 +695,9 @@ export async function steerWave(
 ): Promise<SteerResult> {
   const capability = modelCapabilityBlock(workerModel);
 
-  // Keep context bounded — show recent history, truncate large blocks
-  const recentHistory = history.length > 8 ? history.slice(-8) : history;
-  const skipped = history.length - recentHistory.length;
-  const historyText = (skipped > 0 ? `(${skipped} earlier waves omitted)\n\n` : "") + recentHistory.map(w => {
+  // Three-layer context: status (current), milestones (strategic), recent waves (tactical)
+  const recentWaves = history.slice(-3);
+  const recentText = recentWaves.length > 0 ? recentWaves.map(w => {
     const tag = w.kind === "reflect" ? " (reflection)" : w.kind === "think" ? " (thinking)" : "";
     const lines = w.tasks.map(t => {
       const files = t.filesChanged ? ` (${t.filesChanged} files)` : "";
@@ -703,25 +705,28 @@ export async function steerWave(
       return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
     }).join("\n");
     return `Wave ${w.wave + 1}${tag}:\n${lines}`;
-  }).join("\n\n");
+  }).join("\n\n") : "(first wave)";
 
   const lastWasReflection = history.length > 0 && history[history.length - 1].kind === "reflect";
   const noReflectHint = lastWasReflection ? `\nIMPORTANT: The previous wave was a reflection. You MUST choose "execute" or "done" — not "reflect" again.\n` : "";
 
-  const truncate = (s: string, max: number) => s.length > max ? s.slice(0, max) + "\n\n(truncated)" : s;
-  const designBlock = runMemory?.designs ? `\nArchitectural research:\n${truncate(runMemory.designs, 6000)}\n` : "";
-  const reflectionBlock = runMemory?.reflections ? `\nPrevious quality reports:\n${truncate(runMemory.reflections, 4000)}\n` : "";
-  const goalBlock = runMemory?.goal ? `\nEvolving understanding of the goal:\n${runMemory.goal}\n` : "";
+  const cap = (s: string, max: number) => s.length > max ? s.slice(0, max) + "\n...(truncated)" : s;
+  const statusBlock = runMemory?.status ? `\nCurrent project status:\n${runMemory.status}\n` : "";
+  const milestoneBlock = runMemory?.milestones ? `\nMilestone snapshots:\n${cap(runMemory.milestones, 4000)}\n` : "";
+  const designBlock = runMemory?.designs ? `\nArchitectural research:\n${cap(runMemory.designs, 4000)}\n` : "";
+  const reflectionBlock = runMemory?.reflections ? `\nLatest quality reports:\n${cap(runMemory.reflections, 3000)}\n` : "";
+  const goalBlock = runMemory?.goal ? `\nNorth star — what "amazing" means:\n${runMemory.goal}\n` : "";
 
   const prompt = `You are the quality director for an autonomous multi-wave agent system. Your job is to push the work toward "amazing," not just "done."
 
 Objective: ${objective}
-${goalBlock}
-Work completed so far:
-${historyText}
+${goalBlock}${statusBlock}${milestoneBlock}
+Recent waves:
+${recentText}
 ${designBlock}${reflectionBlock}
 Remaining budget: ${remainingBudget} agent sessions. ${concurrency} agents run in parallel — tasks must touch DIFFERENT files.
 ${capability}
+Total waves completed: ${history.length}
 
 Read the codebase. Assess: how close is this to the VISION? Not "what's missing" — "how good is what we built?"
 
@@ -746,7 +751,8 @@ Respond with ONLY a JSON object (no markdown fences):
   "action": "execute" | "reflect" | "done",
   "done": true/false,
   "reasoning": "your assessment and why you chose this action",
-  "goalUpdate": "optional — if your understanding of 'amazing' has evolved, write it here",
+  "goalUpdate": "optional — refine what 'amazing' means as you learn more",
+  "statusUpdate": "REQUIRED — write a concise project status: what's built, what works, what's rough, quality level, key gaps. This replaces the previous status and is your memory for future waves.",
   "tasks": [{"prompt": "..."}]
 }`;
 
@@ -769,12 +775,14 @@ Respond with ONLY a JSON object (no markdown fences):
 
   const action: "execute" | "reflect" | "done" = parsed.action || (parsed.done ? "done" : "execute");
 
+  const statusUpdate = parsed.statusUpdate || undefined;
+
   if (action === "done") {
-    return { done: true, action: "done", tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate };
+    return { done: true, action: "done", tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate, statusUpdate };
   }
 
   if (action === "reflect") {
-    return { done: false, action: "reflect", tasks: [], reasoning: parsed.reasoning || "Quality audit needed", goalUpdate: parsed.goalUpdate };
+    return { done: false, action: "reflect", tasks: [], reasoning: parsed.reasoning || "Quality audit needed", goalUpdate: parsed.goalUpdate, statusUpdate };
   }
 
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
@@ -784,5 +792,5 @@ Respond with ONLY a JSON object (no markdown fences):
 
   tasks = postProcess(tasks, remainingBudget, onLog);
 
-  return { done: tasks.length === 0, action: tasks.length === 0 ? "done" : "execute", tasks, reasoning: parsed.reasoning || "", goalUpdate: parsed.goalUpdate };
+  return { done: tasks.length === 0, action: tasks.length === 0 ? "done" : "execute", tasks, reasoning: parsed.reasoning || "", goalUpdate: parsed.goalUpdate, statusUpdate };
 }
