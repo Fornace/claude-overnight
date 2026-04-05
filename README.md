@@ -43,15 +43,16 @@ claude-overnight
 │  sonnet · budget 200 · 5× · flex · cap 90% · no extra  │
 ╰──────────────────────────────────────────────────╯
 
+⠹ 8s · $0.04 · 12% · identifying themes   ← every phase shows cost + usage
 ✓ 5 themes → review, press Run, walk away
 
-◆ Thinking: 5 agents exploring...     ← architects analyze your codebase
-◆ Orchestrating plan...               ← synthesizes 50 concrete tasks
-◆ Wave 1 · 50 tasks                   ← fully autonomous from here
+◆ Thinking: 5 agents exploring...         ← architects analyze your codebase
+◆ Orchestrating plan...                   ← synthesizes 50 concrete tasks
+◆ Wave 1 · 50 tasks · $4.20 spent        ← fully autonomous from here
 ◆ Assessing... how close to amazing?
-◆ Wave 2 · 30 tasks                   ← improvements from assessment
-◆ Reflection: 2 agents reviewing      ← deep quality audit
-◆ Wave 3 · 20 tasks                   ← fixes from review findings
+◆ Wave 2 · 30 tasks · $18.50 spent       ← improvements from assessment
+◆ Reflection: 2 agents reviewing          ← deep quality audit
+◆ Wave 3 · 20 tasks · $31.00 spent       ← fixes from review findings
 ◆ Assessing... ✓ Vision met
 ```
 

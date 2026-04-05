@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+- Full progress UI during all planner phases — theme identification, orchestration, steering, and reflection now show elapsed time, cost, utilization %, and streaming text instead of bare spinners.
+
 ## 1.2.0
 
 ### Extra usage protection
