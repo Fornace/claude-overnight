@@ -796,7 +796,9 @@ async function main() {
     // ── Steer: assess quality and decide next action ──
     // May loop through reflect→re-steer cycles before producing execution tasks
     let steerDone = false;
-    while (!steerDone && remaining > 0 && !stopping) {
+    let steerAttempts = 0;
+    while (!steerDone && remaining > 0 && !stopping && steerAttempts < 4) {
+      steerAttempts++;
       console.log(chalk.cyan(`\n  ◆ Assessing...\n`));
       process.stdout.write("\x1B[?25l");
       try {
