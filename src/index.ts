@@ -799,13 +799,8 @@ async function main() {
     try {
       if (useThinking) {
         // Phase 1: Quick theme identification → review → then autonomous
-        let themeFrame = 0;
-        const themeSpinner = setInterval(() => {
-          const spin = chalk.cyan(BRAILLE[themeFrame++ % BRAILLE.length]);
-          process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim("identifying themes...")}`);
-        }, 120);
         let themes: string[];
-        try { themes = await identifyThemes(objective!, thinkingCount, plannerModel, permissionMode); } finally { clearInterval(themeSpinner); }
+        themes = await identifyThemes(objective!, thinkingCount, plannerModel, permissionMode, makeProgressLog());
         process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${themes.length} themes`)}\n\n`);
 
         // Show themes for review — this is the LAST user interaction
@@ -833,7 +828,7 @@ async function main() {
               if (!feedback) break;
               process.stdout.write("\x1B[?25l");
               try {
-                themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, plannerModel, permissionMode);
+                themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, plannerModel, permissionMode, makeProgressLog());
                 process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${themes.length} themes`)}\n\n`);
               } catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
               planRestore();

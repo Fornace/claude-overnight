@@ -452,23 +452,13 @@ export async function identifyThemes(
   count: number,
   model: string,
   permissionMode: PermMode,
+  onLog: (text: string) => void = () => {},
 ): Promise<string[]> {
-  let resultText = "";
-  for await (const msg of query({
-    prompt: `Split this objective into exactly ${count} independent research angles for architects exploring a codebase. Each angle should cover a distinct aspect.
-
-Objective: ${objective}
-
-Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
-    options: {
-      model,
-      permissionMode,
-      ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
-      persistSession: false,
-    },
-  })) {
-    if (msg.type === "result" && msg.subtype === "success") resultText = (msg as any).result || "";
-  }
+  const resultText = await runPlannerQuery(
+    `Split this objective into exactly ${count} independent research angles for architects exploring a codebase. Each angle should cover a distinct aspect.\n\nObjective: ${objective}\n\nReturn ONLY a JSON object: {"themes": ["angle description", ...]}`,
+    { cwd: process.cwd(), model, permissionMode },
+    onLog,
+  );
 
   const parsed = attemptJsonParse(resultText);
   if (parsed?.themes && Array.isArray(parsed.themes)) return parsed.themes.slice(0, count);
