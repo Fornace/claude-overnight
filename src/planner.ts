@@ -5,13 +5,22 @@ import type { Task, PermMode } from "./types.js";
 
 export interface WaveSummary {
   wave: number;
+  kind: "execute" | "reflect" | "think";
   tasks: { prompt: string; status: string; filesChanged?: number; error?: string }[];
 }
 
 export interface SteerResult {
   done: boolean;
+  action: "execute" | "reflect" | "done";
   tasks: Task[];
   reasoning: string;
+  goalUpdate?: string;
+}
+
+export interface RunMemory {
+  designs: string;
+  reflections: string;
+  goal: string;
 }
 
 const INACTIVITY_MS = 5 * 60 * 1000;
@@ -454,6 +463,51 @@ Be thorough — your findings drive the execution plan.`,
   }));
 }
 
+export function buildReflectionTasks(
+  objective: string,
+  goal: string,
+  reflectionDir: string,
+  waveNum: number,
+  plannerModel: string,
+): Task[] {
+  const goalBlock = goal ? `\nEVOLVED GOAL:\n${goal}\n` : "";
+  return [
+    {
+      id: "review-0",
+      prompt: `You are a senior code reviewer performing a deep quality audit.
+
+OBJECTIVE: ${objective}
+${goalBlock}
+Read the codebase thoroughly. Assess:
+- **Correctness**: Bugs, missing error handling, broken flows?
+- **Architecture**: Clean design? Unnecessary or missing abstractions?
+- **Code quality**: Readability, naming, duplication, dead code?
+- **Completeness**: What's missing vs. the objective? Half-done work?
+- **Polish**: Edge cases, error messages, loading states?
+
+Write findings to ${reflectionDir}/wave-${waveNum}-quality.md.
+End with a ## Verdict: is this closer to "good enough" or "amazing"? What would make the biggest difference?`,
+      model: plannerModel,
+    },
+    {
+      id: "review-1",
+      prompt: `You are a UX and integration reviewer.
+
+OBJECTIVE: ${objective}
+${goalBlock}
+Read the codebase. Assess:
+- **UX coherence**: Do user-facing flows make sense end-to-end? Consistent experience?
+- **Integration**: Do pieces fit together? Seams, inconsistencies, broken contracts?
+- **Testing**: Meaningful coverage? Testing the right things?
+- **Gaps**: Unhandled use cases? What would surprise a user?
+
+Write findings to ${reflectionDir}/wave-${waveNum}-ux.md.
+End with ## Priorities: rank the top 3 things that would most improve the result.`,
+      model: plannerModel,
+    },
+  ];
+}
+
 export async function orchestrate(
   objective: string,
   designDocs: string,
@@ -634,37 +688,64 @@ export async function steerWave(
   permissionMode: PermMode,
   concurrency: number,
   onLog: (text: string) => void,
-  designContext?: string,
+  runMemory?: RunMemory,
 ): Promise<SteerResult> {
   const capability = modelCapabilityBlock(workerModel);
   const historyText = history.map(w => {
+    const tag = w.kind === "reflect" ? " (reflection)" : w.kind === "think" ? " (thinking)" : "";
     const lines = w.tasks.map(t => {
       const files = t.filesChanged ? ` (${t.filesChanged} files)` : "";
       const err = t.error ? ` — ${t.error}` : "";
       return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
     }).join("\n");
-    return `Wave ${w.wave + 1}:\n${lines}`;
+    return `Wave ${w.wave + 1}${tag}:\n${lines}`;
   }).join("\n\n");
 
-  const prompt = `You are steering an autonomous multi-wave agent system. Read the codebase to understand current state, then decide what's next.
+  const lastWasReflection = history.length > 0 && history[history.length - 1].kind === "reflect";
+  const noReflectHint = lastWasReflection ? `\nIMPORTANT: The previous wave was a reflection. You MUST choose "execute" or "done" — not "reflect" again.\n` : "";
+
+  const designBlock = runMemory?.designs ? `\nArchitectural research:\n${runMemory.designs}\n` : "";
+  const reflectionBlock = runMemory?.reflections ? `\nPrevious quality reports:\n${runMemory.reflections}\n` : "";
+  const goalBlock = runMemory?.goal ? `\nEvolving understanding of the goal:\n${runMemory.goal}\n` : "";
+
+  const prompt = `You are the quality director for an autonomous multi-wave agent system. Your job is to push the work toward "amazing," not just "done."
 
 Objective: ${objective}
-
+${goalBlock}
 Work completed so far:
 ${historyText}
-${designContext ? `\nOriginal architectural research:\n${designContext}\n` : ""}
+${designBlock}${reflectionBlock}
 Remaining budget: ${remainingBudget} agent sessions. ${concurrency} agents run in parallel — tasks must touch DIFFERENT files.
 ${capability}
 
-Read the codebase. Then decide:
-- Is the objective fully met? → {"done": true, "reasoning": "..."}
-- More work needed? Plan the next wave → {"done": false, "reasoning": "what needs doing and why", "tasks": [{"prompt": "..."}]}
+Read the codebase. Assess: how close is this to the VISION? Not "what's missing" — "how good is what we built?"
 
-Think like a tech lead between sprints: what shipped, what's missing, what needs polish, what should be scrapped and redone, what's over-engineered. Less is more — don't add work for the sake of filling budget.
+Then choose ONE action:
 
-Respond with ONLY a JSON object (no markdown fences).`;
+**"reflect"** — Spin up 1-2 review agents for a deep quality audit. Choose when:
+  - Substantial new code shipped and hasn't been reviewed
+  - You're unsure about quality and need expert eyes
+  - A subsystem just "completed" and deserves verification
 
-  onLog("Reading codebase...");
+**"execute"** — Plan the next batch of tasks. Choose when:
+  - You know what needs doing (from reviews or your own assessment)
+  - There are clear gaps, bugs, or improvements to make
+
+**"done"** — The objective is met at high quality. Choose when:
+  - The code works correctly and handles edge cases
+  - The architecture is clean and pieces fit together
+  - Further work would be diminishing returns
+${noReflectHint}
+Respond with ONLY a JSON object (no markdown fences):
+{
+  "action": "execute" | "reflect" | "done",
+  "done": true/false,
+  "reasoning": "your assessment and why you chose this action",
+  "goalUpdate": "optional — if your understanding of 'amazing' has evolved, write it here",
+  "tasks": [{"prompt": "..."}]
+}`;
+
+  onLog("Assessing...");
   const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
 
   const parsed = await (async () => {
@@ -673,16 +754,22 @@ Respond with ONLY a JSON object (no markdown fences).`;
     onLog("Retrying...");
     let retryText = "";
     for await (const msg of query({
-      prompt: `Output ONLY a JSON object: {"done":true/false,"reasoning":"...","tasks":[{"prompt":"..."}]}`,
+      prompt: `Output ONLY a JSON object: {"action":"execute"|"reflect"|"done","done":true/false,"reasoning":"...","tasks":[{"prompt":"..."}]}`,
       options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
     })) {
       if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
     }
-    return attemptJsonParse(retryText) ?? { done: true, reasoning: "Could not parse steering response" };
+    return attemptJsonParse(retryText) ?? { action: "done", done: true, reasoning: "Could not parse steering response" };
   })();
 
-  if (parsed.done) {
-    return { done: true, tasks: [], reasoning: parsed.reasoning || "Objective complete" };
+  const action: "execute" | "reflect" | "done" = parsed.action || (parsed.done ? "done" : "execute");
+
+  if (action === "done") {
+    return { done: true, action: "done", tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate };
+  }
+
+  if (action === "reflect") {
+    return { done: false, action: "reflect", tasks: [], reasoning: parsed.reasoning || "Quality audit needed", goalUpdate: parsed.goalUpdate };
   }
 
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
@@ -692,5 +779,5 @@ Respond with ONLY a JSON object (no markdown fences).`;
 
   tasks = postProcess(tasks, remainingBudget, onLog);
 
-  return { done: tasks.length === 0, tasks, reasoning: parsed.reasoning || "" };
+  return { done: tasks.length === 0, action: tasks.length === 0 ? "done" : "execute", tasks, reasoning: parsed.reasoning || "", goalUpdate: parsed.goalUpdate };
 }

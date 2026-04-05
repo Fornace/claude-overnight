@@ -68,17 +68,38 @@ The planner always runs on the best available model (Opus) regardless of which m
 For large budgets (`budget > concurrency * 3`), the planner doesn't try to generate hundreds of tasks from scratch. Instead, it launches a **thinking wave** — a team of architect agents that explore your codebase in parallel before any code is written.
 
 ```
-⠋ identifying themes...          → splits objective into N angles (< 30s)
-✓ 10 themes                      → review themes, press Run, walk away
-◆ Thinking: 10 agents exploring  → each explores from its angle, writes a design doc
-◆ Orchestrating plan...          → reads all design docs, synthesizes execution tasks
-◆ Wave 1 · 50 tasks              → fully autonomous from here
-◆ Steering...                    → adapts between waves, retries on rate limits
+⠋ identifying themes...           → splits objective into N angles (< 30s)
+✓ 10 themes                       → review themes, press Run, walk away
+◆ Thinking: 10 agents exploring   → each explores, writes a design doc
+◆ Orchestrating plan...           → synthesizes execution tasks from designs
+◆ Wave 1 · 50 tasks               → fully autonomous from here
+◆ Assessing...                    → "how good is this? how close to amazing?"
+  → Goal refined: "focus on UX polish and error handling"
+◆ Wave 2 · 30 tasks               → improvements based on assessment
+◆ Assessing...                    → decides: deep quality audit needed
+◆ Reflection: 2 agents reviewing  → code quality + UX audit reports
+◆ Assessing...                    → reads reflection reports, plans fixes
+◆ Wave 3 · 20 tasks               → targeted fixes from review findings
+◆ Assessing... ✓ Vision met       → done
 ```
 
-The review prompt appears right after theme identification — the last thing requiring your presence. After you press Run, the thinking wave, orchestration, execution, and steering all run autonomously. Rate-limited? The planner waits and retries. Go to sleep.
+The review prompt appears right after theme identification — the last thing requiring your presence. After you press Run, everything is autonomous. Rate-limited? The planner waits and retries. Go to sleep.
 
-The number of thinking agents scales with budget: 5 for budget=50, 10 for budget=2000+. Each agent explores the codebase from a different angle and writes a structured design document. The orchestrator then reads all design docs and produces grounded execution tasks referencing real files and patterns.
+### Iterative improvement
+
+Steering isn't a checklist ("what's missing?") — it's a quality critic ("how good is this?"). After each wave, the steering agent:
+
+1. **Reads the codebase** to assess current state
+2. **Reads accumulated artifacts** — design docs, previous reflection reports, the evolving goal
+3. **Decides**: execute more tasks, spin up a reflection wave, or declare done
+
+**Reflection waves** are 1-2 review agents (using the best model) that deeply audit the code for quality, UX coherence, architecture, and gaps. Their reports drive the next execution wave — targeted improvements, not guesswork.
+
+**Goal refinement** — the tool starts with your broad vision but evolves its definition of "amazing" as it learns the codebase. Each steering decision can refine the goal, and all future waves inherit that understanding.
+
+**Run memory** accumulates in `.claude-overnight/` — design docs from thinking, quality reports from reflections, and the evolving goal. Every wave has full context from all previous waves.
+
+The number of thinking agents scales with budget: 5 for budget=50, 10 for budget=2000+. Reflection is capped at ~5% of total budget.
 
 For small budgets (≤ `concurrency * 3`), the planner skips the thinking wave and generates tasks directly — fast and efficient for focused work.
 

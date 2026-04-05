@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { execSync } from "child_process";
@@ -8,8 +8,8 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, orchestrate } from "./planner.js";
-import type { WaveSummary } from "./planner.js";
+import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, buildReflectionTasks, orchestrate } from "./planner.js";
+import type { WaveSummary, RunMemory } from "./planner.js";
 import { startRenderLoop, renderSummary } from "./ui.js";
 import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
 
@@ -266,7 +266,7 @@ function showPlan(tasks: Task[]) {
   console.log(chalk.dim(`  ${"─".repeat(ruleLen)}\n`));
 }
 
-function readDesignDocs(dir: string): string {
+function readMdDir(dir: string): string {
   try {
     const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
     return files.map(f => {
@@ -274,6 +274,28 @@ function readDesignDocs(dir: string): string {
       return `### ${f}\n${content}`;
     }).join("\n\n");
   } catch { return ""; }
+}
+
+function readRunMemory(baseDir: string): RunMemory {
+  let goal = "";
+  try { goal = readFileSync(join(baseDir, "goal.md"), "utf-8"); } catch {}
+  return {
+    designs: readMdDir(join(baseDir, "designs")),
+    reflections: readMdDir(join(baseDir, "reflections")),
+    goal,
+  };
+}
+
+function writeGoalUpdate(baseDir: string, update: string): void {
+  const goalPath = join(baseDir, "goal.md");
+  let existing = "";
+  try { existing = readFileSync(goalPath, "utf-8"); } catch {}
+  const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const entry = `\n\n## Update — ${ts}\n${update}`;
+  const full = existing + entry;
+  // Keep it bounded: original + last ~3000 chars of updates
+  const trimmed = full.length > 4000 ? full.slice(0, 1000) + "\n\n...\n\n" + full.slice(-3000) : full;
+  writeFileSync(goalPath, trimmed, "utf-8");
 }
 
 const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
@@ -490,7 +512,6 @@ async function main() {
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
   let thinkingUsed = 0;
   let thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
-  let designContext: string | undefined;
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
   const needsPlan = tasks.length === 0;
@@ -582,12 +603,12 @@ async function main() {
         thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
 
         // Phase 3: Orchestrate from design docs
-        designContext = readDesignDocs(designDir);
-        if (designContext) {
+        const designs = readMdDir(designDir);
+        if (designs) {
           const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
           const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
           console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
-          tasks = await orchestrate(objective!, designContext, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote);
+          tasks = await orchestrate(objective!, designs, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote);
           process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
         } else {
           console.log(chalk.yellow(`\n  No design docs — falling back to direct planning\n`));
@@ -678,6 +699,13 @@ async function main() {
   const runStartedAt = Date.now();
 
   // Wave-loop state
+  const baseDir = join(cwd, ".claude-overnight");
+  mkdirSync(join(baseDir, "reflections"), { recursive: true });
+  // Seed goal.md with original objective
+  if (objective && !existsSync(join(baseDir, "goal.md"))) {
+    writeFileSync(join(baseDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
+  }
+
   let currentSwarm: Swarm | undefined;
   let remaining = (budget ?? tasks.length) - thinkingUsed;
   let currentTasks = tasks;
@@ -685,6 +713,9 @@ async function main() {
   const waveHistory: WaveSummary[] = [];
   let accCost = thinkingCost, accIn = thinkingIn, accOut = thinkingOut, accCompleted = 0, accFailed = 0, accTools = thinkingTools;
   let lastCapped = false, lastAborted = false;
+  let lastWaveKind: "execute" | "reflect" | "think" = "execute";
+  let reflectionBudgetUsed = 0;
+  const maxReflectionBudget = Math.max(2, Math.ceil((budget ?? 10) * 0.05));
 
   // For flex + branch strategy: create one target branch, waves merge via yolo into it
   let runBranch: string | undefined;
@@ -751,6 +782,7 @@ async function main() {
 
     waveHistory.push({
       wave: waveNum,
+      kind: lastWaveKind,
       tasks: swarm.agents.map(a => ({
         prompt: a.task.prompt,
         status: a.status,
@@ -761,24 +793,81 @@ async function main() {
 
     if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
 
-    // ── Steer next wave ──
-    console.log(chalk.cyan("\n  ◆ Steering...\n"));
+    // ── Steer: assess quality and decide next action ──
+    console.log(chalk.cyan("\n  ◆ Assessing...\n"));
     process.stdout.write("\x1B[?25l");
     try {
+      const memory = readRunMemory(baseDir);
       const steer = await steerWave(
         objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
-        permissionMode, concurrency, makeProgressLog(), designContext,
+        permissionMode, concurrency, makeProgressLog(), memory,
       );
       process.stdout.write(`\x1B[2K\r`);
       process.stdout.write("\x1B[?25h");
+
+      // Persist goal evolution
+      if (steer.goalUpdate) {
+        writeGoalUpdate(baseDir, steer.goalUpdate);
+        console.log(chalk.dim(`  Goal refined: ${steer.goalUpdate.slice(0, 100)}\n`));
+      }
 
       if (steer.done) {
         console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
         break;
       }
 
-      console.log(chalk.dim(`  ${steer.reasoning}\n`));
-      currentTasks = steer.tasks;
+      if (steer.action === "reflect") {
+        // Safety: no consecutive reflections, budget cap
+        if (lastWaveKind === "reflect" || reflectionBudgetUsed + 2 > maxReflectionBudget) {
+          console.log(chalk.dim(`  ${steer.reasoning}`));
+          console.log(chalk.yellow(`  Reflection skipped (${lastWaveKind === "reflect" ? "consecutive" : "budget cap"}) — re-steering as execute\n`));
+          // Re-steer without reflection option
+          const memory2 = readRunMemory(baseDir);
+          const steer2 = await steerWave(objective!, waveHistory, remaining, cwd, plannerModel, workerModel, permissionMode, concurrency, makeProgressLog(), memory2);
+          process.stdout.write(`\x1B[2K\r`);
+          if (steer2.goalUpdate) writeGoalUpdate(baseDir, steer2.goalUpdate);
+          if (steer2.done || steer2.tasks.length === 0) { console.log(chalk.green(`  \u2713 ${steer2.reasoning}\n`)); break; }
+          currentTasks = steer2.tasks;
+          lastWaveKind = "execute";
+        } else {
+          // Run reflection wave
+          console.log(chalk.dim(`  ${steer.reasoning}`));
+          console.log(chalk.cyan(`\n  ◆ Reflection: 2 agents reviewing...\n`));
+          const reflectionDir = join(baseDir, "reflections");
+          const reflTasks = buildReflectionTasks(objective!, memory.goal, reflectionDir, waveNum, plannerModel);
+          const reflSwarm = new Swarm({
+            tasks: reflTasks, concurrency: 2, cwd,
+            model: plannerModel, permissionMode,
+            useWorktrees: false, mergeStrategy: "yolo",
+            agentTimeoutMs, usageCap,
+          });
+          currentSwarm = reflSwarm;
+          const stopReflRender = startRenderLoop(reflSwarm);
+          try { await reflSwarm.run(); } finally { stopReflRender(); }
+          console.log(renderSummary(reflSwarm));
+
+          // Accumulate reflection costs
+          accCost += reflSwarm.totalCostUsd;
+          accIn += reflSwarm.totalInputTokens;
+          accOut += reflSwarm.totalOutputTokens;
+          accTools += reflSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+          remaining -= reflSwarm.completed + reflSwarm.failed;
+          reflectionBudgetUsed += reflSwarm.completed + reflSwarm.failed;
+
+          waveHistory.push({
+            wave: waveNum + 1,
+            kind: "reflect",
+            tasks: reflSwarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, filesChanged: a.filesChanged, error: a.error })),
+          });
+          lastWaveKind = "reflect";
+          waveNum += 2; // count both the steer decision and reflection as waves
+          continue; // re-steer with reflection artifacts
+        }
+      } else {
+        console.log(chalk.dim(`  ${steer.reasoning}\n`));
+        currentTasks = steer.tasks;
+        lastWaveKind = "execute";
+      }
       waveNum++;
     } catch (err: any) {
       process.stdout.write("\x1B[?25h");
@@ -787,8 +876,8 @@ async function main() {
     }
   }
 
-  // Clean up design docs
-  try { rmSync(join(cwd, ".claude-overnight", "designs"), { recursive: true, force: true }); } catch {}
+  // Clean up run artifacts
+  try { rmSync(join(cwd, ".claude-overnight"), { recursive: true, force: true }); } catch {}
 
   // Switch back if we created a run branch
   if (runBranch && originalRef) {
