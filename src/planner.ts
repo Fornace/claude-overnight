@@ -691,7 +691,11 @@ export async function steerWave(
   runMemory?: RunMemory,
 ): Promise<SteerResult> {
   const capability = modelCapabilityBlock(workerModel);
-  const historyText = history.map(w => {
+
+  // Keep context bounded — show recent history, truncate large blocks
+  const recentHistory = history.length > 8 ? history.slice(-8) : history;
+  const skipped = history.length - recentHistory.length;
+  const historyText = (skipped > 0 ? `(${skipped} earlier waves omitted)\n\n` : "") + recentHistory.map(w => {
     const tag = w.kind === "reflect" ? " (reflection)" : w.kind === "think" ? " (thinking)" : "";
     const lines = w.tasks.map(t => {
       const files = t.filesChanged ? ` (${t.filesChanged} files)` : "";
@@ -704,8 +708,9 @@ export async function steerWave(
   const lastWasReflection = history.length > 0 && history[history.length - 1].kind === "reflect";
   const noReflectHint = lastWasReflection ? `\nIMPORTANT: The previous wave was a reflection. You MUST choose "execute" or "done" — not "reflect" again.\n` : "";
 
-  const designBlock = runMemory?.designs ? `\nArchitectural research:\n${runMemory.designs}\n` : "";
-  const reflectionBlock = runMemory?.reflections ? `\nPrevious quality reports:\n${runMemory.reflections}\n` : "";
+  const truncate = (s: string, max: number) => s.length > max ? s.slice(0, max) + "\n\n(truncated)" : s;
+  const designBlock = runMemory?.designs ? `\nArchitectural research:\n${truncate(runMemory.designs, 6000)}\n` : "";
+  const reflectionBlock = runMemory?.reflections ? `\nPrevious quality reports:\n${truncate(runMemory.reflections, 4000)}\n` : "";
   const goalBlock = runMemory?.goal ? `\nEvolving understanding of the goal:\n${runMemory.goal}\n` : "";
 
   const prompt = `You are the quality director for an autonomous multi-wave agent system. Your job is to push the work toward "amazing," not just "done."

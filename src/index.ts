@@ -512,6 +512,7 @@ async function main() {
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
   let thinkingUsed = 0;
   let thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
+  let thinkingHistory: WaveSummary | undefined;
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
   const needsPlan = tasks.length === 0;
@@ -601,6 +602,17 @@ async function main() {
         thinkingIn = thinkingSwarm.totalInputTokens;
         thinkingOut = thinkingSwarm.totalOutputTokens;
         thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+        // Record thinking wave so steering knows what happened
+        thinkingHistory = {
+          wave: -1,
+          kind: "think" as const,
+          tasks: thinkingSwarm.agents.map(a => ({
+            prompt: a.task.prompt.slice(0, 200),
+            status: a.status,
+            filesChanged: a.filesChanged,
+            error: a.error,
+          })),
+        };
 
         // Phase 3: Orchestrate from design docs
         const designs = readMdDir(designDir);
@@ -710,7 +722,7 @@ async function main() {
   let remaining = (budget ?? tasks.length) - thinkingUsed;
   let currentTasks = tasks;
   let waveNum = 0;
-  const waveHistory: WaveSummary[] = [];
+  const waveHistory: WaveSummary[] = thinkingHistory ? [thinkingHistory] : [];
   let accCost = thinkingCost, accIn = thinkingIn, accOut = thinkingOut, accCompleted = 0, accFailed = 0, accTools = thinkingTools;
   let lastCapped = false, lastAborted = false;
   let lastWaveKind: "execute" | "reflect" | "think" = "execute";
