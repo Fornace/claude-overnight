@@ -13,6 +13,16 @@ import type {
 import { NudgeError } from "./types.js";
 import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow } from "./types.js";
 
+const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
+
+Run \`git diff\` to see what you changed, then fix any issues:
+
+1. **Reuse**: Search the codebase — did you write something that already exists? Use existing utilities, helpers, patterns instead.
+2. **Quality**: Redundant state, copy-paste with slight variation, leaky abstractions, unnecessary wrappers/nesting, comments that narrate what the code does? Delete them.
+3. **Efficiency**: Redundant computations, sequential operations that could be parallel, unnecessary existence checks before operations, unbounded data structures, missing cleanup?
+
+Less code is better. Delete and simplify rather than add. Fix directly — no need to explain.`;
+
 export interface SwarmConfig {
   tasks: Task[];
   concurrency: number;
@@ -278,9 +288,10 @@ export class Swarm {
         const perm = this.config.permissionMode ?? "auto";
         let resumeSessionId: string | undefined;
 
+        let resumePrompt = "Continue. Complete the task.";
         const runOnce = async (isResume: boolean): Promise<void> => {
           const agentPrompt = isResume
-            ? "Continue. Complete the task."
+            ? resumePrompt
             : this.config.useWorktrees
               ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
               : task.prompt;
@@ -349,6 +360,17 @@ export class Swarm {
             await runOnce(true);
           } else {
             throw nudgeErr;
+          }
+        }
+
+        // Simplify pass: resume session with review prompt
+        if (resumeSessionId && agent.status === "running") {
+          try {
+            this.log(id, "Simplify pass");
+            resumePrompt = SIMPLIFY_PROMPT;
+            await runOnce(true);
+          } catch {
+            this.log(id, "Simplify pass skipped");
           }
         }
 

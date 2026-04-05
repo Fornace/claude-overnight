@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0
+
+### Auto-simplify pass
+
+Every agent now runs a self-review pass after completing its task. The agent's session is resumed with a simplify prompt that tells it to `git diff`, check for code reuse opportunities, quality issues, and inefficiencies, then fix them directly.
+
+- Uses the existing interrupt+resume infrastructure — no extra agent sessions consumed
+- Non-fatal: if the simplify pass fails (timeout, rate limit), the task is still marked done
+- Review checklist covers: existing utility reuse, redundant state/copy-paste/unnecessary abstractions, and efficiency (redundant work, missed concurrency, unbounded structures)
+
 ## 1.3.0
 
 ### Interrupt + resume for silent queries

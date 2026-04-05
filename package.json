@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Run 10, 100, or 1000 Claude agents overnight. Parallel autonomous AI coding with thinking waves, iterative quality steering, crash recovery, and rate limit handling. Built on the Claude Agent SDK.",
   "type": "module",
   "bin": {

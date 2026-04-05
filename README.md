@@ -70,7 +70,9 @@ An orchestrator agent reads all design documents and synthesizes concrete execut
 
 ### 3. Iterative execution
 
-Tasks run in parallel (each agent in its own git worktree). After each wave, steering assesses: "how good is this?" — not "what's missing?" It can:
+Tasks run in parallel (each agent in its own git worktree). After completing its task, each agent automatically runs a **simplify pass** — reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits.
+
+After each wave, steering assesses: "how good is this?" — not "what's missing?" It can:
 
 - **Execute** more tasks to build features, fix bugs, polish UX
 - **Reflect** by spinning up 1-2 review agents for deep quality/architecture audits
