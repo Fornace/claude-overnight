@@ -52,7 +52,7 @@ claude-overnight
 ◆ Assessing... ✓ Vision met
 ```
 
-You interact once (objective, budget, model, review themes), then everything runs autonomously — thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off.
+You interact once (objective, budget, model, review themes), then everything runs autonomously — thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
 
 ## How it works
 
@@ -62,7 +62,7 @@ For budgets > 15, the tool launches **architect agents** that explore your codeb
 
 ### 2. Orchestration
 
-An orchestrator agent reads all design documents and synthesizes concrete execution tasks — grounded in real files and patterns the architects found. No guesswork.
+An orchestrator agent reads all design documents and synthesizes concrete execution tasks — grounded in real files and patterns the architects found. No guesswork. The task plan is also written to a file for resilience — if orchestration is interrupted, partial results survive.
 
 ### 3. Iterative execution
 
@@ -97,20 +97,30 @@ Every run gets its own folder in `.claude-overnight/runs/`. Nothing is ever over
       run.json, sessions/
 ```
 
-If a run crashes, gets rate-limited, or you Ctrl+C:
+Any run that stops before the steering system declares the objective complete — capped at usage limit, Ctrl+C, crash, rate limit timeout, steering failure — is automatically resumable:
 
 ```
-  ⚠ Interrupted run
+  ⚠ Unfinished run
   ╭──────────────────────────────────────────────────╮
   │  refactor auth, add tests, update docs           │
-  │  50/200 sessions · 3 waves · $69.16              │
+  │  50/200 sessions · 150 remaining · $69.16        │
   │  34 merged · 16 unmerged · 0 failed branches     │
   ╰──────────────────────────────────────────────────╯
 
   Resume  │  Fresh  │  Quit
 ```
 
-On resume: unmerged branches auto-merge, the wave loop continues, all context is preserved.
+On resume: unmerged branches auto-merge, the wave loop continues, all context is preserved. Designs and reflections stay on disk until the objective is truly complete.
+
+If the thinking phase succeeds but orchestration crashes, the next run detects the orphaned design docs and reuses them — no re-running $9 worth of architect agents:
+
+```
+  ✓ Reusing 5 design docs (from prior attempt)
+    Focus 0: Project Wizard UI vs VISION.md Flow
+    Focus 1: Team Load and Rebalancer Surface
+    Focus 2: Code Health After Swarm Wave
+    ...
+```
 
 **Knowledge carries forward** — new runs inherit knowledge from completed previous runs. Thinking agents and steering see what past runs built. Run 2 knows run 1 already built the auth system.
 
@@ -186,9 +196,10 @@ Built for unattended runs lasting hours or days.
 
 - **Hard block**: pauses until the rate limit window resets, then resumes
 - **Soft throttle**: slows dispatch at >75% utilization
+- **Cooldown between phases**: waits for rate limit reset after thinking before starting orchestration
 - **Retry with backoff**: transient errors (429, overloaded) retry automatically
-- **Usage cap**: set a ceiling, active agents finish, no new ones start
-- **Planner retries**: steering and orchestration also retry on rate limits (30s/60s/120s backoff)
+- **Usage cap**: set a ceiling, active agents finish, no new ones start — run is resumable
+- **Planner retries**: steering and orchestration retry on rate limits (30s/60s/120s backoff) with full context
 
 ## Worktrees and merging
 
