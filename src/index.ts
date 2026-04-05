@@ -794,46 +794,47 @@ async function main() {
     if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
 
     // ── Steer: assess quality and decide next action ──
-    console.log(chalk.cyan("\n  ◆ Assessing...\n"));
-    process.stdout.write("\x1B[?25l");
-    try {
-      const memory = readRunMemory(baseDir);
-      const steer = await steerWave(
-        objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
-        permissionMode, concurrency, makeProgressLog(), memory,
-      );
-      process.stdout.write(`\x1B[2K\r`);
-      process.stdout.write("\x1B[?25h");
+    // May loop through reflect→re-steer cycles before producing execution tasks
+    let steerDone = false;
+    while (!steerDone && remaining > 0 && !stopping) {
+      console.log(chalk.cyan(`\n  ◆ Assessing...\n`));
+      process.stdout.write("\x1B[?25l");
+      try {
+        const memory = readRunMemory(baseDir);
+        const steer = await steerWave(
+          objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
+          permissionMode, concurrency, makeProgressLog(), memory,
+        );
+        process.stdout.write(`\x1B[2K\r`);
+        process.stdout.write("\x1B[?25h");
 
-      // Persist goal evolution
-      if (steer.goalUpdate) {
-        writeGoalUpdate(baseDir, steer.goalUpdate);
-        console.log(chalk.dim(`  Goal refined: ${steer.goalUpdate.slice(0, 100)}\n`));
-      }
+        if (steer.goalUpdate) {
+          writeGoalUpdate(baseDir, steer.goalUpdate);
+          console.log(chalk.dim(`  Goal refined: ${steer.goalUpdate.slice(0, 100)}\n`));
+        }
 
-      if (steer.done) {
-        console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
-        break;
-      }
+        if (steer.done || steer.action === "done") {
+          console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
+          steerDone = true;
+          remaining = 0; // exit outer loop too
+          break;
+        }
 
-      if (steer.action === "reflect") {
-        // Safety: no consecutive reflections, budget cap
-        if (lastWaveKind === "reflect" || reflectionBudgetUsed + 2 > maxReflectionBudget) {
-          console.log(chalk.dim(`  ${steer.reasoning}`));
-          console.log(chalk.yellow(`  Reflection skipped (${lastWaveKind === "reflect" ? "consecutive" : "budget cap"}) — re-steering as execute\n`));
-          // Re-steer without reflection option
-          const memory2 = readRunMemory(baseDir);
-          const steer2 = await steerWave(objective!, waveHistory, remaining, cwd, plannerModel, workerModel, permissionMode, concurrency, makeProgressLog(), memory2);
-          process.stdout.write(`\x1B[2K\r`);
-          if (steer2.goalUpdate) writeGoalUpdate(baseDir, steer2.goalUpdate);
-          if (steer2.done || steer2.tasks.length === 0) { console.log(chalk.green(`  \u2713 ${steer2.reasoning}\n`)); break; }
-          currentTasks = steer2.tasks;
-          lastWaveKind = "execute";
-        } else {
+        if (steer.action === "reflect") {
+          // Safety: no consecutive reflections, budget cap
+          const canReflect = lastWaveKind !== "reflect" && reflectionBudgetUsed + 2 <= maxReflectionBudget;
+          if (!canReflect) {
+            console.log(chalk.dim(`  ${steer.reasoning}`));
+            console.log(chalk.yellow(`  Reflection skipped (${lastWaveKind === "reflect" ? "consecutive" : "budget cap"}) — re-assessing\n`));
+            lastWaveKind = "execute"; // allow next steer to see non-reflect
+            continue; // re-steer in this inner loop
+          }
+
           // Run reflection wave
           console.log(chalk.dim(`  ${steer.reasoning}`));
           console.log(chalk.cyan(`\n  ◆ Reflection: 2 agents reviewing...\n`));
           const reflectionDir = join(baseDir, "reflections");
+          waveNum++;
           const reflTasks = buildReflectionTasks(objective!, memory.goal, reflectionDir, waveNum, plannerModel);
           const reflSwarm = new Swarm({
             tasks: reflTasks, concurrency: 2, cwd,
@@ -846,34 +847,42 @@ async function main() {
           try { await reflSwarm.run(); } finally { stopReflRender(); }
           console.log(renderSummary(reflSwarm));
 
-          // Accumulate reflection costs
           accCost += reflSwarm.totalCostUsd;
           accIn += reflSwarm.totalInputTokens;
           accOut += reflSwarm.totalOutputTokens;
+          accCompleted += reflSwarm.completed;
+          accFailed += reflSwarm.failed;
           accTools += reflSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
           remaining -= reflSwarm.completed + reflSwarm.failed;
           reflectionBudgetUsed += reflSwarm.completed + reflSwarm.failed;
 
           waveHistory.push({
-            wave: waveNum + 1,
+            wave: waveNum,
             kind: "reflect",
             tasks: reflSwarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, filesChanged: a.filesChanged, error: a.error })),
           });
           lastWaveKind = "reflect";
-          waveNum += 2; // count both the steer decision and reflection as waves
           continue; // re-steer with reflection artifacts
         }
-      } else {
+
+        // action === "execute"
+        if (steer.tasks.length === 0) {
+          console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
+          remaining = 0;
+          break;
+        }
         console.log(chalk.dim(`  ${steer.reasoning}\n`));
         currentTasks = steer.tasks;
         lastWaveKind = "execute";
+        steerDone = true; // exit inner loop, outer loop runs the tasks
+      } catch (err: any) {
+        process.stdout.write("\x1B[?25h");
+        console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
+        remaining = 0;
+        break;
       }
-      waveNum++;
-    } catch (err: any) {
-      process.stdout.write("\x1B[?25h");
-      console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
-      break;
     }
+    waveNum++;
   }
 
   // Clean up run artifacts
