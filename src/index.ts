@@ -11,7 +11,7 @@ import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, buildReflectionTasks, orchestrate } from "./planner.js";
 import type { WaveSummary, RunMemory } from "./planner.js";
 import { startRenderLoop, renderSummary } from "./ui.js";
-import type { Task, TaskFile, PermMode, MergeStrategy } from "./types.js";
+import type { Task, TaskFile, PermMode, MergeStrategy, RunState, BranchRecord } from "./types.js";
 
 // ── CLI flag parsing ──
 
@@ -293,6 +293,80 @@ function writeStatus(baseDir: string, status: string): void {
   writeFileSync(join(baseDir, "status.md"), status, "utf-8");
 }
 
+function saveRunState(baseDir: string, state: RunState): void {
+  mkdirSync(baseDir, { recursive: true });
+  writeFileSync(join(baseDir, "run.json"), JSON.stringify(state, null, 2), "utf-8");
+}
+
+function loadRunState(baseDir: string): RunState | null {
+  try {
+    return JSON.parse(readFileSync(join(baseDir, "run.json"), "utf-8"));
+  } catch { return null; }
+}
+
+function saveWaveSession(baseDir: string, waveNum: number, kind: string, swarm: Swarm): void {
+  const dir = join(baseDir, "sessions");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `wave-${waveNum}.json`), JSON.stringify({
+    wave: waveNum, kind,
+    agents: swarm.agents.map(a => ({
+      id: a.id,
+      prompt: a.task.prompt,
+      status: a.status,
+      error: a.error,
+      cost: a.costUsd,
+      toolCalls: a.toolCalls,
+      filesChanged: a.filesChanged,
+      duration: a.finishedAt && a.startedAt ? a.finishedAt - a.startedAt : 0,
+      branch: a.branch,
+    })),
+    totalCost: swarm.totalCostUsd,
+  }, null, 2), "utf-8");
+}
+
+function recordBranches(swarm: Swarm, branches: BranchRecord[]): void {
+  for (const a of swarm.agents) {
+    if (a.branch) {
+      branches.push({
+        branch: a.branch,
+        taskPrompt: a.task.prompt.slice(0, 200),
+        status: a.status === "done" ? "unmerged" : "failed",
+        filesChanged: a.filesChanged ?? 0,
+        costUsd: a.costUsd ?? 0,
+      });
+    }
+  }
+  // Update with merge results
+  for (const mr of swarm.mergeResults) {
+    const br = branches.find(b => b.branch === mr.branch);
+    if (br) br.status = mr.ok ? "merged" : "merge-failed";
+  }
+}
+
+function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: (msg: string) => void): void {
+  const unmerged = branches.filter(b => b.status === "unmerged" && b.filesChanged > 0);
+  if (unmerged.length === 0) return;
+  onLog(`Merging ${unmerged.length} unmerged branches...`);
+  for (const br of unmerged) {
+    try {
+      execSync(`git merge --no-edit "${br.branch}"`, { cwd, encoding: "utf-8", stdio: "pipe" });
+      br.status = "merged";
+      onLog(`  ✓ ${br.branch} (${br.filesChanged} files)`);
+    } catch {
+      try {
+        try { execSync("git merge --abort", { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
+        execSync(`git merge --no-edit -X theirs "${br.branch}"`, { cwd, encoding: "utf-8", stdio: "pipe" });
+        br.status = "merged";
+        onLog(`  ✓ ${br.branch} (auto-resolved)`);
+      } catch {
+        try { execSync("git merge --abort", { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
+        br.status = "merge-failed";
+        onLog(`  ✗ ${br.branch} (conflict — preserved for manual merge)`);
+      }
+    }
+  }
+}
+
 function archiveMilestone(baseDir: string, waveNum: number): void {
   const statusPath = join(baseDir, "status.md");
   if (!existsSync(statusPath)) return;
@@ -421,6 +495,40 @@ async function main() {
   if (!existsSync(cwd)) { console.error(chalk.red(`  Working directory does not exist: ${cwd}`)); process.exit(1); }
 
   if (noTTY) console.log(chalk.dim("  Non-interactive mode — using defaults\n"));
+
+  // ── Resume detection ──
+  const baseDir0 = join(cwd, ".claude-overnight");
+  const prevState = loadRunState(baseDir0);
+  let resuming = false;
+  let resumeState: RunState | null = null;
+  if (prevState && prevState.phase !== "done" && prevState.cwd === cwd && !noTTY && tasks.length === 0) {
+    const merged = prevState.branches.filter(b => b.status === "merged").length;
+    const unmerged = prevState.branches.filter(b => b.status === "unmerged").length;
+    const failed = prevState.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
+    console.log(chalk.yellow(`\n  Previous run found`));
+    console.log(chalk.dim(`  ${prevState.accCompleted} done · ${prevState.remaining} remaining · $${prevState.accCost.toFixed(2)} spent`));
+    if (merged > 0) console.log(chalk.dim(`  ${merged} merged · ${unmerged} unmerged · ${failed} failed branches`));
+    const action = await selectKey(
+      "",
+      [
+        { key: "r", desc: "esume" },
+        { key: "f", desc: "resh" },
+        { key: "q", desc: "uit" },
+      ],
+    );
+    if (action === "q") { process.exit(0); }
+    if (action === "r") {
+      resuming = true;
+      resumeState = prevState;
+      // Auto-merge any unmerged branches
+      if (unmerged > 0) {
+        autoMergeBranches(cwd, prevState.branches, (msg) => console.log(chalk.dim(`  ${msg}`)));
+      }
+    } else {
+      // Fresh: clean up old run
+      try { rmSync(baseDir0, { recursive: true, force: true }); } catch {}
+    }
+  }
 
   // ── Interactive flow: Objective → Budget → Model → Usage cap → Plan → Review ──
   let workerModel: string;
@@ -728,24 +836,60 @@ async function main() {
   const restore = () => process.stdout.write("\x1B[?25h\n");
   const runStartedAt = Date.now();
 
-  // Wave-loop state
+  // Wave-loop state — either fresh or resumed
   const baseDir = join(cwd, ".claude-overnight");
   mkdirSync(join(baseDir, "reflections"), { recursive: true });
   mkdirSync(join(baseDir, "milestones"), { recursive: true });
-  // Seed goal.md with original objective
-  if (objective && !existsSync(join(baseDir, "goal.md"))) {
-    writeFileSync(join(baseDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
-  }
+  mkdirSync(join(baseDir, "sessions"), { recursive: true });
 
   let currentSwarm: Swarm | undefined;
-  let remaining = (budget ?? tasks.length) - thinkingUsed;
-  let currentTasks = tasks;
-  let waveNum = 0;
-  const waveHistory: WaveSummary[] = thinkingHistory ? [thinkingHistory] : [];
-  let accCost = thinkingCost, accIn = thinkingIn, accOut = thinkingOut, accCompleted = 0, accFailed = 0, accTools = thinkingTools;
+  let remaining: number;
+  let currentTasks: Task[];
+  let waveNum: number;
+  const waveHistory: WaveSummary[] = [];
+  let accCost: number, accCompleted: number, accFailed: number, accTools: number;
+  let accIn = 0, accOut = 0;
   let lastCapped = false, lastAborted = false;
-  let lastWaveKind: "execute" | "reflect" | "think" = "execute";
-  let reflectionBudgetUsed = 0;
+  let lastWaveKind: "execute" | "reflect" | "think";
+  let reflectionBudgetUsed: number;
+  const branches: BranchRecord[] = [];
+
+  if (resuming && resumeState) {
+    // Restore from saved state
+    remaining = resumeState.remaining;
+    currentTasks = resumeState.currentTasks;
+    waveNum = resumeState.waveNum;
+    accCost = resumeState.accCost;
+    accCompleted = resumeState.accCompleted;
+    accFailed = resumeState.accFailed;
+    accTools = 0;
+    lastWaveKind = resumeState.lastWaveKind;
+    reflectionBudgetUsed = resumeState.reflectionBudgetUsed;
+    branches.push(...resumeState.branches);
+    objective = resumeState.objective;
+    workerModel = resumeState.workerModel;
+    plannerModel = resumeState.plannerModel;
+    budget = resumeState.budget;
+    concurrency = resumeState.concurrency;
+    console.log(chalk.green(`\n  Resumed: wave ${waveNum}, ${remaining} remaining, $${accCost.toFixed(2)} spent\n`));
+  } else {
+    // Fresh run
+    if (objective && !existsSync(join(baseDir, "goal.md"))) {
+      writeFileSync(join(baseDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
+    }
+    remaining = (budget ?? tasks.length) - thinkingUsed;
+    currentTasks = tasks;
+    waveNum = 0;
+    if (thinkingHistory) waveHistory.push(thinkingHistory);
+    accCost = thinkingCost;
+    accCompleted = 0;
+    accFailed = 0;
+    accTools = thinkingTools;
+    accIn = thinkingIn;
+    accOut = thinkingOut;
+    lastWaveKind = "execute";
+    reflectionBudgetUsed = 0;
+  }
   const maxReflectionBudget = Math.max(2, Math.ceil((budget ?? 10) * 0.05));
 
   // For flex + branch strategy: create one target branch, waves merge via yolo into it
@@ -810,6 +954,15 @@ async function main() {
     remaining -= swarm.completed + swarm.failed;
     lastCapped = swarm.cappedOut;
     lastAborted = swarm.aborted;
+    recordBranches(swarm, branches);
+    saveWaveSession(baseDir, waveNum, lastWaveKind, swarm);
+    saveRunState(baseDir, {
+      id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective!, budget: budget ?? tasks.length,
+      remaining, workerModel, plannerModel, concurrency, permissionMode,
+      usageCap, flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
+      lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
+      branches, phase: "steering", startedAt: new Date(runStartedAt).toISOString(), cwd,
+    });
 
     waveHistory.push({
       wave: waveNum,
@@ -923,8 +1076,16 @@ async function main() {
     waveNum++;
   }
 
-  // Clean up run artifacts
-  try { rmSync(join(cwd, ".claude-overnight"), { recursive: true, force: true }); } catch {}
+  // Mark run as done — keep artifacts for inspection, clean designs/reflections
+  saveRunState(baseDir, {
+    id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
+    remaining, workerModel, plannerModel, concurrency, permissionMode,
+    usageCap, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
+    lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
+    branches, phase: "done", startedAt: new Date(runStartedAt).toISOString(), cwd,
+  });
+  try { rmSync(join(baseDir, "designs"), { recursive: true, force: true }); } catch {}
+  try { rmSync(join(baseDir, "reflections"), { recursive: true, force: true }); } catch {}
 
   // Switch back if we created a run branch
   if (runBranch && originalRef) {

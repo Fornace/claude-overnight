@@ -98,3 +98,39 @@ export type SwarmPhase = "planning" | "running" | "merging" | "done";
  * - "branch": Create a new branch, merge everything there (main untouched).
  */
 export type MergeStrategy = "yolo" | "branch";
+
+/** Tracks a git branch created by an agent. */
+export interface BranchRecord {
+  branch: string;
+  taskPrompt: string;
+  status: "merged" | "unmerged" | "failed" | "merge-failed";
+  filesChanged: number;
+  costUsd: number;
+}
+
+/** Persisted run state for crash recovery and resume. */
+export interface RunState {
+  id: string;
+  objective: string;
+  budget: number;
+  remaining: number;
+  workerModel: string;
+  plannerModel: string;
+  concurrency: number;
+  permissionMode: PermMode;
+  usageCap?: number;
+  flex: boolean;
+  useWorktrees: boolean;
+  mergeStrategy: MergeStrategy;
+  waveNum: number;
+  currentTasks: Task[];
+  lastWaveKind: "execute" | "reflect" | "think";
+  reflectionBudgetUsed: number;
+  accCost: number;
+  accCompleted: number;
+  accFailed: number;
+  branches: BranchRecord[];
+  phase: "executing" | "steering" | "reflecting" | "done";
+  startedAt: string;
+  cwd: string;
+}
