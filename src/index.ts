@@ -318,6 +318,22 @@ function findIncompleteRun(rootDir: string): { dir: string; state: RunState } | 
   return null;
 }
 
+/** Find orphaned designs: a run where thinking succeeded but orchestration crashed (has designs, no run.json). */
+function findOrphanedDesigns(rootDir: string): string | null {
+  const runsDir = join(rootDir, "runs");
+  try {
+    const dirs = readdirSync(runsDir).sort().reverse();
+    for (const d of dirs) {
+      const runDir = join(runsDir, d);
+      const hasState = existsSync(join(runDir, "run.json"));
+      if (hasState) continue; // has state — either complete or properly resumable
+      const designs = readMdDir(join(runDir, "designs"));
+      if (designs) return runDir;
+    }
+  } catch {}
+  return null;
+}
+
 /** Read final status + goal from all completed previous runs (newest first, max 5). */
 function readPreviousRunKnowledge(rootDir: string): string {
   const runsDir = join(rootDir, "runs");
@@ -722,8 +738,9 @@ async function main() {
   let thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
   let thinkingHistory: WaveSummary | undefined;
 
-  // Create run directory early so thinking wave can use it
-  const runDir = resuming && resumeRunDir ? resumeRunDir : createRunDir(rootDir);
+  // Create run directory — reuse orphaned run (thinking succeeded, orchestration crashed) if available
+  const orphanedDir = !resuming ? findOrphanedDesigns(rootDir) : null;
+  const runDir = resuming && resumeRunDir ? resumeRunDir : (orphanedDir ?? createRunDir(rootDir));
   const previousKnowledge = readPreviousRunKnowledge(rootDir);
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
@@ -792,52 +809,67 @@ async function main() {
         // ── From here, fully autonomous — no more user interaction ──
         process.stdout.write("\x1B[?25l");
 
-        // Phase 2: Thinking wave
+        // Phase 2: Thinking wave — skip if design docs already exist (e.g. previous orchestration failed)
         mkdirSync(designDir, { recursive: true });
-        const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel, previousKnowledge || undefined);
-        console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
+        const existingDesigns = readMdDir(designDir);
+        if (existingDesigns) {
+          console.log(chalk.green(`\n  ✓ Reusing ${readdirSync(designDir).filter(f => f.endsWith(".md")).length} existing design docs`) + chalk.dim(` (from prior attempt)\n`));
+        } else {
+          const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel, previousKnowledge || undefined);
+          console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
 
-        const thinkingSwarm = new Swarm({
-          tasks: thinkingTasks, concurrency, cwd,
-          model: plannerModel,
-          permissionMode,
-          useWorktrees: false,
-          mergeStrategy: "yolo",
-          agentTimeoutMs,
-          usageCap,
-        });
-        const stopThinkRender = startRenderLoop(thinkingSwarm);
-        try { await thinkingSwarm.run(); } finally { stopThinkRender(); }
-        console.log(renderSummary(thinkingSwarm));
-        thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
-        thinkingCost = thinkingSwarm.totalCostUsd;
-        thinkingIn = thinkingSwarm.totalInputTokens;
-        thinkingOut = thinkingSwarm.totalOutputTokens;
-        thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
-        // Record thinking wave so steering knows what happened
-        thinkingHistory = {
-          wave: -1,
-          kind: "think" as const,
-          tasks: thinkingSwarm.agents.map(a => ({
-            prompt: a.task.prompt.slice(0, 200),
-            status: a.status,
-            filesChanged: a.filesChanged,
-            error: a.error,
-          })),
-        };
+          const thinkingSwarm = new Swarm({
+            tasks: thinkingTasks, concurrency, cwd,
+            model: plannerModel,
+            permissionMode,
+            useWorktrees: false,
+            mergeStrategy: "yolo",
+            agentTimeoutMs,
+            usageCap,
+          });
+          const stopThinkRender = startRenderLoop(thinkingSwarm);
+          try { await thinkingSwarm.run(); } finally { stopThinkRender(); }
+          console.log(renderSummary(thinkingSwarm));
+          thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
+          thinkingCost = thinkingSwarm.totalCostUsd;
+          thinkingIn = thinkingSwarm.totalInputTokens;
+          thinkingOut = thinkingSwarm.totalOutputTokens;
+          thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+          // Record thinking wave so steering knows what happened
+          thinkingHistory = {
+            wave: -1,
+            kind: "think" as const,
+            tasks: thinkingSwarm.agents.map(a => ({
+              prompt: a.task.prompt.slice(0, 200),
+              status: a.status,
+              filesChanged: a.filesChanged,
+              error: a.error,
+            })),
+          };
+
+          // Wait for rate limit reset before orchestration
+          if (thinkingSwarm.rateLimitResetsAt) {
+            const waitMs = thinkingSwarm.rateLimitResetsAt - Date.now();
+            if (waitMs > 0) {
+              console.log(chalk.dim(`  Waiting ${Math.ceil(waitMs / 1000)}s for rate limit reset...`));
+              await new Promise(r => setTimeout(r, waitMs + 2000));
+            }
+          }
+        }
 
         // Phase 3: Orchestrate from design docs
         const designs = readMdDir(designDir);
+        const taskFile = join(runDir, "tasks.json");
         if (designs) {
           const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
           const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
           console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
-          tasks = await orchestrate(objective!, designs, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote);
+          tasks = await orchestrate(objective!, designs, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote, taskFile);
           process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
         } else {
           console.log(chalk.yellow(`\n  No design docs — falling back to direct planning\n`));
           const waveBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
-          tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog());
+          tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), undefined, taskFile);
           process.stdout.write(`\x1B[2K\r  ${chalk.green(`\u2713 ${tasks.length} tasks`)}\n\n`);
         }
       } else {

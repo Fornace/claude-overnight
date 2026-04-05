@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { readFileSync } from "fs";
 import type { Task, PermMode } from "./types.js";
 
 // ── Steering types ──
@@ -235,8 +236,8 @@ async function runPlannerQueryOnce(
     options: {
       cwd: opts.cwd,
       model: opts.model,
-      tools: ["Read", "Glob", "Grep"],
-      allowedTools: ["Read", "Glob", "Grep"],
+      tools: ["Read", "Glob", "Grep", "Write"],
+      allowedTools: ["Read", "Glob", "Grep", "Write"],
       permissionMode: opts.permissionMode,
       ...(opts.permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       persistSession: false,
@@ -368,26 +369,26 @@ export async function planTasks(
   concurrency: number,
   onLog: (text: string) => void,
   flexNote?: string,
+  outFile?: string,
 ): Promise<Task[]> {
   onLog("Analyzing codebase...");
 
+  const prompt = plannerPrompt(objective, workerModel, budget, concurrency, flexNote);
+  const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
   const resultText = await runPlannerQuery(
-    plannerPrompt(objective, workerModel, budget, concurrency, flexNote),
+    prompt + fileInstruction,
     { cwd, model: plannerModel, permissionMode },
     onLog,
   );
 
   const parsed = await extractTaskJson(resultText, async () => {
-    onLog("Retrying for valid JSON...");
-    let retryText = "";
-    for await (const msg of query({
-      prompt: `Your previous response did not contain valid JSON. Output ONLY a JSON object:\n{"tasks":[{"prompt":"..."}]}`,
-      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
-    })) {
-      if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
-    }
-    return retryText;
-  });
+    onLog("Retrying...");
+    return runPlannerQuery(
+      `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+      { cwd, model: plannerModel, permissionMode },
+      onLog,
+    );
+  }, onLog, outFile);
 
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
     id: String(i),
@@ -525,9 +526,11 @@ export async function orchestrate(
   concurrency: number,
   onLog: (text: string) => void,
   flexNote?: string,
+  outFile?: string,
 ): Promise<Task[]> {
   const capability = modelCapabilityBlock(workerModel);
   const flexLine = flexNote ? `\n\n${flexNote}` : "";
+  const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
 
   const prompt = `You are a tech lead planning a sprint based on your team's codebase research.
 
@@ -550,22 +553,19 @@ Requirements:
 - Priority order: foundational first, polish last${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
-{"tasks": [{"prompt": "..."}]}`;
+{"tasks": [{"prompt": "..."}]}${fileInstruction}`;
 
   onLog("Synthesizing...");
   const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
 
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
-    let retryText = "";
-    for await (const msg of query({
-      prompt: `Output ONLY a JSON object:\n{"tasks":[{"prompt":"..."}]}`,
-      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
-    })) {
-      if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
-    }
-    return retryText;
-  });
+    return runPlannerQuery(
+      `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+      { cwd, model: plannerModel, permissionMode },
+      onLog,
+    );
+  }, onLog, outFile);
 
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
     id: String(i),
@@ -620,15 +620,12 @@ Respond with ONLY a JSON object (no markdown):
 
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
-    let retryText = "";
-    for await (const msg of query({
-      prompt: `Output ONLY a JSON object:\n{"tasks":[{"prompt":"..."}]}`,
-      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
-    })) {
-      if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
-    }
-    return retryText;
-  });
+    return runPlannerQuery(
+      `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+      { cwd, model: plannerModel, permissionMode },
+      onLog,
+    );
+  }, onLog);
 
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
     id: String(i),
@@ -666,19 +663,50 @@ function attemptJsonParse(text: string): any | null {
     const b2 = extractOutermostBraces(stripped);
     if (b2) { try { return JSON.parse(b2); } catch {} }
   }
+  // Salvage truncated task JSON — find last complete task object and close
+  const tasksMatch = text.match(/\{\s*"tasks"\s*:\s*\[/);
+  if (tasksMatch) {
+    const lastBrace = text.lastIndexOf("}");
+    if (lastBrace > tasksMatch.index!) {
+      const salvaged = text.slice(tasksMatch.index!, lastBrace + 1) + "]}";
+      try { const obj = JSON.parse(salvaged); if (obj?.tasks?.length > 0) return obj; } catch {}
+    }
+  }
   return null;
 }
 
-/** Extract task JSON with validation and one retry. */
+/** Extract task JSON: try file first, then in-memory parse, then retry with context. */
 async function extractTaskJson(
   raw: string,
   retry: () => Promise<string>,
+  onLog?: (text: string) => void,
+  outFile?: string,
 ): Promise<{ tasks: any[] }> {
+  // 1. Try reading from file (most resilient — survives truncated output)
+  if (outFile) {
+    try {
+      const fileContent = readFileSync(outFile, "utf-8");
+      const fromFile = attemptJsonParse(fileContent);
+      if (fromFile?.tasks) return fromFile;
+    } catch {}
+  }
+  // 2. Try parsing result text
   const first = attemptJsonParse(raw);
   if (first?.tasks) return first;
+  onLog?.(`Parse failed (${raw.length} chars): ${raw.slice(0, 300)}`);
+  // 3. Retry with full context
   const retryText = await retry();
+  // Re-check file in case retry wrote it
+  if (outFile) {
+    try {
+      const fileContent = readFileSync(outFile, "utf-8");
+      const fromFile = attemptJsonParse(fileContent);
+      if (fromFile?.tasks) return fromFile;
+    } catch {}
+  }
   const second = attemptJsonParse(retryText);
   if (second?.tasks) return second;
+  onLog?.(`Retry failed (${retryText.length} chars): ${retryText.slice(0, 300)}`);
   throw new Error("Planner did not return valid task JSON after retry");
 }
 
@@ -767,13 +795,11 @@ Respond with ONLY a JSON object (no markdown fences):
     const first = attemptJsonParse(resultText);
     if (first) return first;
     onLog("Retrying...");
-    let retryText = "";
-    for await (const msg of query({
-      prompt: `Output ONLY a JSON object: {"action":"execute"|"reflect"|"done","done":true/false,"reasoning":"...","tasks":[{"prompt":"..."}]}`,
-      options: { cwd, model: plannerModel, permissionMode, ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }), persistSession: false },
-    })) {
-      if (msg.type === "result" && msg.subtype === "success") retryText = (msg as any).result || "";
-    }
+    const retryText = await runPlannerQuery(
+      `Your previous response was not valid JSON. Respond with ONLY a JSON object {"action":"execute"|"reflect"|"done","done":true/false,"reasoning":"...","tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+      { cwd, model: plannerModel, permissionMode },
+      onLog,
+    );
     return attemptJsonParse(retryText) ?? { action: "done", done: true, reasoning: "Could not parse steering response" };
   })();
 
