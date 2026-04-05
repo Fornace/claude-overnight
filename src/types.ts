@@ -130,7 +130,7 @@ export interface RunState {
   accCompleted: number;
   accFailed: number;
   branches: BranchRecord[];
-  phase: "executing" | "steering" | "reflecting" | "done";
+  phase: "executing" | "steering" | "reflecting" | "capped" | "done";
   startedAt: string;
   cwd: string;
 }

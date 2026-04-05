@@ -573,9 +573,14 @@ async function main() {
     console.log(chalk.dim(`\n  ${completedRuns.length} previous run${completedRuns.length > 1 ? "s" : ""}`));
     for (const r of completedRuns.slice(0, 3)) {
       const date = r.state.startedAt?.slice(0, 10) || "unknown";
-      const obj = r.state.objective?.slice(0, 40) || "";
+      const obj = r.state.objective?.slice(0, 50) || "";
       const cost = r.state.accCost > 0 ? ` · $${r.state.accCost.toFixed(0)}` : "";
-      console.log(chalk.dim(`     ${date} · ${r.state.accCompleted} tasks${cost}${obj ? ` · ${obj}` : ""}${obj.length >= 40 ? "…" : ""}`));
+      const merged = r.state.branches.filter(b => b.status === "merged").length;
+      console.log(chalk.dim(`     ${date} · ${r.state.accCompleted} done · ${merged} merged${cost}${obj ? ` · ${obj}` : ""}${obj.length >= 50 ? "…" : ""}`));
+      // Show status if available
+      let status = "";
+      try { status = readFileSync(join(r.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 80); } catch {}
+      if (status) console.log(chalk.dim(`       ${status}`));
     }
   }
 
@@ -595,10 +600,11 @@ async function main() {
     let lastStatus = "";
     try { lastStatus = readFileSync(join(incomplete.dir, "status.md"), "utf-8").trim().slice(0, 120); } catch {}
 
-    console.log(chalk.yellow(`\n  ⚠ Interrupted run`));
+    const label = prev.phase === "capped" ? "Capped run" : "Interrupted run";
+    console.log(chalk.yellow(`\n  ⚠ ${label}`));
     const boxLines = [
       `${obj}${obj.length >= 50 ? "…" : ""}`,
-      `${prev.accCompleted}/${prev.budget} sessions · ${prev.waveNum + 1} waves · $${prev.accCost.toFixed(2)}`,
+      `${prev.accCompleted}/${prev.budget} sessions · ${prev.remaining} remaining · $${prev.accCost.toFixed(2)}`,
     ];
     if (lastStatus) boxLines.push(lastStatus);
     if (merged + unmerged + failed > 0) boxLines.push(`${merged} merged · ${unmerged} unmerged · ${failed} failed branches`);
@@ -813,7 +819,15 @@ async function main() {
         mkdirSync(designDir, { recursive: true });
         const existingDesigns = readMdDir(designDir);
         if (existingDesigns) {
-          console.log(chalk.green(`\n  ✓ Reusing ${readdirSync(designDir).filter(f => f.endsWith(".md")).length} existing design docs`) + chalk.dim(` (from prior attempt)\n`));
+          const designFiles = readdirSync(designDir).filter(f => f.endsWith(".md")).sort();
+          console.log(chalk.green(`\n  ✓ Reusing ${designFiles.length} design docs`) + chalk.dim(` (from prior attempt)`));
+          for (const f of designFiles) {
+            try {
+              const firstLine = readFileSync(join(designDir, f), "utf-8").split("\n")[0].replace(/^#+\s*/, "").trim();
+              if (firstLine) console.log(chalk.dim(`    ${firstLine.slice(0, 80)}`));
+            } catch {}
+          }
+          console.log("");
         } else {
           const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel, previousKnowledge || undefined);
           console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
@@ -1195,16 +1209,19 @@ async function main() {
     waveNum++;
   }
 
-  // Mark run as done — keep sessions/milestones/status/goal, clean transient files
+  // Mark run as done (or capped if usage cap stopped it with remaining budget)
+  const finalPhase = lastCapped && remaining > 0 ? "capped" : "done";
   saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
     usageCap, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
     lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
-    branches, phase: "done", startedAt: new Date(runStartedAt).toISOString(), cwd,
+    branches, phase: finalPhase, startedAt: new Date(runStartedAt).toISOString(), cwd,
   });
-  try { rmSync(join(runDir, "designs"), { recursive: true, force: true }); } catch {}
-  try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}
+  if (finalPhase === "done") {
+    try { rmSync(join(runDir, "designs"), { recursive: true, force: true }); } catch {}
+    try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}
+  }
 
   // Switch back if we created a run branch
   if (runBranch && originalRef) {
