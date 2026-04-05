@@ -542,8 +542,28 @@ async function main() {
 
   if (noTTY) console.log(chalk.dim("  Non-interactive mode — using defaults\n"));
 
-  // ── Resume detection ──
+  // ── Show run history ──
   const rootDir = join(cwd, ".claude-overnight");
+  const runsDir = join(rootDir, "runs");
+  let completedRuns: { dir: string; state: RunState }[] = [];
+  try {
+    const dirs = readdirSync(runsDir).sort().reverse();
+    for (const d of dirs) {
+      const s = loadRunState(join(runsDir, d));
+      if (s && s.phase === "done") completedRuns.push({ dir: join(runsDir, d), state: s });
+    }
+  } catch {}
+  if (completedRuns.length > 0 && !noTTY) {
+    console.log(chalk.dim(`\n  ${completedRuns.length} previous run${completedRuns.length > 1 ? "s" : ""}`));
+    for (const r of completedRuns.slice(0, 3)) {
+      const date = r.state.startedAt?.slice(0, 10) || "unknown";
+      const obj = r.state.objective?.slice(0, 40) || "";
+      const cost = r.state.accCost > 0 ? ` · $${r.state.accCost.toFixed(0)}` : "";
+      console.log(chalk.dim(`     ${date} · ${r.state.accCompleted} tasks${cost}${obj ? ` · ${obj}` : ""}${obj.length >= 40 ? "…" : ""}`));
+    }
+  }
+
+  // ── Resume detection ──
   let resuming = false;
   let resumeState: RunState | null = null;
   let resumeRunDir: string | undefined;
@@ -553,9 +573,24 @@ async function main() {
     const merged = prev.branches.filter(b => b.status === "merged").length;
     const unmerged = prev.branches.filter(b => b.status === "unmerged").length;
     const failed = prev.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
-    console.log(chalk.yellow(`\n  Previous run found`));
-    console.log(chalk.dim(`  ${prev.accCompleted} done · ${prev.remaining} remaining · $${prev.accCost.toFixed(2)} spent`));
-    if (merged + unmerged + failed > 0) console.log(chalk.dim(`  ${merged} merged · ${unmerged} unmerged · ${failed} failed branches`));
+    const obj = prev.objective?.slice(0, 50) || "";
+
+    // Read last status for context
+    let lastStatus = "";
+    try { lastStatus = readFileSync(join(incomplete.dir, "status.md"), "utf-8").trim().slice(0, 120); } catch {}
+
+    console.log(chalk.yellow(`\n  ⚠ Interrupted run`));
+    const boxLines = [
+      `${obj}${obj.length >= 50 ? "…" : ""}`,
+      `${prev.accCompleted}/${prev.budget} sessions · ${prev.waveNum + 1} waves · $${prev.accCost.toFixed(2)}`,
+    ];
+    if (lastStatus) boxLines.push(lastStatus);
+    if (merged + unmerged + failed > 0) boxLines.push(`${merged} merged · ${unmerged} unmerged · ${failed} failed branches`);
+    const boxW = Math.max(...boxLines.map(l => l.length)) + 4;
+    console.log(chalk.dim(`  ╭${"─".repeat(boxW)}╮`));
+    for (const line of boxLines) console.log(chalk.dim("  │") + `  ${line.padEnd(boxW - 2)}` + chalk.dim("│"));
+    console.log(chalk.dim(`  ╰${"─".repeat(boxW)}╯`));
+
     const action = await selectKey(
       "",
       [
@@ -570,10 +605,10 @@ async function main() {
       resumeState = prev;
       resumeRunDir = incomplete.dir;
       if (unmerged > 0) {
+        console.log("");
         autoMergeBranches(cwd, prev.branches, (msg) => console.log(chalk.dim(`  ${msg}`)));
       }
     }
-    // Fresh: keep the old run folder (it's history), just start a new one
   }
 
   // ── Interactive flow: Objective → Budget → Model → Usage cap → Plan → Review ──
@@ -644,6 +679,7 @@ async function main() {
     parts.push(`${concurrency}×`);
     if (budget > 2) parts.push("flex");
     if (usageCap != null) parts.push(`cap ${Math.round(usageCap * 100)}%`);
+    if (completedRuns.length > 0) parts.push(`${completedRuns.length} prior`);
     const inner = parts.join(chalk.dim(" · "));
     const innerLen = parts.join(" · ").length;
     console.log(chalk.dim(`\n  ╭${"─".repeat(innerLen + 4)}╮`));
@@ -920,7 +956,7 @@ async function main() {
     plannerModel = resumeState.plannerModel;
     budget = resumeState.budget;
     concurrency = resumeState.concurrency;
-    console.log(chalk.green(`\n  Resumed: wave ${waveNum}, ${remaining} remaining, $${accCost.toFixed(2)} spent\n`));
+    console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent\n`));
   } else {
     // Fresh run
     if (objective && !existsSync(join(runDir, "goal.md"))) {
@@ -1143,49 +1179,43 @@ async function main() {
 
   // ── Final summary ──
   const waves = waveNum + 1;
-  const cappedNote = lastCapped ? chalk.yellow(` (capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%)`) : "";
-  const summaryText = accFailed > 0
-    ? chalk.yellow(`${accCompleted} done, ${accFailed} failed`) + cappedNote
-    : chalk.green(`${accCompleted} done`) + cappedNote;
-  const costText = accCost > 0 ? chalk.dim(` · $${accCost.toFixed(3)}`) : "";
-  const wavePart = waves > 1 ? chalk.dim(`${waves} waves · `) : "";
-  console.log(chalk.dim(`\n  ${"─".repeat(36)}`));
-  console.log(`  ${chalk.green("✓")} ${chalk.bold("Complete")}  ${wavePart}${summaryText}${costText}`);
-
-  if (accFailed > 0 && waves === 1) {
-    const failedAgents = currentSwarm?.agents.filter((a) => a.status === "error") ?? [];
-    if (failedAgents.length > 0) {
-      console.log(chalk.red(`\n  Failed agents:`));
-      for (const a of failedAgents) {
-        console.log(chalk.red(`    \u2717 Agent ${a.id + 1}: ${a.task.prompt.slice(0, 60)}${a.task.prompt.length > 60 ? "\u2026" : ""}`));
-        console.log(chalk.dim(`      ${a.error || "unknown error"}`));
-      }
-    }
-  }
-
   const elapsed = Math.round((Date.now() - runStartedAt) / 1000);
-  const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
-  console.log(chalk.dim(`  ${elapsedStr}  ${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out  ${accTools} tool calls`));
+  const elapsedStr = elapsed < 60 ? `${elapsed}s` : elapsed < 3600 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m`;
+
+  const totalMerged = branches.filter(b => b.status === "merged").length;
+  const totalConflicts = branches.filter(b => b.status === "merge-failed").length;
+
+  console.log(chalk.dim(`\n  ${"─".repeat(36)}`));
+  console.log(`  ${accFailed === 0 ? chalk.green("✓") : chalk.yellow("⚠")} ${chalk.bold("Complete")}\n`);
+
+  const boxLines: string[] = [];
+  const statusLine = accFailed > 0 ? `${accCompleted} done · ${accFailed} failed` : `${accCompleted} done`;
+  boxLines.push(`${waves} wave${waves > 1 ? "s" : ""} · ${statusLine} · $${accCost.toFixed(2)}`);
+  boxLines.push(`${elapsedStr} · ${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out · ${accTools} tools`);
+  if (totalMerged > 0 || totalConflicts > 0) boxLines.push(`${totalMerged} merged${totalConflicts > 0 ? ` · ${totalConflicts} conflicts` : ""}`);
+  if (reflectionBudgetUsed > 0) boxLines.push(`${reflectionBudgetUsed} reflection agents`);
+  if (lastCapped) boxLines.push(chalk.yellow(`Capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%`));
+
+  const boxW = Math.max(...boxLines.map(l => l.replace(/\x1B\[[0-9;]*m/g, "").length)) + 4;
+  console.log(chalk.dim(`  ╭${"─".repeat(boxW)}╮`));
+  for (const line of boxLines) {
+    const plainLen = line.replace(/\x1B\[[0-9;]*m/g, "").length;
+    console.log(chalk.dim("  │") + `  ${line}${" ".repeat(Math.max(0, boxW - 2 - plainLen))}` + chalk.dim("│"));
+  }
+  console.log(chalk.dim(`  ╰${"─".repeat(boxW)}╯`));
+
+  if (totalConflicts > 0) {
+    const conflictBranches = branches.filter(b => b.status === "merge-failed");
+    console.log(chalk.red(`\n  Unresolved conflicts:`));
+    for (const c of conflictBranches) console.log(chalk.red(`    ${c.branch}`));
+    console.log(chalk.dim("  git merge <branch> to resolve"));
+  }
 
   if (runBranch) {
-    console.log(chalk.dim(`  Branch: ${runBranch} \u2014 create a PR or: git merge ${runBranch}`));
-  } else if (currentSwarm?.mergeResults && currentSwarm.mergeResults.length > 0) {
-    const merged = currentSwarm.mergeResults.filter((r) => r.ok);
-    const autoResolved = merged.filter((r) => r.autoResolved).length;
-    const conflicts = currentSwarm.mergeResults.filter((r) => !r.ok);
-    const target = currentSwarm.mergeBranch || "HEAD";
-    if (merged.length > 0) {
-      const extra = autoResolved > 0 ? chalk.yellow(` (${autoResolved} auto-resolved)`) : "";
-      console.log(chalk.green(`  Merged ${merged.length} branch(es) into ${target}`) + extra);
-    }
-    if (currentSwarm.mergeBranch) console.log(chalk.dim(`  Branch: ${currentSwarm.mergeBranch} \u2014 create a PR or: git merge ${currentSwarm.mergeBranch}`));
-    if (conflicts.length > 0) {
-      console.log(chalk.red(`  ${conflicts.length} unresolved conflict(s):`));
-      for (const c of conflicts) console.log(chalk.red(`    ${c.branch}`));
-      console.log(chalk.dim("  Merge manually: git merge <branch>"));
-    }
+    console.log(chalk.dim(`\n  Branch: ${runBranch} — git merge ${runBranch}`));
   }
 
+  console.log(chalk.dim(`  Run: ${runDir}`));
   if (currentSwarm?.logFile) console.log(chalk.dim(`  Log: ${currentSwarm.logFile}`));
   console.log("");
 
