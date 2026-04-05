@@ -1,6 +1,16 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync } from "fs";
-import type { Task, PermMode } from "./types.js";
+import type { Task, PermMode, RateLimitWindow } from "./types.js";
+
+/** Rate limit info emitted by planner queries for UI display. */
+export interface PlannerRateLimitInfo {
+  utilization: number;
+  status: string;
+  isUsingOverage: boolean;
+  windows: Map<string, RateLimitWindow>;
+  resetsAt?: number;
+  costUsd: number;
+}
 
 // ── Steering types ──
 
@@ -224,11 +234,18 @@ async function runPlannerQuery(
   throw new Error("Planner query failed after retries");
 }
 
+/** Shared mutable rate limit state that planner queries write to for UI display. Reset per query. */
+let _plannerRateLimitInfo: PlannerRateLimitInfo = {
+  utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0,
+};
+export function getPlannerRateLimitInfo(): PlannerRateLimitInfo { return _plannerRateLimitInfo; }
+
 async function runPlannerQueryOnce(
   prompt: string,
   opts: PlannerOpts,
   onLog: (text: string) => void,
 ): Promise<string> {
+  _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0 };
   let resultText = "";
   const startedAt = Date.now();
   const pq = query({
@@ -248,14 +265,18 @@ async function runPlannerQueryOnce(
   // Progress ticker — fast updates with compact format
   let lastLogText = "";
   let toolCount = 0;
+  let costUsd = 0;
   const ticker = setInterval(() => {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     const m = Math.floor(elapsed / 60);
     const s = elapsed % 60;
     const timeStr = m > 0 ? `${m}m ${s}s` : `${s}s`;
     const toolStr = toolCount > 0 ? ` · ${toolCount} tools` : "";
+    const costStr = costUsd > 0 ? ` · $${costUsd.toFixed(3)}` : "";
+    const rlPct = _plannerRateLimitInfo.utilization;
+    const rlStr = rlPct > 0 ? ` · ${Math.round(rlPct * 100)}%` : "";
     const extra = lastLogText ? ` · ${lastLogText}` : "";
-    onLog(`${timeStr}${toolStr}${extra}`);
+    onLog(`${timeStr}${toolStr}${costStr}${rlStr}${extra}`);
   }, 500);
 
   let lastActivity = Date.now();
@@ -290,9 +311,31 @@ async function runPlannerQueryOnce(
           }
         }
       }
+      if (msg.type === "rate_limit_event") {
+        const info = (msg as any).rate_limit_info;
+        if (info) {
+          _plannerRateLimitInfo.utilization = info.utilization ?? 0;
+          _plannerRateLimitInfo.status = info.status ?? "";
+          if (info.isUsingOverage) _plannerRateLimitInfo.isUsingOverage = true;
+          if (info.resetsAt) _plannerRateLimitInfo.resetsAt = info.resetsAt;
+          if (info.rateLimitType) {
+            _plannerRateLimitInfo.windows.set(info.rateLimitType, {
+              type: info.rateLimitType,
+              utilization: info.utilization ?? 0,
+              status: info.status,
+              resetsAt: info.resetsAt,
+            });
+          }
+        }
+      }
       if (msg.type === "result") {
-        if (msg.subtype === "success") resultText = (msg as any).result || "";
-        else throw new Error(`Planner failed: ${(msg as any).result || msg.subtype}`);
+        const r = msg as any;
+        if (typeof r.total_cost_usd === "number") {
+          costUsd = r.total_cost_usd;
+          _plannerRateLimitInfo.costUsd += costUsd;
+        }
+        if (msg.subtype === "success") resultText = r.result || "";
+        else throw new Error(`Planner failed: ${r.result || msg.subtype}`);
       }
     }
   };

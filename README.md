@@ -33,12 +33,15 @@ claude-overnight
   ● Sonnet — Sonnet 4.6 · Best for everyday tasks
   ○ Opus — Opus 4.6 · Most capable
 
-④ Usage:
+④ Usage cap:
   ● 90% · leave 10% for other work
 
-╭──────────────────────────────────────────╮
-│  sonnet · budget 200 · 5× · flex · 90%  │
-╰──────────────────────────────────────────╯
+⑤ Allow extra usage (billed separately):
+  ● No · stop when plan limits are reached
+
+╭──────────────────────────────────────────────────╮
+│  sonnet · budget 200 · 5× · flex · cap 90% · no extra  │
+╰──────────────────────────────────────────────────╯
 
 ✓ 5 themes → review, press Run, walk away
 
@@ -172,6 +175,8 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 | `--concurrency=N` | `5` | Parallel agents |
 | `--model=NAME` | prompted | Worker model (planner uses best available) |
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
+| `--allow-extra-usage` | off | Allow extra/overage usage (billed separately) |
+| `--extra-usage-budget=N` | — | Max $ for extra usage (implies --allow-extra-usage) |
 | `--timeout=SECONDS` | `300` | Inactivity timeout per agent |
 | `--no-flex` | — | Disable multi-wave steering |
 | `--dry-run` | — | Show planned tasks without running |
@@ -190,12 +195,38 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 | `mergeStrategy` | `"yolo" \| "branch"` | `"yolo"` | Merge into HEAD or new branch |
 | `usageCap` | `number (0-100)` | unlimited | Stop at N% utilization |
 
+## Usage controls
+
+### Extra usage protection
+
+By default, extra/overage usage is **blocked**. When your plan's rate limits are exhausted, the run stops cleanly and is resumable. You control this in the interactive prompt (step ⑤) or via CLI flags:
+
+- `--allow-extra-usage` — opt in to extra usage (billed separately)
+- `--extra-usage-budget=20` — allow up to $20 of extra usage, then stop
+
+### Live controls during execution
+
+Press these keys while agents are running:
+
+| Key | Action |
+|---|---|
+| `b` | Change remaining budget (number of sessions) |
+| `t` | Change usage cap threshold (0-100%) |
+| `q` | Graceful stop (press twice to force quit) |
+
+Changes take effect between waves — active agents finish their current task.
+
+### Multi-window usage display
+
+The usage bar cycles through all rate limit windows (5h, 7d, etc.) every 3 seconds, showing utilization per window. Usage info is shown during all phases — thinking, orchestration, steering, and execution.
+
 ## Rate limits
 
 Built for unattended runs lasting hours or days.
 
 - **Hard block**: pauses until the rate limit window resets, then resumes
 - **Soft throttle**: slows dispatch at >75% utilization
+- **Extra usage guard**: detects overage billing and stops unless explicitly allowed
 - **Cooldown between phases**: waits for rate limit reset after thinking before starting orchestration
 - **Retry with backoff**: transient errors (429, overloaded) retry automatically
 - **Usage cap**: set a ceiling, active agents finish, no new ones start — run is resumable

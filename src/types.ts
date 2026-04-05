@@ -108,6 +108,14 @@ export interface BranchRecord {
   costUsd: number;
 }
 
+/** Per-window rate limit snapshot (matches SDK rateLimitType). */
+export interface RateLimitWindow {
+  type: string; // "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | "overage"
+  utilization: number;
+  status: string;
+  resetsAt?: number;
+}
+
 /** Persisted run state for crash recovery and resume. */
 export interface RunState {
   id: string;
@@ -119,6 +127,8 @@ export interface RunState {
   concurrency: number;
   permissionMode: PermMode;
   usageCap?: number;
+  allowExtraUsage: boolean;
+  extraUsageBudget?: number; // max $ for extra usage
   flex: boolean;
   useWorktrees: boolean;
   mergeStrategy: MergeStrategy;

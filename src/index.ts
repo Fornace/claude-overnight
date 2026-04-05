@@ -11,13 +11,14 @@ import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, buildReflectionTasks, orchestrate } from "./planner.js";
 import type { WaveSummary, RunMemory } from "./planner.js";
 import { startRenderLoop, renderSummary } from "./ui.js";
+import type { LiveConfig } from "./ui.js";
 import type { Task, TaskFile, PermMode, MergeStrategy, RunState, BranchRecord } from "./types.js";
 
 // ── CLI flag parsing ──
 
 function parseCliFlags(argv: string[]) {
-  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap"]);
-  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex"]);
+  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget"]);
+  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex", "--allow-extra-usage"]);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
 
@@ -495,6 +496,8 @@ async function main() {
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
     --model=NAME           Worker model override ${chalk.dim("(planner always uses best available)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
+    --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
+    --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
     --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 300s, kills only silent agents)")}
     --no-flex              Disable adaptive multi-wave planning ${chalk.dim("(run all tasks in one shot)")}
 
@@ -640,6 +643,8 @@ async function main() {
   let concurrency: number;
   let objective: string | undefined = fileCfg?.objective;
   let usageCap: number | undefined;
+  let allowExtraUsage = false;
+  let extraUsageBudget: number | undefined;
 
   if (!nonInteractive) {
     // ① Objective
@@ -679,13 +684,28 @@ async function main() {
       workerModel = ans || "claude-sonnet-4-6";
     }
 
-    // ④ Usage
-    usageCap = await select(`${chalk.cyan("④")} Usage:`, [
+    // ④ Usage cap
+    usageCap = await select(`${chalk.cyan("④")} Usage cap:`, [
       { name: "Unlimited", value: undefined as any, hint: "full capacity, wait through rate limits" },
       { name: "90%", value: 0.9, hint: "leave 10% for other work" },
       { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
       { name: "50%", value: 0.5, hint: "use half, keep the rest" },
     ]);
+
+    // ⑤ Extra usage
+    const extraChoice = await select(`${chalk.cyan("⑤")} Allow extra usage ${chalk.dim("(billed separately)")}:`, [
+      { name: "No", value: "no", hint: "stop when plan limits are reached" },
+      { name: "Yes, with $ limit", value: "budget", hint: "set a spending cap" },
+      { name: "Yes, unlimited", value: "unlimited", hint: "keep going no matter what" },
+    ]);
+    if (extraChoice === "budget") {
+      const budgetAns = await ask(`  ${chalk.dim("Max extra usage $:")} `);
+      extraUsageBudget = parseFloat(budgetAns);
+      if (!extraUsageBudget || extraUsageBudget <= 0) extraUsageBudget = 5;
+      allowExtraUsage = true;
+    } else if (extraChoice === "unlimited") {
+      allowExtraUsage = true;
+    }
 
     concurrency = Math.min(5, budget);
 
@@ -701,6 +721,8 @@ async function main() {
     parts.push(`${concurrency}×`);
     if (budget > 2) parts.push("flex");
     if (usageCap != null) parts.push(`cap ${Math.round(usageCap * 100)}%`);
+    if (allowExtraUsage) parts.push(extraUsageBudget ? `extra $${extraUsageBudget}` : "extra ∞");
+    else parts.push("no extra");
     if (completedRuns.length > 0) parts.push(`${completedRuns.length} prior`);
     const inner = parts.join(chalk.dim(" · "));
     const innerLen = parts.join(" · ").length;
@@ -724,6 +746,14 @@ async function main() {
     } else {
       usageCap = fileCfg?.usageCap != null ? fileCfg.usageCap / 100 : undefined;
     }
+    // Extra usage: default OFF for non-interactive
+    allowExtraUsage = argv.includes("--allow-extra-usage");
+    const extraBudgetFlag = cliFlags["extra-usage-budget"];
+    if (extraBudgetFlag != null) {
+      extraUsageBudget = parseFloat(extraBudgetFlag);
+      if (isNaN(extraUsageBudget) || extraUsageBudget <= 0) { console.error(chalk.red(`  --extra-usage-budget must be a positive number`)); process.exit(1); }
+      allowExtraUsage = true;
+    }
   }
 
   validateConcurrency(concurrency);
@@ -734,7 +764,8 @@ async function main() {
 
   if (nonInteractive) {
     const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
-    console.log(chalk.dim(`  ${workerModel}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}  perms=${permissionMode}${capStr}`));
+    const extraStr = allowExtraUsage ? (extraUsageBudget ? `  extra=$${extraUsageBudget}` : "  extra=∞") : "  extra=off";
+    console.log(chalk.dim(`  ${workerModel}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}  perms=${permissionMode}${capStr}${extraStr}`));
   }
 
   // ── Flex mode: adaptive multi-wave planning ──
@@ -839,9 +870,9 @@ async function main() {
             useWorktrees: false,
             mergeStrategy: "yolo",
             agentTimeoutMs,
-            usageCap,
+            usageCap, allowExtraUsage, extraUsageBudget,
           });
-          const stopThinkRender = startRenderLoop(thinkingSwarm);
+          const stopThinkRender = startRenderLoop(thinkingSwarm, { remaining: 0, usageCap, dirty: false });
           try { await thinkingSwarm.run(); } finally { stopThinkRender(); }
           console.log(renderSummary(thinkingSwarm));
           thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
@@ -976,6 +1007,7 @@ async function main() {
   let currentSwarm: Swarm | undefined;
   let remaining: number;
   let currentTasks: Task[];
+  const liveConfig: LiveConfig = { remaining: 0, usageCap, dirty: false };
   let waveNum: number;
   const waveHistory: WaveSummary[] = [];
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;
@@ -1004,6 +1036,8 @@ async function main() {
     concurrency = resumeState.concurrency;
     flex = resumeState.flex;
     usageCap = resumeState.usageCap;
+    allowExtraUsage = resumeState.allowExtraUsage ?? false;
+    extraUsageBudget = resumeState.extraUsageBudget;
     console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent\n`));
   } else {
     // Fresh run
@@ -1023,6 +1057,8 @@ async function main() {
     lastWaveKind = "execute";
     reflectionBudgetUsed = 0;
   }
+  liveConfig.remaining = remaining;
+  liveConfig.usageCap = usageCap;
   const maxReflectionBudget = Math.max(2, Math.ceil((budget ?? 10) * 0.05));
 
   // For flex + branch strategy: create one target branch, waves merge via yolo into it
@@ -1057,16 +1093,17 @@ async function main() {
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
 
     if (flex) {
-      console.log(chalk.cyan(`\n  ◆ Wave ${waveNum + 1}`) + chalk.dim(` · ${currentTasks.length} tasks · ${remaining} remaining\n`));
+      const costSoFar = accCost > 0 ? ` · $${accCost.toFixed(2)} spent` : "";
+      console.log(chalk.cyan(`\n  ◆ Wave ${waveNum + 1}`) + chalk.dim(` · ${currentTasks.length} tasks · ${remaining} remaining${costSoFar}\n`));
     }
 
     const swarm = new Swarm({
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
-      useWorktrees, mergeStrategy: waveMerge, agentTimeoutMs, usageCap,
+      useWorktrees, mergeStrategy: waveMerge, agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
     });
     currentSwarm = swarm;
 
-    const stopRender = startRenderLoop(swarm);
+    const stopRender = startRenderLoop(swarm, liveConfig);
     try {
       await swarm.run();
     } catch (err: unknown) {
@@ -1085,6 +1122,13 @@ async function main() {
     accFailed += swarm.failed;
     accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
     remaining -= swarm.completed + swarm.failed;
+    // Apply live config changes if user adjusted budget/threshold mid-wave
+    if (liveConfig.dirty) {
+      remaining = liveConfig.remaining;
+      usageCap = liveConfig.usageCap;
+      liveConfig.dirty = false;
+    }
+    liveConfig.remaining = remaining;
     lastCapped = swarm.cappedOut;
     lastAborted = swarm.aborted;
     recordBranches(swarm, branches);
@@ -1092,7 +1136,7 @@ async function main() {
     saveRunState(runDir, {
       id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective!, budget: budget ?? tasks.length,
       remaining, workerModel, plannerModel, concurrency, permissionMode,
-      usageCap, flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
+      usageCap, allowExtraUsage, extraUsageBudget, flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
       lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
       branches, phase: "steering", startedAt: new Date(runStartedAt).toISOString(), cwd,
     });
@@ -1165,10 +1209,10 @@ async function main() {
             tasks: reflTasks, concurrency: 2, cwd,
             model: plannerModel, permissionMode,
             useWorktrees: false, mergeStrategy: "yolo",
-            agentTimeoutMs, usageCap,
+            agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
           });
           currentSwarm = reflSwarm;
-          const stopReflRender = startRenderLoop(reflSwarm);
+          const stopReflRender = startRenderLoop(reflSwarm, liveConfig);
           try { await reflSwarm.run(); } finally { stopReflRender(); }
           console.log(renderSummary(reflSwarm));
 
@@ -1217,7 +1261,7 @@ async function main() {
   saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
-    usageCap, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
+    usageCap, allowExtraUsage, extraUsageBudget, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
     lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
     branches, phase: finalPhase, startedAt: new Date(runStartedAt).toISOString(), cwd,
   });

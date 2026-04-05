@@ -10,7 +10,7 @@ import type {
   SDKPartialAssistantMessage,
   SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy } from "./types.js";
+import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow } from "./types.js";
 
 export interface SwarmConfig {
   tasks: Task[];
@@ -25,6 +25,10 @@ export interface SwarmConfig {
   mergeStrategy?: MergeStrategy;
   /** Stop dispatching new tasks when rate-limit utilization reaches this fraction (0-1). */
   usageCap?: number;
+  /** Allow agents to use extra usage (overage billing). Default false. */
+  allowExtraUsage?: boolean;
+  /** Max $ to spend on extra usage before stopping. Only applies when allowExtraUsage is true. */
+  extraUsageBudget?: number;
 }
 
 export interface MergeResult {
@@ -56,6 +60,14 @@ export class Swarm {
   rateLimitUtilization = 0;
   rateLimitStatus: string = "";
   rateLimitResetsAt?: number;
+  /** Per-window rate limit snapshots (updated on every rate_limit_event). */
+  rateLimitWindows: Map<string, RateLimitWindow> = new Map();
+  /** Whether any agent is currently using extra/overage usage. */
+  isUsingOverage = false;
+  /** Why overage is disabled (if applicable). */
+  overageDisabledReason?: string;
+  /** Accumulated cost from extra/overage usage only. */
+  overageCostUsd = 0;
 
   private queue: Task[];
   private config: SwarmConfig;
@@ -65,7 +77,9 @@ export class Swarm {
   private cleanedUp = false;
   logFile?: string;
   readonly model: string | undefined;
-  readonly usageCap: number | undefined;
+  usageCap: number | undefined; // mutable — can be changed live
+  readonly allowExtraUsage: boolean;
+  readonly extraUsageBudget: number | undefined;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) {
@@ -90,6 +104,8 @@ export class Swarm {
     this.config = config;
     this.model = config.model;
     this.usageCap = config.usageCap;
+    this.allowExtraUsage = config.allowExtraUsage ?? false;
+    this.extraUsageBudget = config.extraUsageBudget;
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
   }
@@ -162,12 +178,30 @@ export class Swarm {
     this.log(-1, `Worker finished (${tasksProcessed} tasks)`);
   }
 
+  private capForOverage(reason: string): void {
+    if (this.cappedOut) return;
+    this.cappedOut = true;
+    this.queue.length = 0;
+    this.log(-1, reason);
+  }
+
   private async throttle(): Promise<void> {
+    if (this.cappedOut) return;
     // Usage cap: stop dispatching when utilization exceeds user's cap
-    const cap = this.config.usageCap;
+    const cap = this.usageCap;
     if (cap != null && cap < 1 && this.rateLimitUtilization >= cap) {
       this.cappedOut = true;
       this.log(-1, `Usage cap ${Math.round(cap * 100)}% reached (at ${Math.round(this.rateLimitUtilization * 100)}%) — finishing active agents, no new tasks`);
+      return;
+    }
+    // Extra usage enforcement: stop if overage detected and not allowed
+    if (this.isUsingOverage && !this.allowExtraUsage) {
+      this.capForOverage(`Extra usage detected but not allowed — stopping dispatch`);
+      return;
+    }
+    // Extra usage budget enforcement
+    if (this.isUsingOverage && this.extraUsageBudget != null && this.overageCostUsd >= this.extraUsageBudget) {
+      this.capForOverage(`Extra usage budget $${this.extraUsageBudget} reached ($${this.overageCostUsd.toFixed(2)} spent) — stopping dispatch`);
       return;
     }
     // Hard block: rate limit rejected — wait until reset
@@ -637,6 +671,7 @@ export class Swarm {
         const cost = safeAdd(r.total_cost_usd);
         agent.costUsd = cost;
         this.totalCostUsd += cost;
+        if (this.isUsingOverage) this.overageCostUsd += cost;
         if (r.usage) {
           this.totalInputTokens += safeAdd(r.usage.input_tokens);
           this.totalOutputTokens += safeAdd(r.usage.output_tokens);
@@ -662,8 +697,29 @@ export class Swarm {
         if (info.status === "rejected" && info.resetsAt) {
           this.rateLimitResetsAt = info.resetsAt;
         }
+        // Track per-window state
+        const windowType = (info as any).rateLimitType as string | undefined;
+        if (windowType) {
+          this.rateLimitWindows.set(windowType, {
+            type: windowType,
+            utilization: info.utilization ?? 0,
+            status: info.status,
+            resetsAt: info.resetsAt,
+          });
+        }
+        // Track overage state
+        if ((info as any).isUsingOverage) {
+          this.isUsingOverage = true;
+        }
+        if ((info as any).overageDisabledReason) {
+          this.overageDisabledReason = (info as any).overageDisabledReason;
+        }
+        if (this.isUsingOverage && !this.allowExtraUsage) {
+          this.capForOverage(`Extra usage detected but not allowed — stopping dispatch`);
+        }
         const pct = info.utilization != null ? `${Math.round(info.utilization * 100)}%` : "";
-        this.log(agent.id, `Rate: ${info.status} ${pct}`);
+        const overageTag = this.isUsingOverage ? " [EXTRA]" : "";
+        this.log(agent.id, `Rate: ${info.status} ${pct}${overageTag}${windowType ? ` (${windowType})` : ""}`);
         break;
       }
     }
