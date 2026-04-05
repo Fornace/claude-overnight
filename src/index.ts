@@ -600,7 +600,7 @@ async function main() {
     let lastStatus = "";
     try { lastStatus = readFileSync(join(incomplete.dir, "status.md"), "utf-8").trim().slice(0, 120); } catch {}
 
-    const label = prev.phase === "capped" ? "Capped run" : "Interrupted run";
+    const label = "Unfinished run";
     console.log(chalk.yellow(`\n  ⚠ ${label}`));
     const boxLines = [
       `${obj}${obj.length >= 50 ? "…" : ""}`,
@@ -980,7 +980,7 @@ async function main() {
   const waveHistory: WaveSummary[] = [];
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;
   let accIn = 0, accOut = 0;
-  let lastCapped = false, lastAborted = false;
+  let lastCapped = false, lastAborted = false, objectiveComplete = false;
   let lastWaveKind: "execute" | "reflect" | "think";
   let reflectionBudgetUsed: number;
   const branches: BranchRecord[] = [];
@@ -1140,6 +1140,7 @@ async function main() {
         if (steer.done || steer.action === "done") {
           console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
           steerDone = true;
+          objectiveComplete = true;
           remaining = 0; // exit outer loop too
           break;
         }
@@ -1192,6 +1193,7 @@ async function main() {
         // action === "execute"
         if (steer.tasks.length === 0) {
           console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
+          objectiveComplete = true;
           remaining = 0;
           break;
         }
@@ -1209,8 +1211,9 @@ async function main() {
     waveNum++;
   }
 
-  // Mark run as done (or capped if usage cap stopped it with remaining budget)
-  const finalPhase = lastCapped && remaining > 0 ? "capped" : "done";
+  // Only truly "done" if steering explicitly completed the objective (or non-flex single wave with budget exhausted)
+  const trulyDone = objectiveComplete || (!flex && remaining <= 0);
+  const finalPhase = trulyDone ? "done" : "capped";
   saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
@@ -1218,7 +1221,7 @@ async function main() {
     lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
     branches, phase: finalPhase, startedAt: new Date(runStartedAt).toISOString(), cwd,
   });
-  if (finalPhase === "done") {
+  if (trulyDone) {
     try { rmSync(join(runDir, "designs"), { recursive: true, force: true }); } catch {}
     try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}
   }
