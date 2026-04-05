@@ -694,8 +694,12 @@ export class Swarm {
         const info = rl.rate_limit_info;
         this.rateLimitUtilization = info.utilization ?? 0;
         this.rateLimitStatus = info.status;
-        if (info.status === "rejected" && info.resetsAt) {
+        if (info.status === "rejected" && info.resetsAt && !this.allowExtraUsage) {
+          // Only block dispatch on rejection if extra usage is NOT allowed.
+          // When extra usage is allowed, rejection is just the plan→overage transition.
           this.rateLimitResetsAt = info.resetsAt;
+        } else if (info.status !== "rejected") {
+          this.rateLimitResetsAt = undefined;
         }
         // Track per-window state
         const windowType = (info as any).rateLimitType as string | undefined;
@@ -719,7 +723,10 @@ export class Swarm {
         }
         const pct = info.utilization != null ? `${Math.round(info.utilization * 100)}%` : "";
         const overageTag = this.isUsingOverage ? " [EXTRA]" : "";
-        this.log(agent.id, `Rate: ${info.status} ${pct}${overageTag}${windowType ? ` (${windowType})` : ""}`);
+        const statusLabel = info.status === "rejected" && this.allowExtraUsage
+          ? "switching to extra usage"
+          : info.status;
+        this.log(agent.id, `Rate: ${statusLabel} ${pct}${overageTag}${windowType ? ` (${windowType})` : ""}`);
         break;
       }
     }

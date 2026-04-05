@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+- **Smooth extra usage transition.** When extra usage is allowed, hitting plan limits no longer flashes "rejected" status or blocks dispatch — agents continue seamlessly into overage. Log shows "switching to extra usage" instead.
+- **Extra usage budget shown in UI.** The `[EXTRA USAGE]` tag now displays spend vs budget, e.g. `[EXTRA USAGE $1.23/$5]`.
+- **Fixed stale "Waiting for reset 0s" display.** Rate limit reset deadline is cleared when agents resume, and expired deadlines are no longer rendered.
+
 ## 1.2.1
 
 - Full progress UI during all planner phases — theme identification, orchestration, steering, and reflection now show elapsed time, cost, utilization %, and streaming text instead of bare spinners.

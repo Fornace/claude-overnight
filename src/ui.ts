@@ -84,13 +84,18 @@ export function renderFrame(swarm: Swarm, showHotkeys = false): string {
         } else {
           label = chalk.yellow(`Capped at ${capFrac != null ? Math.round(capFrac * 100) : 100}% — finishing active`);
         }
-      } else if (swarm.rateLimitResetsAt) {
-        const waitSec = Math.max(0, Math.ceil((swarm.rateLimitResetsAt - Date.now()) / 1000));
+      } else if (swarm.rateLimitResetsAt && swarm.rateLimitResetsAt > Date.now()) {
+        const waitSec = Math.ceil((swarm.rateLimitResetsAt - Date.now()) / 1000);
         const mm = Math.floor(waitSec / 60);
         const ss = waitSec % 60;
         label = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
       }
-      if (swarm.isUsingOverage && !swarm.cappedOut) label += chalk.red(" [EXTRA USAGE]");
+      if (swarm.isUsingOverage && !swarm.cappedOut) {
+        const budgetInfo = swarm.extraUsageBudget != null
+          ? ` $${swarm.overageCostUsd.toFixed(2)}/$${swarm.extraUsageBudget}`
+          : "";
+        label += chalk.red(` [EXTRA USAGE${budgetInfo}]`);
+      }
       const prefix = windowLabel ? chalk.dim(windowLabel.padEnd(6)) : chalk.dim("Usage ");
       out.push(`  ${prefix}${barStr}  ${label}`);
     };

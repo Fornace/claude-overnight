@@ -225,6 +225,7 @@ The usage bar cycles through all rate limit windows (5h, 7d, etc.) every 3 secon
 
 Built for unattended runs lasting hours or days.
 
+- **Smooth overage transition**: when extra usage is allowed, plan limit rejection is seamless — no dispatch blocking, agents continue into overage
 - **Hard block**: pauses until the rate limit window resets, then resumes
 - **Soft throttle**: slows dispatch at >75% utilization
 - **Extra usage guard**: detects overage billing and stops unless explicitly allowed
