@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync } from "fs";
+import { NudgeError } from "./types.js";
 import type { Task, PermMode, RateLimitWindow } from "./types.js";
 
 /** Rate limit info emitted by planner queries for UI display. */
@@ -38,12 +39,15 @@ export interface RunMemory {
   previousRuns?: string;
 }
 
-const INACTIVITY_MS = 5 * 60 * 1000;
+const NUDGE_MS = 15 * 60 * 1000;   // 15 min — close & restart with "continue"
+const HARD_TIMEOUT_MS = 30 * 60 * 1000; // 30 min — give up
 
 interface PlannerOpts {
   cwd: string;
   model: string;
   permissionMode: PermMode;
+  /** Resume a previous session instead of starting fresh. */
+  resumeSessionId?: string;
 }
 
 // ── Model tier detection ──
@@ -217,10 +221,23 @@ async function runPlannerQuery(
   const MAX_RETRIES = 3;
   const BACKOFF = [30_000, 60_000, 120_000];
 
+  let currentPrompt = prompt;
+  let currentOpts = opts;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await runPlannerQueryOnce(prompt, opts, onLog);
+      return await runPlannerQueryOnce(currentPrompt, currentOpts, onLog);
     } catch (err: any) {
+      if (err instanceof NudgeError) {
+        if (err.sessionId) {
+          onLog("Silent 15m — resuming session with continue");
+          currentPrompt = "Continue. Complete the task.";
+          currentOpts = { ...opts, resumeSessionId: err.sessionId };
+        } else {
+          onLog("Silent 15m — restarting planner (no session to resume)");
+          // No session captured, just retry from scratch
+        }
+        continue;
+      }
       if (attempt < MAX_RETRIES && isRateLimitError(err)) {
         const waitMs = BACKOFF[attempt];
         const waitSec = Math.round(waitMs / 1000);
@@ -248,6 +265,7 @@ async function runPlannerQueryOnce(
   _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0 };
   let resultText = "";
   const startedAt = Date.now();
+  const isResume = !!opts.resumeSessionId;
   const pq = query({
     prompt,
     options: {
@@ -257,8 +275,9 @@ async function runPlannerQueryOnce(
       allowedTools: ["Read", "Glob", "Grep", "Write"],
       permissionMode: opts.permissionMode,
       ...(opts.permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
-      persistSession: false,
+      persistSession: true, // needed for interrupt+resume
       includePartialMessages: true,
+      ...(isResume && { resume: opts.resumeSessionId }),
     },
   });
 
@@ -279,20 +298,33 @@ async function runPlannerQueryOnce(
     onLog(`${timeStr}${toolStr}${costStr}${rlStr}${extra}`);
   }, 500);
 
+  const timeoutMs = isResume ? HARD_TIMEOUT_MS : NUDGE_MS;
+  let sessionId: string | undefined;
   let lastActivity = Date.now();
   let timer: NodeJS.Timeout;
   const watchdog = new Promise<never>((_, reject) => {
     const check = () => {
       const silent = Date.now() - lastActivity;
-      if (silent >= INACTIVITY_MS) { pq.close(); reject(new Error(`Planner silent for ${Math.round(silent / 1000)}s — assumed hung`)); }
-      else timer = setTimeout(check, Math.min(30_000, INACTIVITY_MS - silent + 1000));
+      if (silent >= timeoutMs) {
+        // Try interrupt (graceful), fall back to close (hard kill)
+        pq.interrupt().catch(() => pq.close());
+        if (isResume) {
+          reject(new Error(`Planner silent for ${Math.round(silent / 1000)}s — assumed hung`));
+        } else {
+          reject(new NudgeError(sessionId, silent));
+        }
+      }
+      else timer = setTimeout(check, Math.min(30_000, timeoutMs - silent + 1000));
     };
-    timer = setTimeout(check, INACTIVITY_MS);
+    timer = setTimeout(check, timeoutMs);
   });
 
   const consume = async () => {
     for await (const msg of pq) {
       lastActivity = Date.now();
+      if (!sessionId && "session_id" in (msg as any)) {
+        sessionId = (msg as any).session_id;
+      }
       if (msg.type === "stream_event") {
         const ev = (msg as any).event;
         if (ev?.type === "content_block_start" && ev.content_block?.type === "tool_use") {

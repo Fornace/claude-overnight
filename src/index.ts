@@ -498,7 +498,7 @@ async function main() {
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
     --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
-    --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 300s, kills only silent agents)")}
+    --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 900s, nudges at timeout, kills at 2×)")}
     --no-flex              Disable adaptive multi-wave planning ${chalk.dim("(run all tasks in one shot)")}
 
   ${chalk.cyan("Defaults")} ${chalk.dim("(non-interactive)")}

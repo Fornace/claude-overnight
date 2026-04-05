@@ -116,6 +116,14 @@ export interface RateLimitWindow {
   resetsAt?: number;
 }
 
+/** Thrown when a query goes silent — carries session ID for interrupt+resume. */
+export class NudgeError extends Error {
+  constructor(public sessionId: string | undefined, silentMs: number) {
+    super(`Silent for ${Math.round(silentMs / 1000)}s — nudging`);
+    this.name = "NudgeError";
+  }
+}
+
 /** Persisted run state for crash recovery and resume. */
 export interface RunState {
   id: string;

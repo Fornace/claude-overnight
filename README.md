@@ -178,7 +178,7 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
 | `--allow-extra-usage` | off | Allow extra/overage usage (billed separately) |
 | `--extra-usage-budget=N` | — | Max $ for extra usage (implies --allow-extra-usage) |
-| `--timeout=SECONDS` | `300` | Inactivity timeout per agent |
+| `--timeout=SECONDS` | `900` | Inactivity timeout per agent (nudges at timeout, kills at 2×) |
 | `--no-flex` | — | Disable multi-wave steering |
 | `--dry-run` | — | Show planned tasks without running |
 
@@ -226,6 +226,7 @@ The usage bar cycles through all rate limit windows (5h, 7d, etc.) every 3 secon
 Built for unattended runs lasting hours or days.
 
 - **Smooth overage transition**: when extra usage is allowed, plan limit rejection is seamless — no dispatch blocking, agents continue into overage
+- **Interrupt + resume**: agents and planner queries that go silent are interrupted and resumed with full conversation context via SDK session resume — not killed and restarted from scratch
 - **Hard block**: pauses until the rate limit window resets, then resumes
 - **Soft throttle**: slows dispatch at >75% utilization
 - **Extra usage guard**: detects overage billing and stops unless explicitly allowed

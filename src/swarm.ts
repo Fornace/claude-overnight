@@ -10,6 +10,7 @@ import type {
   SDKPartialAssistantMessage,
   SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
+import { NudgeError } from "./types.js";
 import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow } from "./types.js";
 
 export interface SwarmConfig {
@@ -58,7 +59,6 @@ export class Swarm {
 
   // Rate limit tracking for auto-concurrency
   rateLimitUtilization = 0;
-  rateLimitStatus: string = "";
   rateLimitResetsAt?: number;
   /** Per-window rate limit snapshots (updated on every rate_limit_event). */
   rateLimitWindows: Map<string, RateLimitWindow> = new Map();
@@ -262,7 +262,7 @@ export class Swarm {
 
     const maxRetries = this.config.maxRetries ?? 2;
     // Inactivity timeout: kill agent only if it goes silent (no messages)
-    const inactivityMs = this.config.agentTimeoutMs ?? 5 * 60 * 1000;
+    const inactivityMs = this.config.agentTimeoutMs ?? 15 * 60 * 1000;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
@@ -276,50 +276,80 @@ export class Swarm {
 
       try {
         const perm = this.config.permissionMode ?? "auto";
-        const agentQuery = query({
-          prompt: this.config.useWorktrees
-            ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
-            : task.prompt,
-          options: {
-            cwd: agentCwd,
-            model: task.model || this.config.model,
-            permissionMode: perm,
-            ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
-            allowedTools: this.config.allowedTools,
-            includePartialMessages: true,
-            persistSession: false,
-          },
-        });
+        let resumeSessionId: string | undefined;
 
-        // Inactivity watchdog: resets on every message, only fires if agent goes silent
-        let lastActivity = Date.now();
-        let timer: NodeJS.Timeout;
-        const watchdog = new Promise<never>((_, reject) => {
-          const check = () => {
-            const silent = Date.now() - lastActivity;
-            if (silent >= inactivityMs) {
-              agentQuery.close();
-              reject(new AgentTimeoutError(silent));
-            } else {
-              timer = setTimeout(check, Math.min(30_000, inactivityMs - silent + 1000));
-            }
-          };
-          timer = setTimeout(check, inactivityMs);
-        });
-        this.activeQueries.add(agentQuery);
-        try {
-          await Promise.race([
-            (async () => {
-              for await (const msg of agentQuery) {
-                lastActivity = Date.now();
-                this.handleMsg(agent, msg);
+        const runOnce = async (isResume: boolean): Promise<void> => {
+          const agentPrompt = isResume
+            ? "Continue. Complete the task."
+            : this.config.useWorktrees
+              ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
+              : task.prompt;
+
+          const agentQuery = query({
+            prompt: agentPrompt,
+            options: {
+              cwd: agentCwd,
+              model: task.model || this.config.model,
+              permissionMode: perm,
+              ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
+              allowedTools: this.config.allowedTools,
+              includePartialMessages: true,
+              persistSession: true,
+              ...(isResume && resumeSessionId && { resume: resumeSessionId }),
+            },
+          });
+
+          const timeoutMs = isResume ? inactivityMs * 2 : inactivityMs;
+          let sessionId: string | undefined;
+          let lastActivity = Date.now();
+          let timer: NodeJS.Timeout;
+          const watchdog = new Promise<never>((_, reject) => {
+            const check = () => {
+              const silent = Date.now() - lastActivity;
+              if (silent >= timeoutMs) {
+                agentQuery.interrupt().catch(() => agentQuery.close());
+                if (isResume) {
+                  reject(new AgentTimeoutError(silent));
+                } else {
+                  reject(new NudgeError(sessionId, silent));
+                }
+              } else {
+                timer = setTimeout(check, Math.min(30_000, timeoutMs - silent + 1000));
               }
-            })(),
-            watchdog,
-          ]);
-        } finally {
-          clearTimeout(timer!);
-          this.activeQueries.delete(agentQuery);
+            };
+            timer = setTimeout(check, timeoutMs);
+          });
+          this.activeQueries.add(agentQuery);
+          try {
+            await Promise.race([
+              (async () => {
+                for await (const msg of agentQuery) {
+                  lastActivity = Date.now();
+                  if (!sessionId && "session_id" in (msg as any)) {
+                    sessionId = (msg as any).session_id;
+                  }
+                  this.handleMsg(agent, msg);
+                }
+              })(),
+              watchdog,
+            ]);
+          } finally {
+            clearTimeout(timer!);
+            this.activeQueries.delete(agentQuery);
+            if (sessionId) resumeSessionId = sessionId;
+          }
+        };
+
+        // Run with nudge: first attempt can be interrupted and resumed
+        try {
+          await runOnce(false);
+        } catch (nudgeErr) {
+          if (nudgeErr instanceof NudgeError && resumeSessionId) {
+            this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m — resuming with continue`);
+            await runOnce(true);
+          } else {
+            throw nudgeErr;
+          }
         }
 
         if (agent.status === "running") {
@@ -693,7 +723,6 @@ export class Swarm {
         const rl = msg as SDKRateLimitEvent;
         const info = rl.rate_limit_info;
         this.rateLimitUtilization = info.utilization ?? 0;
-        this.rateLimitStatus = info.status;
         if (info.status === "rejected" && info.resetsAt && !this.allowExtraUsage) {
           // Only block dispatch on rejection if extra usage is NOT allowed.
           // When extra usage is allowed, rejection is just the plan→overage transition.

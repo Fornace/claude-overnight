@@ -1,10 +1,26 @@
 # Changelog
 
-## 1.2.2
+## 1.3.0
+
+### Interrupt + resume for silent queries
+
+Agents and planner queries that go silent are no longer killed immediately. Instead, they are interrupted and resumed with full conversation context via the SDK's `interrupt()` + session resume mechanism.
+
+- **Agents**: silent for 15min → interrupt + resume with "Continue". Silent for another 30min → hard kill. Configurable via `--timeout`.
+- **Planner**: silent for 15min → interrupt + resume. Silent for another 30min → hard kill.
+- Uses SDK `persistSession: true` and `resume: sessionId` — the resumed query picks up with all prior tool calls, file reads, and partial work intact.
+
+### Extra usage improvements
 
 - **Smooth extra usage transition.** When extra usage is allowed, hitting plan limits no longer flashes "rejected" status or blocks dispatch — agents continue seamlessly into overage. Log shows "switching to extra usage" instead.
 - **Extra usage budget shown in UI.** The `[EXTRA USAGE]` tag now displays spend vs budget, e.g. `[EXTRA USAGE $1.23/$5]`.
 - **Fixed stale "Waiting for reset 0s" display.** Rate limit reset deadline is cleared when agents resume, and expired deadlines are no longer rendered.
+
+### Internal
+
+- Unified `NudgeError` class in types.ts (was duplicated as `PlannerNudgeError` + `AgentNudgeError`).
+- Removed dead `rateLimitStatus` field.
+- Default agent inactivity timeout raised from 5min to 15min.
 
 ## 1.2.1
 
