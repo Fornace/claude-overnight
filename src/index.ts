@@ -276,16 +276,17 @@ function readMdDir(dir: string): string {
   } catch { return ""; }
 }
 
-function readRunMemory(baseDir: string): RunMemory {
+function readRunMemory(runDir: string, previousRuns?: string): RunMemory {
   let goal = "", status = "";
-  try { goal = readFileSync(join(baseDir, "goal.md"), "utf-8"); } catch {}
-  try { status = readFileSync(join(baseDir, "status.md"), "utf-8"); } catch {}
+  try { goal = readFileSync(join(runDir, "goal.md"), "utf-8"); } catch {}
+  try { status = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
   return {
-    designs: readMdDir(join(baseDir, "designs")),
-    reflections: readMdDir(join(baseDir, "reflections")),
-    milestones: readMdDir(join(baseDir, "milestones")),
+    designs: readMdDir(join(runDir, "designs")),
+    reflections: readMdDir(join(runDir, "reflections")),
+    milestones: readMdDir(join(runDir, "milestones")),
     status,
     goal,
+    previousRuns,
   };
 }
 
@@ -293,15 +294,60 @@ function writeStatus(baseDir: string, status: string): void {
   writeFileSync(join(baseDir, "status.md"), status, "utf-8");
 }
 
-function saveRunState(baseDir: string, state: RunState): void {
-  mkdirSync(baseDir, { recursive: true });
-  writeFileSync(join(baseDir, "run.json"), JSON.stringify(state, null, 2), "utf-8");
+function saveRunState(runDir: string, state: RunState): void {
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "run.json"), JSON.stringify(state, null, 2), "utf-8");
 }
 
-function loadRunState(baseDir: string): RunState | null {
+function loadRunState(runDir: string): RunState | null {
   try {
-    return JSON.parse(readFileSync(join(baseDir, "run.json"), "utf-8"));
+    return JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8"));
   } catch { return null; }
+}
+
+/** Find the latest incomplete run, or null. */
+function findIncompleteRun(rootDir: string): { dir: string; state: RunState } | null {
+  const runsDir = join(rootDir, "runs");
+  try {
+    const dirs = readdirSync(runsDir).sort().reverse(); // newest first
+    for (const d of dirs) {
+      const state = loadRunState(join(runsDir, d));
+      if (state && state.phase !== "done") return { dir: join(runsDir, d), state };
+    }
+  } catch {}
+  return null;
+}
+
+/** Read final status + goal from all completed previous runs (newest first, max 5). */
+function readPreviousRunKnowledge(rootDir: string): string {
+  const runsDir = join(rootDir, "runs");
+  try {
+    const dirs = readdirSync(runsDir).sort().reverse();
+    const summaries: string[] = [];
+    for (const d of dirs) {
+      if (summaries.length >= 5) break;
+      const state = loadRunState(join(runsDir, d));
+      if (!state || state.phase !== "done") continue;
+      let status = "";
+      try { status = readFileSync(join(runsDir, d, "status.md"), "utf-8"); } catch {}
+      let goal = "";
+      try { goal = readFileSync(join(runsDir, d, "goal.md"), "utf-8"); } catch {}
+      const date = d.replace("T", " ").slice(0, 19);
+      const cost = state.accCost > 0 ? ` · $${state.accCost.toFixed(2)}` : "";
+      summaries.push(`### Run ${date} (${state.accCompleted} tasks${cost})\n${status || "(no status recorded)"}\n${goal ? `Goal: ${goal.slice(0, 500)}` : ""}`);
+    }
+    return summaries.join("\n\n");
+  } catch { return ""; }
+}
+
+function createRunDir(rootDir: string): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const runDir = join(rootDir, "runs", ts);
+  mkdirSync(join(runDir, "designs"), { recursive: true });
+  mkdirSync(join(runDir, "reflections"), { recursive: true });
+  mkdirSync(join(runDir, "milestones"), { recursive: true });
+  mkdirSync(join(runDir, "sessions"), { recursive: true });
+  return runDir;
 }
 
 function saveWaveSession(baseDir: string, waveNum: number, kind: string, swarm: Swarm): void {
@@ -497,17 +543,19 @@ async function main() {
   if (noTTY) console.log(chalk.dim("  Non-interactive mode — using defaults\n"));
 
   // ── Resume detection ──
-  const baseDir0 = join(cwd, ".claude-overnight");
-  const prevState = loadRunState(baseDir0);
+  const rootDir = join(cwd, ".claude-overnight");
   let resuming = false;
   let resumeState: RunState | null = null;
-  if (prevState && prevState.phase !== "done" && prevState.cwd === cwd && !noTTY && tasks.length === 0) {
-    const merged = prevState.branches.filter(b => b.status === "merged").length;
-    const unmerged = prevState.branches.filter(b => b.status === "unmerged").length;
-    const failed = prevState.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
+  let resumeRunDir: string | undefined;
+  const incomplete = findIncompleteRun(rootDir);
+  if (incomplete && incomplete.state.cwd === cwd && !noTTY && tasks.length === 0) {
+    const prev = incomplete.state;
+    const merged = prev.branches.filter(b => b.status === "merged").length;
+    const unmerged = prev.branches.filter(b => b.status === "unmerged").length;
+    const failed = prev.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
     console.log(chalk.yellow(`\n  Previous run found`));
-    console.log(chalk.dim(`  ${prevState.accCompleted} done · ${prevState.remaining} remaining · $${prevState.accCost.toFixed(2)} spent`));
-    if (merged > 0) console.log(chalk.dim(`  ${merged} merged · ${unmerged} unmerged · ${failed} failed branches`));
+    console.log(chalk.dim(`  ${prev.accCompleted} done · ${prev.remaining} remaining · $${prev.accCost.toFixed(2)} spent`));
+    if (merged + unmerged + failed > 0) console.log(chalk.dim(`  ${merged} merged · ${unmerged} unmerged · ${failed} failed branches`));
     const action = await selectKey(
       "",
       [
@@ -519,15 +567,13 @@ async function main() {
     if (action === "q") { process.exit(0); }
     if (action === "r") {
       resuming = true;
-      resumeState = prevState;
-      // Auto-merge any unmerged branches
+      resumeState = prev;
+      resumeRunDir = incomplete.dir;
       if (unmerged > 0) {
-        autoMergeBranches(cwd, prevState.branches, (msg) => console.log(chalk.dim(`  ${msg}`)));
+        autoMergeBranches(cwd, prev.branches, (msg) => console.log(chalk.dim(`  ${msg}`)));
       }
-    } else {
-      // Fresh: clean up old run
-      try { rmSync(baseDir0, { recursive: true, force: true }); } catch {}
     }
+    // Fresh: keep the old run folder (it's history), just start a new one
   }
 
   // ── Interactive flow: Objective → Budget → Model → Usage cap → Plan → Review ──
@@ -640,6 +686,10 @@ async function main() {
   let thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
   let thinkingHistory: WaveSummary | undefined;
 
+  // Create run directory early so thinking wave can use it
+  const runDir = resuming && resumeRunDir ? resumeRunDir : createRunDir(rootDir);
+  const previousKnowledge = readPreviousRunKnowledge(rootDir);
+
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
   const needsPlan = tasks.length === 0;
 
@@ -654,7 +704,7 @@ async function main() {
 
     const useThinking = flex && (budget ?? 10) > concurrency * 3;
     const thinkingCount = useThinking ? Math.min(Math.max(concurrency, Math.ceil((budget ?? 10) * 0.005)), 10) : 0;
-    const designDir = join(cwd, ".claude-overnight", "designs");
+    const designDir = join(runDir, "designs");
 
     try {
       if (useThinking) {
@@ -708,7 +758,7 @@ async function main() {
 
         // Phase 2: Thinking wave
         mkdirSync(designDir, { recursive: true });
-        const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel);
+        const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel, previousKnowledge || undefined);
         console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
 
         const thinkingSwarm = new Swarm({
@@ -837,10 +887,9 @@ async function main() {
   const runStartedAt = Date.now();
 
   // Wave-loop state — either fresh or resumed
-  const baseDir = join(cwd, ".claude-overnight");
-  mkdirSync(join(baseDir, "reflections"), { recursive: true });
-  mkdirSync(join(baseDir, "milestones"), { recursive: true });
-  mkdirSync(join(baseDir, "sessions"), { recursive: true });
+  mkdirSync(join(runDir, "reflections"), { recursive: true });
+  mkdirSync(join(runDir, "milestones"), { recursive: true });
+  mkdirSync(join(runDir, "sessions"), { recursive: true });
 
   let currentSwarm: Swarm | undefined;
   let remaining: number;
@@ -874,8 +923,8 @@ async function main() {
     console.log(chalk.green(`\n  Resumed: wave ${waveNum}, ${remaining} remaining, $${accCost.toFixed(2)} spent\n`));
   } else {
     // Fresh run
-    if (objective && !existsSync(join(baseDir, "goal.md"))) {
-      writeFileSync(join(baseDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
+    if (objective && !existsSync(join(runDir, "goal.md"))) {
+      writeFileSync(join(runDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
     }
     remaining = (budget ?? tasks.length) - thinkingUsed;
     currentTasks = tasks;
@@ -955,8 +1004,8 @@ async function main() {
     lastCapped = swarm.cappedOut;
     lastAborted = swarm.aborted;
     recordBranches(swarm, branches);
-    saveWaveSession(baseDir, waveNum, lastWaveKind, swarm);
-    saveRunState(baseDir, {
+    saveWaveSession(runDir, waveNum, lastWaveKind, swarm);
+    saveRunState(runDir, {
       id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective!, budget: budget ?? tasks.length,
       remaining, workerModel, plannerModel, concurrency, permissionMode,
       usageCap, flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
@@ -986,7 +1035,7 @@ async function main() {
       console.log(chalk.cyan(`\n  ◆ Assessing...\n`));
       process.stdout.write("\x1B[?25l");
       try {
-        const memory = readRunMemory(baseDir);
+        const memory = readRunMemory(runDir, previousKnowledge || undefined);
         const steer = await steerWave(
           objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
           permissionMode, concurrency, makeProgressLog(), memory,
@@ -995,14 +1044,14 @@ async function main() {
         process.stdout.write("\x1B[?25h");
 
         // Persist context layers
-        if (steer.statusUpdate) writeStatus(baseDir, steer.statusUpdate);
+        if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
         if (steer.goalUpdate) {
-          writeGoalUpdate(baseDir, steer.goalUpdate);
+          writeGoalUpdate(runDir, steer.goalUpdate);
           console.log(chalk.dim(`  Goal refined: ${steer.goalUpdate.slice(0, 100)}\n`));
         }
         // Archive milestone every ~5 execution waves
         const execWaves = waveHistory.filter(w => w.kind === "execute").length;
-        if (execWaves > 0 && execWaves % 5 === 0) archiveMilestone(baseDir, waveNum);
+        if (execWaves > 0 && execWaves % 5 === 0) archiveMilestone(runDir, waveNum);
 
         if (steer.done || steer.action === "done") {
           console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
@@ -1024,7 +1073,7 @@ async function main() {
           // Run reflection wave
           console.log(chalk.dim(`  ${steer.reasoning}`));
           console.log(chalk.cyan(`\n  ◆ Reflection: 2 agents reviewing...\n`));
-          const reflectionDir = join(baseDir, "reflections");
+          const reflectionDir = join(runDir, "reflections");
           waveNum++;
           const reflTasks = buildReflectionTasks(objective!, memory.goal, reflectionDir, waveNum, plannerModel);
           const reflSwarm = new Swarm({
@@ -1076,16 +1125,16 @@ async function main() {
     waveNum++;
   }
 
-  // Mark run as done — keep artifacts for inspection, clean designs/reflections
-  saveRunState(baseDir, {
+  // Mark run as done — keep sessions/milestones/status/goal, clean transient files
+  saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
     usageCap, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
     lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
     branches, phase: "done", startedAt: new Date(runStartedAt).toISOString(), cwd,
   });
-  try { rmSync(join(baseDir, "designs"), { recursive: true, force: true }); } catch {}
-  try { rmSync(join(baseDir, "reflections"), { recursive: true, force: true }); } catch {}
+  try { rmSync(join(runDir, "designs"), { recursive: true, force: true }); } catch {}
+  try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}
 
   // Switch back if we created a run branch
   if (runBranch && originalRef) {

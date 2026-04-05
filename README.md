@@ -218,14 +218,24 @@ Built for unattended runs lasting hours, days, or weeks.
 
 No tasks are dropped. Set a budget of 1000 and go to sleep.
 
-## Crash recovery and resume
+## Run history and resume
 
-Run state persists to `.claude-overnight/` in your repo. If a run crashes, gets rate-limited, or you Ctrl+C:
+Every run gets its own folder in `.claude-overnight/runs/`. Nothing is ever overwritten — run A's knowledge survives even if run B crashes immediately after.
 
 ```
-🌙  claude-overnight
-────────────────────────────────────
+.claude-overnight/
+  runs/
+    2026-04-04T18-52-49/     ← run A (done, $200, 200 tasks)
+      run.json, status.md, goal.md, milestones/, sessions/
+    2026-04-05T10-30-00/     ← run B (crashed after wave 1)
+      run.json, sessions/
+    2026-04-05T14-00-00/     ← run C (active)
+      ...
+```
 
+If a run crashes, gets rate-limited, or you Ctrl+C:
+
+```
   Previous run found
   50 done · 1950 remaining · $69.16 spent
   34 merged · 16 unmerged · 0 failed branches
@@ -233,14 +243,13 @@ Run state persists to `.claude-overnight/` in your repo. If a run crashes, gets 
   Resume  │  Fresh  │  Quit
 ```
 
-On resume:
-- Unmerged branches with good work auto-merge
-- The wave loop continues from where it left off
-- All context (status, milestones, goal) is preserved
+On resume: unmerged branches auto-merge, the wave loop continues, all context is preserved.
 
-Session history is saved to `.claude-overnight/sessions/wave-N.json` — inspect what each wave's agents did, their costs, tool counts, and branches.
+**Knowledge carries forward** — new runs inherit knowledge from completed previous runs. Thinking agents and steering see summaries of what past runs built, so they don't re-discover or duplicate work. Run 2 knows run 1 already built the auth system.
 
-Branch tracking records every `swarm/task-*` branch with its status (merged, unmerged, failed, merge-failed). No more mystery branches.
+Session history: `.claude-overnight/runs/{id}/sessions/wave-N.json` — inspect any wave's agents, costs, tool counts, branches.
+
+Branch tracking: every `swarm/task-*` branch is recorded with its status (merged, unmerged, failed, merge-failed). No more mystery branches.
 
 Add `.claude-overnight` to your `.gitignore`.
 

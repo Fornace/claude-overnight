@@ -24,6 +24,7 @@ export interface RunMemory {
   milestones: string;
   status: string;
   goal: string;
+  previousRuns?: string;
 }
 
 const INACTIVITY_MS = 5 * 60 * 1000;
@@ -437,13 +438,15 @@ export function buildThinkingTasks(
   themes: string[],
   designDir: string,
   plannerModel: string,
+  previousKnowledge?: string,
 ): Task[] {
+  const prevBlock = previousKnowledge ? `\nKNOWLEDGE FROM PREVIOUS RUNS:\n${previousKnowledge}\n\nBuild on this — don't re-discover what's already known.\n` : "";
   return themes.map((theme, i) => ({
     id: `think-${i}`,
     prompt: `You are a senior architect exploring a codebase to design a solution.
 
 OVERALL OBJECTIVE: ${objective}
-
+${prevBlock}
 YOUR FOCUS: ${theme}
 
 Explore the codebase thoroughly using Read, Glob, and Grep. Then write a design document to ${designDir}/focus-${i}.md with these sections:
@@ -716,11 +719,12 @@ export async function steerWave(
   const designBlock = runMemory?.designs ? `\nArchitectural research:\n${cap(runMemory.designs, 4000)}\n` : "";
   const reflectionBlock = runMemory?.reflections ? `\nLatest quality reports:\n${cap(runMemory.reflections, 3000)}\n` : "";
   const goalBlock = runMemory?.goal ? `\nNorth star — what "amazing" means:\n${runMemory.goal}\n` : "";
+  const prevRunBlock = runMemory?.previousRuns ? `\nKnowledge from previous runs:\n${cap(runMemory.previousRuns, 3000)}\n` : "";
 
   const prompt = `You are the quality director for an autonomous multi-wave agent system. Your job is to push the work toward "amazing," not just "done."
 
 Objective: ${objective}
-${goalBlock}${statusBlock}${milestoneBlock}
+${goalBlock}${statusBlock}${milestoneBlock}${prevRunBlock}
 Recent waves:
 ${recentText}
 ${designBlock}${reflectionBlock}
