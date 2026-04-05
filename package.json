@@ -1,7 +1,7 @@
 {
   "name": "claude-overnight",
-  "version": "0.9.1",
-  "description": "Fire off Claude agents, come back days later to shipped work. Maximizes every token in your plan.",
+  "version": "1.0.0",
+  "description": "Run 10, 100, or 1000 Claude agents overnight. Parallel autonomous AI coding with thinking waves, iterative quality steering, crash recovery, and rate limit handling. Built on the Claude Agent SDK.",
   "type": "module",
   "bin": {
     "claude-overnight": "dist/index.js"
@@ -28,14 +28,20 @@
   },
   "keywords": [
     "claude",
-    "ai",
-    "agents",
-    "parallel",
-    "autonomous",
-    "background",
+    "claude-agent-sdk",
+    "ai-agents",
+    "ai-coding",
+    "parallel-agents",
+    "autonomous-coding",
+    "swarm",
     "overnight",
     "cli",
-    "orchestration"
+    "orchestration",
+    "multi-agent",
+    "code-generation",
+    "anthropic",
+    "worktrees",
+    "iterative"
   ],
   "engines": {
     "node": ">=20"

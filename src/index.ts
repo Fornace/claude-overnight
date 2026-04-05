@@ -716,7 +716,7 @@ async function main() {
   }
 
   // ── Flex mode: adaptive multi-wave planning ──
-  const flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
+  let flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
   let thinkingUsed = 0;
   let thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
@@ -728,6 +728,7 @@ async function main() {
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
   const needsPlan = tasks.length === 0;
+  const designDir = join(runDir, "designs");
 
   if (needsPlan) {
     if (noTTY) {
@@ -740,7 +741,6 @@ async function main() {
 
     const useThinking = flex && (budget ?? 10) > concurrency * 3;
     const thinkingCount = useThinking ? Math.min(Math.max(concurrency, Math.ceil((budget ?? 10) * 0.005)), 10) : 0;
-    const designDir = join(runDir, "designs");
 
     try {
       if (useThinking) {
@@ -940,7 +940,7 @@ async function main() {
   const branches: BranchRecord[] = [];
 
   if (resuming && resumeState) {
-    // Restore from saved state
+    // Restore ALL config from saved state
     remaining = resumeState.remaining;
     currentTasks = resumeState.currentTasks;
     waveNum = resumeState.waveNum;
@@ -956,6 +956,8 @@ async function main() {
     plannerModel = resumeState.plannerModel;
     budget = resumeState.budget;
     concurrency = resumeState.concurrency;
+    flex = resumeState.flex;
+    usageCap = resumeState.usageCap;
     console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent\n`));
   } else {
     // Fresh run

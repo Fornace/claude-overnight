@@ -1,8 +1,10 @@
 # claude-overnight
 
-Fire off Claude agents, come back to shipped work.
+Run 10, 100, or 1000 Claude agents overnight. Come back to shipped work.
 
-Describe what to build. Set a budget — 10 agents, 100, 1000. A planner agent analyzes your codebase, breaks the objective into independent tasks, and launches them all. Each agent runs in its own git worktree with full tooling (Read, Edit, Bash, Grep — everything). Rate limits? It waits. Windows reset? It resumes. It doesn't stop until every task is done.
+Describe what to build. Set a budget. The tool plans, explores your codebase, breaks the objective into tasks, launches parallel agents in isolated git worktrees, iterates toward quality, and handles rate limits automatically. You press Run once, then go to sleep.
+
+Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Works with Claude Opus, Sonnet, and Haiku.
 
 ## Install
 
@@ -10,17 +12,13 @@ Describe what to build. Set a budget — 10 agents, 100, 1000. A planner agent a
 npm install -g claude-overnight
 ```
 
-Requires Node.js >= 20 and Claude authentication (OAuth via `claude` CLI, or `ANTHROPIC_API_KEY`).
+Requires Node.js >= 20 and Claude authentication (`claude auth login`, or set `ANTHROPIC_API_KEY`).
 
-## Usage
-
-### Interactive
+## Quick start
 
 ```bash
 claude-overnight
 ```
-
-A guided flow walks you through each step:
 
 ```
 🌙  claude-overnight
@@ -29,124 +27,102 @@ A guided flow walks you through each step:
 ① What should the agents do?
   > refactor auth, add tests, update docs
 
-② Budget [10]: 50
+② Budget [10]: 200
 
 ③ Worker model:
   ● Sonnet — Sonnet 4.6 · Best for everyday tasks
   ○ Opus — Opus 4.6 · Most capable
-  ○ Haiku — Haiku 4.5 · Fastest
 
 ④ Usage:
-  ● Unlimited · full capacity, wait through rate limits
-  ○ 90% · leave 10% for other work
+  ● 90% · leave 10% for other work
 
-╭────────────────────────────────────╮
-│  sonnet · budget 50 · 5× · flex   │
-╰────────────────────────────────────╯
+╭──────────────────────────────────────────╮
+│  sonnet · budget 200 · 5× · flex · 90%  │
+╰──────────────────────────────────────────╯
+
+✓ 5 themes → review, press Run, walk away
+
+◆ Thinking: 5 agents exploring...     ← architects analyze your codebase
+◆ Orchestrating plan...               ← synthesizes 50 concrete tasks
+◆ Wave 1 · 50 tasks                   ← fully autonomous from here
+◆ Assessing... how close to amazing?
+◆ Wave 2 · 30 tasks                   ← improvements from assessment
+◆ Reflection: 2 agents reviewing      ← deep quality audit
+◆ Wave 3 · 20 tasks                   ← fixes from review findings
+◆ Assessing... ✓ Vision met
 ```
 
-For large budgets, the planner identifies research themes — review them, then press Run. Everything after that is fully autonomous: thinking agents explore, the orchestrator synthesizes tasks, execution waves run, and steering adapts between waves. No further interaction needed — go to sleep.
+You interact once (objective, budget, model, review themes), then everything runs autonomously — thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off.
+
+## How it works
+
+### 1. Thinking wave
+
+For budgets > 15, the tool launches **architect agents** that explore your codebase before any code is written. Each one gets a different research angle (architecture, data models, APIs, testing, etc.) and writes a structured design document. The number scales with budget: 5 for budget=50, 10 for budget=2000.
+
+### 2. Orchestration
+
+An orchestrator agent reads all design documents and synthesizes concrete execution tasks — grounded in real files and patterns the architects found. No guesswork.
+
+### 3. Iterative execution
+
+Tasks run in parallel (each agent in its own git worktree). After each wave, steering assesses: "how good is this?" — not "what's missing?" It can:
+
+- **Execute** more tasks to build features, fix bugs, polish UX
+- **Reflect** by spinning up 1-2 review agents for deep quality/architecture audits
+- **Declare done** when the vision is met at high quality
+
+### 4. Goal refinement
+
+The tool starts with your broad objective but evolves its definition of "amazing" as it learns your codebase. Steering refines the goal after each wave. Late waves are informed by early discoveries.
+
+### 5. Three-layer context
+
+Long runs stay sharp because steering maintains three layers of memory:
+
+- **Status** — a living project snapshot, updated every wave. Compressed, never truncated.
+- **Milestones** — strategic snapshots archived every ~5 waves. Long-term memory.
+- **Goal** — the evolving north star. What "amazing" means for this codebase.
+
+## Run history and resume
+
+Every run gets its own folder in `.claude-overnight/runs/`. Nothing is ever overwritten.
+
+```
+.claude-overnight/
+  runs/
+    2026-04-04T18-52-49/     ← run A (done, $200, 200 tasks)
+      run.json, status.md, goal.md, milestones/, sessions/
+    2026-04-05T10-30-00/     ← run B (crashed)
+      run.json, sessions/
+```
+
+If a run crashes, gets rate-limited, or you Ctrl+C:
+
+```
+  ⚠ Interrupted run
+  ╭──────────────────────────────────────────────────╮
+  │  refactor auth, add tests, update docs           │
+  │  50/200 sessions · 3 waves · $69.16              │
+  │  34 merged · 16 unmerged · 0 failed branches     │
+  ╰──────────────────────────────────────────────────╯
+
+  Resume  │  Fresh  │  Quit
+```
+
+On resume: unmerged branches auto-merge, the wave loop continues, all context is preserved.
+
+**Knowledge carries forward** — new runs inherit knowledge from completed previous runs. Thinking agents and steering see what past runs built. Run 2 knows run 1 already built the auth system.
+
+Add `.claude-overnight` to your `.gitignore`.
+
+## Other usage modes
 
 ### Task file
 
 ```bash
 claude-overnight tasks.json
 ```
-
-### Inline
-
-```bash
-claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
-```
-
-## How the planner works
-
-The planner always runs on the best available model (Opus) regardless of which model you pick for workers. This ensures high-quality task decomposition even when workers use a cheaper model.
-
-### Thinking wave
-
-For large budgets (`budget > concurrency * 3`), the planner doesn't try to generate hundreds of tasks from scratch. Instead, it launches a **thinking wave** — a team of architect agents that explore your codebase in parallel before any code is written.
-
-```
-⠋ identifying themes...           → splits objective into N angles (< 30s)
-✓ 10 themes                       → review themes, press Run, walk away
-◆ Thinking: 10 agents exploring   → each explores, writes a design doc
-◆ Orchestrating plan...           → synthesizes execution tasks from designs
-◆ Wave 1 · 50 tasks               → fully autonomous from here
-◆ Assessing...                    → "how good is this? how close to amazing?"
-  → Goal refined: "focus on UX polish and error handling"
-◆ Wave 2 · 30 tasks               → improvements based on assessment
-◆ Assessing...                    → decides: deep quality audit needed
-◆ Reflection: 2 agents reviewing  → code quality + UX audit reports
-◆ Assessing...                    → reads reflection reports, plans fixes
-◆ Wave 3 · 20 tasks               → targeted fixes from review findings
-◆ Assessing... ✓ Vision met       → done
-```
-
-The review prompt appears right after theme identification — the last thing requiring your presence. After you press Run, everything is autonomous. Rate-limited? The planner waits and retries. Go to sleep.
-
-### Iterative improvement
-
-Steering isn't a checklist ("what's missing?") — it's a quality critic ("how good is this?"). After each wave, the steering agent:
-
-1. **Reads the codebase** to assess current state
-2. **Reads accumulated artifacts** — design docs, previous reflection reports, the evolving goal
-3. **Decides**: execute more tasks, spin up a reflection wave, or declare done
-
-**Reflection waves** are 1-2 review agents (using the best model) that deeply audit the code for quality, UX coherence, architecture, and gaps. Their reports drive the next execution wave — targeted improvements, not guesswork.
-
-**Goal refinement** — the tool starts with your broad vision but evolves its definition of "amazing" as it learns the codebase. Each steering decision can refine the goal, and all future waves inherit that understanding.
-
-**Three-layer context** keeps the steering sharp across long runs:
-- **Status** (`status.md`) — a living project snapshot updated every wave. What's built, what works, what's rough. Replaces raw wave history so nothing is lost to truncation.
-- **Milestones** (`milestones/`) — archived every ~5 waves. Strategic snapshots that never get truncated, giving the steering long-term memory.
-- **Goal** (`goal.md`) — the evolving north star. Starts with your objective, refined as the tool learns what "amazing" means for your codebase.
-
-Plus design docs from the thinking wave and quality reports from reflections. Every steering decision has tactical, strategic, and aspirational context.
-
-The number of thinking agents scales with budget: 5 for budget=50, 10 for budget=2000+. Reflection is capped at ~5% of total budget.
-
-For small budgets (≤ `concurrency * 3`), the planner skips the thinking wave and generates tasks directly — fast and efficient for focused work.
-
-### Model-aware task design
-
-The planner calibrates task ambition based on your worker model:
-
-**Opus workers**: Each session is a powerhouse — it can own entire epics, do deep codebase research, make architectural decisions, implement complex multi-file systems, and use browser tools for analysis. The planner gives these agents full ownership and autonomy.
-
-**Sonnet workers**: Capable of substantial implementation, refactoring, and testing. The planner gives meaningful missions with room for decision-making.
-
-**Haiku workers**: Fast and efficient, best for focused tasks. The planner gives specific, well-scoped instructions with clear file paths and expected changes.
-
-### Budget scaling
-
-The budget also shapes task granularity:
-
-**Small budget (1-15)**: Specific, file-level tasks. "In `src/auth.ts`, refactor `validateToken()` to use JWT."
-
-**Medium budget (16-50)**: Autonomous missions. "Design and implement the complete favorites system: DB schema, API routes, client hooks, error handling."
-
-**Large budget (50+)**: Thinking wave + orchestration. Architects explore, then execution tasks are synthesized from their findings. Each task is a substantial work session grounded in real codebase analysis.
-
-A budget of 200 is not 200 micro-edits. It's ~5 architects + ~195 senior-engineer work sessions, planned in waves. A budget of 2000 gets 10 architects.
-
-## Usage limits
-
-Control how much of your plan capacity the run consumes:
-
-```
-④ Usage:
-  ● Unlimited · full capacity, wait through rate limits
-  ○ 90% · leave 10% for other work
-  ○ 75% · conservative, plenty of headroom
-  ○ 50% · use half, keep the rest
-```
-
-When utilization hits your cap, the swarm stops dispatching new tasks and lets active agents finish gracefully. This way you can run a big overnight job and still have capacity left for manual Claude usage.
-
-Use `--usage-cap=90` on the command line, or `"usageCap": 90` in task files.
-
-## Task file format
 
 ```json
 {
@@ -161,106 +137,67 @@ Use `--usage-cap=90` on the command line, or `"usageCap": 90` in task files.
 }
 ```
 
-A plain array also works: `["task one", "task two"]`.
-
-For multi-wave runs from a task file, add `objective` and `flexiblePlan`:
+For multi-wave runs, add `objective` and `flexiblePlan`:
 
 ```json
 {
-  "objective": "Modernize the auth system and add comprehensive tests",
+  "objective": "Modernize the auth system",
   "flexiblePlan": true,
   "tasks": ["Refactor auth middleware", "Add JWT validation"],
   "usageCap": 90
 }
 ```
 
-The initial tasks run first. After each wave, a steering agent reads the codebase and plans the next wave until the objective is met or the budget runs out.
+### Inline
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `tasks` | `(string \| {prompt, cwd?, model?})[]` | required | Tasks to run |
-| `objective` | `string` | — | High-level goal for multi-wave steering (required when `flexiblePlan` is true) |
-| `flexiblePlan` | `boolean` | `false` | Enable adaptive multi-wave planning from task files |
-| `model` | `string` | prompted | Worker model (per-task overridable) |
-| `concurrency` | `number` | `5` | Max parallel agents |
-| `worktrees` | `boolean` | auto (git repo) | Isolate each agent in a git worktree |
-| `permissionMode` | `"auto" \| "bypassPermissions" \| "default"` | `"auto"` | How agents handle dangerous operations |
-| `cwd` | `string` | `process.cwd()` | Working directory |
-| `allowedTools` | `string[]` | all | Restrict agent tools |
-| `mergeStrategy` | `"yolo" \| "branch"` | `"yolo"` | Merge into HEAD or a new branch |
-| `usageCap` | `number (0-100)` | unlimited | Stop at N% utilization (e.g. 90) |
+```bash
+claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
+```
 
 ## CLI flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--budget=N` | `10` | Total agent sessions the planner targets |
-| `--concurrency=N` | `5` | How many agents run simultaneously |
-| `--model=NAME` | prompted | Worker model (planner always uses best available) |
+| `--budget=N` | `10` | Total agent sessions |
+| `--concurrency=N` | `5` | Parallel agents |
+| `--model=NAME` | prompted | Worker model (planner uses best available) |
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
-| `--timeout=SECONDS` | `300` | Inactivity timeout (kills only silent agents) |
-| `--no-flex` | — | Disable adaptive multi-wave planning (run all tasks in one shot) |
+| `--timeout=SECONDS` | `300` | Inactivity timeout per agent |
+| `--no-flex` | — | Disable multi-wave steering |
 | `--dry-run` | — | Show planned tasks without running |
-| `-h, --help` | — | Help |
-| `-v, --version` | — | Version |
 
-Budget = total work. Concurrency = pace. A budget of 100 with concurrency 5 means 100 tasks, 5 at a time.
+## Task file fields
 
-## Rate limits and long runs
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `tasks` | `(string \| {prompt, cwd?, model?})[]` | required | Tasks to run |
+| `objective` | `string` | — | High-level goal for steering |
+| `flexiblePlan` | `boolean` | `false` | Enable multi-wave planning |
+| `model` | `string` | prompted | Worker model |
+| `concurrency` | `number` | `5` | Parallel agents |
+| `worktrees` | `boolean` | auto | Git worktree isolation |
+| `permissionMode` | `"auto" \| "bypassPermissions" \| "default"` | `"auto"` | Permission handling |
+| `mergeStrategy` | `"yolo" \| "branch"` | `"yolo"` | Merge into HEAD or new branch |
+| `usageCap` | `number (0-100)` | unlimited | Stop at N% utilization |
 
-Built for unattended runs lasting hours, days, or weeks.
+## Rate limits
 
-- **Usage bar**: the live UI shows current utilization with a visual bar, percentage, and countdown to reset when rate-limited.
-- **Hard block**: API returns a reset timestamp — swarm pauses and resumes exactly when the window opens.
-- **Soft throttle**: at >75% utilization, dispatch slows to avoid hitting the limit.
-- **Retry with backoff**: transient errors (429, overloaded, connection reset) retry with exponential backoff.
-- **Usage cap**: set a ceiling and the swarm stops dispatching when it's reached — active agents finish, no new ones start.
+Built for unattended runs lasting hours or days.
 
-No tasks are dropped. Set a budget of 1000 and go to sleep.
-
-## Run history and resume
-
-Every run gets its own folder in `.claude-overnight/runs/`. Nothing is ever overwritten — run A's knowledge survives even if run B crashes immediately after.
-
-```
-.claude-overnight/
-  runs/
-    2026-04-04T18-52-49/     ← run A (done, $200, 200 tasks)
-      run.json, status.md, goal.md, milestones/, sessions/
-    2026-04-05T10-30-00/     ← run B (crashed after wave 1)
-      run.json, sessions/
-    2026-04-05T14-00-00/     ← run C (active)
-      ...
-```
-
-If a run crashes, gets rate-limited, or you Ctrl+C:
-
-```
-  Previous run found
-  50 done · 1950 remaining · $69.16 spent
-  34 merged · 16 unmerged · 0 failed branches
-
-  Resume  │  Fresh  │  Quit
-```
-
-On resume: unmerged branches auto-merge, the wave loop continues, all context is preserved.
-
-**Knowledge carries forward** — new runs inherit knowledge from completed previous runs. Thinking agents and steering see summaries of what past runs built, so they don't re-discover or duplicate work. Run 2 knows run 1 already built the auth system.
-
-Session history: `.claude-overnight/runs/{id}/sessions/wave-N.json` — inspect any wave's agents, costs, tool counts, branches.
-
-Branch tracking: every `swarm/task-*` branch is recorded with its status (merged, unmerged, failed, merge-failed). No more mystery branches.
-
-Add `.claude-overnight` to your `.gitignore`.
+- **Hard block**: pauses until the rate limit window resets, then resumes
+- **Soft throttle**: slows dispatch at >75% utilization
+- **Retry with backoff**: transient errors (429, overloaded) retry automatically
+- **Usage cap**: set a ceiling, active agents finish, no new ones start
+- **Planner retries**: steering and orchestration also retry on rate limits (30s/60s/120s backoff)
 
 ## Worktrees and merging
 
-Each agent gets an isolated git worktree on a `swarm/task-N` branch. Changes auto-commit when the agent finishes. After all agents complete, branches merge back sequentially.
+Each agent gets an isolated git worktree (`swarm/task-N` branch). Changes auto-commit. After all agents complete, branches merge back.
 
-- `"yolo"` (default): merges directly into your current branch
-- `"branch"`: creates a `swarm/run-{timestamp}` branch (main untouched)
+- `"yolo"` (default): merges into your current branch
+- `"branch"`: creates a new `swarm/run-{timestamp}` branch
 
-Merge conflicts retry with `-X theirs`. If that fails, the branch is preserved for manual resolution. Stale worktrees and `swarm/*` branches from previous runs are cleaned up on startup.
+Conflicts retry with `-X theirs`. Unresolved branches are preserved for manual merge.
 
 ## Exit codes
 
@@ -269,3 +206,7 @@ Merge conflicts retry with `-X theirs`. If that fails, the branch is preserved f
 | `0` | All tasks succeeded |
 | `1` | Some tasks failed |
 | `2` | All failed or none completed |
+
+## License
+
+MIT
