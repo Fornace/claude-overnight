@@ -142,13 +142,16 @@ export interface RunState {
   mergeStrategy: MergeStrategy;
   waveNum: number;
   currentTasks: Task[];
-  lastWaveKind: "execute" | "reflect" | "think";
-  reflectionBudgetUsed: number;
+  lastWaveKind: string;
+  overheadBudgetUsed: number;
   accCost: number;
   accCompleted: number;
   accFailed: number;
+  accIn?: number;
+  accOut?: number;
+  accTools?: number;
   branches: BranchRecord[];
-  phase: "executing" | "steering" | "reflecting" | "capped" | "done";
+  phase: "steering" | "capped" | "done";
   startedAt: string;
   cwd: string;
 }

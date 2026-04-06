@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.6.0
+
+### Free-form wave composition
+
+The planner is no longer limited to execute/reflect/done. It can now compose any wave type — **critique**, **verify**, **user-test**, **explore**, **synthesize**, **polish** — or mix them freely. A wave can have 3 execute agents + 1 verification agent, or 2 divergent explorers, whatever the situation calls for. The old `buildReflectionTasks` is gone; reflection is just another wave the planner can compose.
+
+- **Model per task.** Steering can assign `"worker"` or `"planner"` model to individual tasks — review/verification tasks get the planner model, implementation gets the worker.
+- **Design thinking.** All planning prompts now carry a core framing: start from the user's job, the experience IS the product, build-verify-iterate, consistency over features.
+- **Verification gate.** The planner cannot declare "done" until at least one verification wave has actually run the app. No more "looks good from reading the code."
+
+### Multi-run resume
+
+- **Multiple incomplete runs.** If several runs are unfinished, a numbered list lets you pick which to resume (single keystroke, up to 9).
+- **Run history.** Press `h` at the resume prompt to see full history — time ago, cost, phase, merged branches, last status line.
+- **CWD-scoped.** Runs are filtered to the current working directory, so different projects don't interfere.
+- **Wave history on resume.** Session files are reloaded so the planner has full context of prior waves, not just the last state snapshot.
+- **Resume steering.** Flex runs that resume with no queued tasks immediately steer to get the next wave instead of stopping.
+
+### Resilience
+
+- **Steering failure preserves budget.** A failed steer no longer zeroes out remaining budget — the run stays resumable with unspent sessions intact.
+- **Parse failure doesn't end runs.** If the planner returns unparseable JSON on retry, it throws instead of returning `done: true`. Runs aren't accidentally marked complete.
+- **Latest symlink.** `.claude-overnight/latest` always points to the active run directory for easy access.
+
+### Internal
+
+- `RunState.phase` simplified to `steering | capped | done` (removed `executing`, `reflecting`).
+- `overheadBudgetUsed` replaces `reflectionBudgetUsed`.
+- `accIn`, `accOut`, `accTools` now persisted in run state for accurate resume stats.
+- `remaining` clamped to `Math.max(0, ...)` to prevent negative values.
+- Completed runs clean up `verifications/` directory alongside `designs/` and `reflections/`.
+
 ## 1.5.1
 
 ### Improved cost display

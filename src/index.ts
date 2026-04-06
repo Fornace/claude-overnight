@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync, symlinkSync, unlinkSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { execSync } from "child_process";
@@ -307,17 +307,20 @@ function loadRunState(runDir: string): RunState | null {
   } catch { return null; }
 }
 
-/** Find the latest incomplete run, or null. */
-function findIncompleteRun(rootDir: string): { dir: string; state: RunState } | null {
+/** Find all incomplete runs for a given working directory, newest first. */
+function findIncompleteRuns(rootDir: string, filterCwd: string): { dir: string; state: RunState }[] {
   const runsDir = join(rootDir, "runs");
   try {
-    const dirs = readdirSync(runsDir).sort().reverse(); // newest first
+    const dirs = readdirSync(runsDir).sort().reverse();
+    const results: { dir: string; state: RunState }[] = [];
     for (const d of dirs) {
       const state = loadRunState(join(runsDir, d));
-      if (state && state.phase !== "done") return { dir: join(runsDir, d), state };
+      if (state && state.phase !== "done" && state.cwd === filterCwd) {
+        results.push({ dir: join(runsDir, d), state });
+      }
     }
-  } catch {}
-  return null;
+    return results;
+  } catch { return []; }
 }
 
 /** Find orphaned designs: a run where thinking succeeded but orchestration crashed (has designs, no run.json). */
@@ -334,6 +337,41 @@ function findOrphanedDesigns(rootDir: string): string | null {
     }
   } catch {}
   return null;
+}
+
+function formatTimeAgo(isoStr: string): string {
+  const ms = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function showRunHistory(allRuns: { dir: string; state: RunState }[], filterCwd: string): void {
+  const runs = allRuns.filter(r => r.state.cwd === filterCwd);
+  if (runs.length === 0) { console.log(chalk.dim("\n  No run history.\n")); return; }
+  const w = Math.min((process.stdout.columns ?? 80) - 6, 50);
+  console.log(chalk.dim(`\n  ── Run History ${"─".repeat(Math.max(0, w - 16))}\n`));
+  let resumeIdx = 0;
+  for (const run of runs) {
+    const s = run.state;
+    const done = s.phase === "done";
+    const icon = done ? chalk.green("✓") : chalk.yellow("⚠");
+    const date = s.startedAt?.slice(0, 16).replace("T", " ") || "unknown";
+    const cost = s.accCost > 0 ? ` · $${s.accCost.toFixed(2)}` : "";
+    const obj = s.objective?.slice(0, 50) || "";
+    const num = done ? " " : chalk.cyan(String(++resumeIdx));
+    const merged = s.branches.filter(b => b.status === "merged").length;
+    console.log(`  ${icon} ${num} ${chalk.dim(date)} · ${s.phase} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
+    console.log(`      ${obj}${obj.length >= 50 ? "…" : ""}`);
+    let status = "";
+    try { status = readFileSync(join(run.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}
+    if (status) console.log(chalk.dim(`      ${status}`));
+    console.log("");
+  }
 }
 
 /** Read final status + goal from all completed previous runs (newest first, max 5). */
@@ -366,7 +404,14 @@ function createRunDir(rootDir: string): string {
   mkdirSync(join(runDir, "verifications"), { recursive: true });
   mkdirSync(join(runDir, "milestones"), { recursive: true });
   mkdirSync(join(runDir, "sessions"), { recursive: true });
+  updateLatestSymlink(rootDir, runDir);
   return runDir;
+}
+
+function updateLatestSymlink(rootDir: string, runDir: string): void {
+  const link = join(rootDir, "latest");
+  try { unlinkSync(link); } catch {}
+  try { symlinkSync(runDir, link); } catch {}
 }
 
 function saveWaveSession(baseDir: string, waveNum: number, kind: string, swarm: Swarm): void {
@@ -387,6 +432,33 @@ function saveWaveSession(baseDir: string, waveNum: number, kind: string, swarm: 
     })),
     totalCost: swarm.totalCostUsd,
   }, null, 2), "utf-8");
+}
+
+/** Rebuild waveHistory from saved session files on resume. */
+function loadWaveHistory(runDir: string): WaveSummary[] {
+  const dir = join(runDir, "sessions");
+  try {
+    return readdirSync(dir)
+      .filter(f => f.startsWith("wave-") && f.endsWith(".json"))
+      .sort((a, b) => {
+        const numA = parseInt(a.replace("wave-", "").replace(".json", ""));
+        const numB = parseInt(b.replace("wave-", "").replace(".json", ""));
+        return numA - numB;
+      })
+      .map(f => {
+        const data = JSON.parse(readFileSync(join(dir, f), "utf-8"));
+        return {
+          wave: data.wave,
+          kind: data.kind,
+          tasks: (data.agents || []).map((a: any) => ({
+            prompt: a.prompt,
+            status: a.status,
+            filesChanged: a.filesChanged,
+            error: a.error,
+          })),
+        } as WaveSummary;
+      });
+  } catch { return []; }
 }
 
 function recordBranches(swarm: Swarm, branches: BranchRecord[]): void {
@@ -566,14 +638,15 @@ async function main() {
   // ── Show run history ──
   const rootDir = join(cwd, ".claude-overnight");
   const runsDir = join(rootDir, "runs");
-  let completedRuns: { dir: string; state: RunState }[] = [];
+  const allRuns: { dir: string; state: RunState }[] = [];
   try {
     const dirs = readdirSync(runsDir).sort().reverse();
     for (const d of dirs) {
       const s = loadRunState(join(runsDir, d));
-      if (s && s.phase === "done") completedRuns.push({ dir: join(runsDir, d), state: s });
+      if (s) allRuns.push({ dir: join(runsDir, d), state: s });
     }
   } catch {}
+  const completedRuns = allRuns.filter(r => r.state.phase === "done" && r.state.cwd === cwd);
   if (completedRuns.length > 0 && !noTTY) {
     console.log(chalk.dim(`\n  ${completedRuns.length} previous run${completedRuns.length > 1 ? "s" : ""}`));
     for (const r of completedRuns.slice(0, 3)) {
@@ -582,7 +655,6 @@ async function main() {
       const cost = r.state.accCost > 0 ? ` · $${r.state.accCost.toFixed(0)}` : "";
       const merged = r.state.branches.filter(b => b.status === "merged").length;
       console.log(chalk.dim(`     ${date} · ${r.state.accCompleted} done · ${merged} merged${cost}${obj ? ` · ${obj}` : ""}${obj.length >= 50 ? "…" : ""}`));
-      // Show status if available
       let status = "";
       try { status = readFileSync(join(r.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 80); } catch {}
       if (status) console.log(chalk.dim(`       ${status}`));
@@ -593,47 +665,96 @@ async function main() {
   let resuming = false;
   let resumeState: RunState | null = null;
   let resumeRunDir: string | undefined;
-  const incomplete = findIncompleteRun(rootDir);
-  if (incomplete && incomplete.state.cwd === cwd && !noTTY && tasks.length === 0) {
-    const prev = incomplete.state;
-    const merged = prev.branches.filter(b => b.status === "merged").length;
-    const unmerged = prev.branches.filter(b => b.status === "unmerged").length;
-    const failed = prev.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
-    const obj = prev.objective?.slice(0, 50) || "";
+  const incompleteRuns = findIncompleteRuns(rootDir, cwd);
 
-    // Read last status for context
-    let lastStatus = "";
-    try { lastStatus = readFileSync(join(incomplete.dir, "status.md"), "utf-8").trim().slice(0, 120); } catch {}
+  if (incompleteRuns.length > 0 && !noTTY && tasks.length === 0) {
+    let decided = false;
+    while (!decided) {
+      if (incompleteRuns.length === 1) {
+        // Single incomplete run — show detailed box
+        const run = incompleteRuns[0];
+        const prev = run.state;
+        const merged = prev.branches.filter(b => b.status === "merged").length;
+        const unmerged = prev.branches.filter(b => b.status === "unmerged").length;
+        const failed = prev.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
+        const obj = prev.objective?.slice(0, 50) || "";
+        const ago = formatTimeAgo(prev.startedAt);
 
-    const label = "Unfinished run";
-    console.log(chalk.yellow(`\n  ⚠ ${label}`));
-    const boxLines = [
-      `${obj}${obj.length >= 50 ? "…" : ""}`,
-      `${prev.accCompleted}/${prev.budget} sessions · ${prev.remaining} remaining · $${prev.accCost.toFixed(2)}`,
-    ];
-    if (lastStatus) boxLines.push(lastStatus);
-    if (merged + unmerged + failed > 0) boxLines.push(`${merged} merged · ${unmerged} unmerged · ${failed} failed branches`);
-    const boxW = Math.max(...boxLines.map(l => l.length)) + 4;
-    console.log(chalk.dim(`  ╭${"─".repeat(boxW)}╮`));
-    for (const line of boxLines) console.log(chalk.dim("  │") + `  ${line.padEnd(boxW - 2)}` + chalk.dim("│"));
-    console.log(chalk.dim(`  ╰${"─".repeat(boxW)}╯`));
+        let lastStatus = "";
+        try { lastStatus = readFileSync(join(run.dir, "status.md"), "utf-8").trim().slice(0, 120); } catch {}
 
-    const action = await selectKey(
-      "",
-      [
-        { key: "r", desc: "esume" },
-        { key: "f", desc: "resh" },
-        { key: "q", desc: "uit" },
-      ],
-    );
-    if (action === "q") { process.exit(0); }
-    if (action === "r") {
-      resuming = true;
-      resumeState = prev;
-      resumeRunDir = incomplete.dir;
+        console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
+        const boxLines = [
+          `${obj}${obj.length >= 50 ? "…" : ""}`,
+          `${prev.accCompleted}/${prev.budget} sessions · ${prev.remaining} remaining · $${prev.accCost.toFixed(2)}`,
+          `Wave ${prev.waveNum + 1} · ${prev.phase}`,
+        ];
+        if (lastStatus) boxLines.push(lastStatus);
+        if (merged + unmerged + failed > 0) boxLines.push(`${merged} merged · ${unmerged} unmerged · ${failed} failed`);
+        const boxW = Math.max(...boxLines.map(l => l.length)) + 4;
+        console.log(chalk.dim(`  ╭${"─".repeat(boxW)}╮`));
+        for (const line of boxLines) console.log(chalk.dim("  │") + `  ${line.padEnd(boxW - 2)}` + chalk.dim("│"));
+        console.log(chalk.dim(`  ╰${"─".repeat(boxW)}╯`));
+
+        const action = await selectKey("", [
+          { key: "r", desc: "esume" },
+          { key: "h", desc: "istory" },
+          { key: "f", desc: "resh" },
+          { key: "q", desc: "uit" },
+        ]);
+        if (action === "q") process.exit(0);
+        if (action === "f") { decided = true; break; }
+        if (action === "h") { showRunHistory(allRuns, cwd); continue; }
+        resuming = true;
+        resumeState = prev;
+        resumeRunDir = run.dir;
+        decided = true;
+      } else {
+        // Multiple incomplete runs — show numbered list (cap at 9 for single-keystroke selection)
+        const shown = incompleteRuns.slice(0, 9);
+        console.log(chalk.yellow(`\n  ⚠ ${incompleteRuns.length} unfinished runs${incompleteRuns.length > 9 ? ` (showing newest 9)` : ""}\n`));
+        for (let i = 0; i < shown.length; i++) {
+          const run = shown[i];
+          const s = run.state;
+          const ago = formatTimeAgo(s.startedAt);
+          const obj = s.objective?.slice(0, 50) || "";
+          const merged = s.branches.filter(b => b.status === "merged").length;
+          let lastStatus = "";
+          try { lastStatus = readFileSync(join(run.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}
+          console.log(chalk.cyan(`  ${i + 1}`) + `  ${obj}${obj.length >= 50 ? "…" : ""}`);
+          console.log(chalk.dim(`     ${s.accCompleted}/${s.budget} · $${s.accCost.toFixed(2)} · ${ago} · ${s.phase} at wave ${s.waveNum + 1}${merged ? ` · ${merged} merged` : ""}`));
+          if (lastStatus) console.log(chalk.dim(`     ${lastStatus}`));
+          console.log("");
+        }
+
+        const action = await selectKey(
+          `  ${chalk.dim(`[1-${shown.length}] resume`)}`,
+          [
+            ...shown.map((_, i) => ({ key: String(i + 1), desc: "" })),
+            { key: "h", desc: "istory" },
+            { key: "f", desc: "resh" },
+            { key: "q", desc: "uit" },
+          ],
+        );
+        if (action === "q") process.exit(0);
+        if (action === "f") { decided = true; break; }
+        if (action === "h") { showRunHistory(allRuns, cwd); continue; }
+        const idx = parseInt(action) - 1;
+        if (idx >= 0 && idx < shown.length) {
+          resuming = true;
+          resumeState = shown[idx].state;
+          resumeRunDir = shown[idx].dir;
+          decided = true;
+        }
+      }
+    }
+
+    if (resuming && resumeState && resumeRunDir) {
+      const unmerged = resumeState.branches.filter(b => b.status === "unmerged").length;
       if (unmerged > 0) {
         console.log("");
-        autoMergeBranches(cwd, prev.branches, (msg) => console.log(chalk.dim(`  ${msg}`)));
+        autoMergeBranches(cwd, resumeState.branches, (msg) => console.log(chalk.dim(`  ${msg}`)));
+        try { saveRunState(resumeRunDir, resumeState); } catch {}
       }
     }
   }
@@ -648,7 +769,17 @@ async function main() {
   let allowExtraUsage = false;
   let extraUsageBudget: number | undefined;
 
-  if (!nonInteractive) {
+  if (resuming) {
+    // Skip interactive flow entirely — all config is restored from saved state later
+    workerModel = resumeState!.workerModel;
+    plannerModel = resumeState!.plannerModel;
+    budget = resumeState!.budget;
+    concurrency = resumeState!.concurrency;
+    objective = resumeState!.objective;
+    usageCap = resumeState!.usageCap;
+    allowExtraUsage = resumeState!.allowExtraUsage ?? false;
+    extraUsageBudget = resumeState!.extraUsageBudget;
+  } else if (!nonInteractive) {
     // ① Objective
     while (true) {
       objective = await ask(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")}\n  ${chalk.cyan(">")} `);
@@ -759,10 +890,10 @@ async function main() {
   }
 
   validateConcurrency(concurrency);
-  const permissionMode: PermMode = fileCfg?.permissionMode ?? "auto";
-  const useWorktrees = fileCfg?.useWorktrees ?? (isGitRepo(cwd));
+  let permissionMode: PermMode = resuming ? resumeState!.permissionMode : (fileCfg?.permissionMode ?? "auto");
+  let useWorktrees = resuming ? resumeState!.useWorktrees : (fileCfg?.useWorktrees ?? isGitRepo(cwd));
   if (useWorktrees) validateGitRepo(cwd);
-  const mergeStrategy: MergeStrategy = fileCfg?.mergeStrategy ?? "yolo";
+  let mergeStrategy: MergeStrategy = resuming ? resumeState!.mergeStrategy : (fileCfg?.mergeStrategy ?? "yolo");
 
   if (nonInteractive) {
     const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
@@ -780,10 +911,11 @@ async function main() {
   // Create run directory — reuse orphaned run (thinking succeeded, orchestration crashed) if available
   const orphanedDir = !resuming ? findOrphanedDesigns(rootDir) : null;
   const runDir = resuming && resumeRunDir ? resumeRunDir : (orphanedDir ?? createRunDir(rootDir));
+  if (resuming && resumeRunDir) updateLatestSymlink(rootDir, resumeRunDir);
   const previousKnowledge = readPreviousRunKnowledge(rootDir);
 
   // ── Plan phase (interactive: review loop, non-interactive: auto-plan or skip) ──
-  const needsPlan = tasks.length === 0;
+  const needsPlan = tasks.length === 0 && !resuming;
   const designDir = join(runDir, "designs");
 
   if (needsPlan) {
@@ -983,7 +1115,7 @@ async function main() {
     }
   }
 
-  if (tasks.length === 0) { console.error("No tasks provided."); process.exit(1); }
+  if (tasks.length === 0 && !resuming) { console.error("No tasks provided."); process.exit(1); }
 
   if (dryRun) {
     showPlan(tasks);
@@ -994,7 +1126,7 @@ async function main() {
   // ── Run (wave loop) ──
   process.stdout.write("\x1B[?25l");
   const restore = () => process.stdout.write("\x1B[?25h\n");
-  const runStartedAt = Date.now();
+  const runStartedAt = resuming && resumeState?.startedAt ? new Date(resumeState.startedAt).getTime() : Date.now();
 
   // Wave-loop state — either fresh or resumed
   mkdirSync(join(runDir, "reflections"), { recursive: true });
@@ -1015,27 +1147,23 @@ async function main() {
   const branches: BranchRecord[] = [];
 
   if (resuming && resumeState) {
-    // Restore ALL config from saved state
+    // Restore wave-loop state (config already restored in the early resume block + ternaries above)
     remaining = resumeState.remaining;
     currentTasks = resumeState.currentTasks;
     waveNum = resumeState.waveNum;
     accCost = resumeState.accCost;
     accCompleted = resumeState.accCompleted;
     accFailed = resumeState.accFailed;
-    accTools = 0;
+    accTools = resumeState.accTools ?? 0;
+    accIn = resumeState.accIn ?? 0;
+    accOut = resumeState.accOut ?? 0;
     lastWaveKind = resumeState.lastWaveKind;
     overheadBudgetUsed = resumeState.overheadBudgetUsed ?? ((resumeState as any).reflectionBudgetUsed ?? 0) + ((resumeState as any).verificationBudgetUsed ?? 0);
     branches.push(...resumeState.branches);
-    objective = resumeState.objective;
-    workerModel = resumeState.workerModel;
-    plannerModel = resumeState.plannerModel;
-    budget = resumeState.budget;
-    concurrency = resumeState.concurrency;
-    flex = resumeState.flex;
-    usageCap = resumeState.usageCap;
-    allowExtraUsage = resumeState.allowExtraUsage ?? false;
-    extraUsageBudget = resumeState.extraUsageBudget;
-    console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent\n`));
+    flex = resumeState.flex; // override computed flex with saved value
+    waveHistory.push(...loadWaveHistory(runDir));
+    console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent · ${waveHistory.length} prior waves\n`));
+    waveNum++; // advance past last completed wave so next session file doesn't overwrite
   } else {
     // Fresh run
     if (objective && !existsSync(join(runDir, "goal.md"))) {
@@ -1061,7 +1189,7 @@ async function main() {
   // For flex + branch strategy: create one target branch, waves merge via yolo into it
   let runBranch: string | undefined;
   let originalRef: string | undefined;
-  if (flex && mergeStrategy === "branch" && useWorktrees) {
+  if (flex && mergeStrategy === "branch" && useWorktrees && !resuming) {
     try {
       originalRef = execSync("git rev-parse --abbrev-ref HEAD", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
       if (originalRef === "HEAD") originalRef = execSync("git rev-parse HEAD", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
@@ -1085,6 +1213,60 @@ async function main() {
   process.on("SIGTERM", () => gracefulStop("SIGTERM"));
   process.on("uncaughtException", (err) => { currentSwarm?.abort(); currentSwarm?.cleanup(); restore(); console.error(chalk.red(`\n  Uncaught: ${err.message}`)); process.exit(1); });
   process.on("unhandledRejection", (reason) => { currentSwarm?.abort(); currentSwarm?.cleanup(); restore(); console.error(chalk.red(`\n  Unhandled: ${reason instanceof Error ? reason.message : reason}`)); process.exit(1); });
+
+  // When resuming a flex run with no queued tasks, steer immediately to get the next wave
+  if (resuming && flex && currentTasks.length === 0 && remaining > 0) {
+    let steerAttempts = 0;
+    while (currentTasks.length === 0 && remaining > 0 && !objectiveComplete && steerAttempts < 3) {
+      steerAttempts++;
+      console.log(chalk.cyan(`\n  ◆ Assessing...\n`));
+      process.stdout.write("\x1B[?25l");
+      try {
+        const memory = readRunMemory(runDir, previousKnowledge || undefined);
+        const steer = await steerWave(
+          objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
+          permissionMode, concurrency, makeProgressLog(), memory,
+        );
+        process.stdout.write(`\x1B[2K\r`);
+        process.stdout.write("\x1B[?25h");
+        if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
+        if (steer.goalUpdate) writeGoalUpdate(runDir, steer.goalUpdate);
+
+        if (steer.done || steer.tasks.length === 0) {
+          const hasVerification = waveHistory.some(w => w.kind.includes("verif"));
+          if (!hasVerification && remaining >= 1) {
+            console.log(chalk.dim(`  ${steer.reasoning}`));
+            console.log(chalk.yellow(`  Done blocked — verification required before completion\n`));
+            lastWaveKind = "done-blocked";
+            continue;
+          }
+          console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
+          objectiveComplete = true;
+          remaining = 0;
+        } else {
+          const isOverhead = steer.waveKind !== "execute";
+          if (isOverhead && overheadBudgetUsed + steer.tasks.length > maxOverheadBudget) {
+            console.log(chalk.dim(`  ${steer.reasoning}`));
+            console.log(chalk.yellow(`  Overhead budget exhausted (${overheadBudgetUsed}/${maxOverheadBudget}) — re-assessing\n`));
+            lastWaveKind = "overhead-capped";
+            continue;
+          }
+          console.log(chalk.dim(`  ${steer.reasoning}\n`));
+          currentTasks = steer.tasks.map(t => ({
+            ...t,
+            model: t.model === "planner" ? plannerModel : t.model === "worker" ? workerModel
+              : isOverhead && !t.model ? plannerModel : t.model,
+          }));
+          lastWaveKind = steer.waveKind;
+          if (isOverhead) overheadBudgetUsed += currentTasks.length;
+        }
+      } catch (err: any) {
+        process.stdout.write("\x1B[?25h");
+        console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
+        break;
+      }
+    }
+  }
 
   while (remaining > 0 && currentTasks.length > 0 && !stopping) {
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
@@ -1119,7 +1301,7 @@ async function main() {
     accCompleted += swarm.completed;
     accFailed += swarm.failed;
     accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
-    remaining -= swarm.completed + swarm.failed;
+    remaining = Math.max(0, remaining - swarm.completed - swarm.failed);
     // Apply live config changes if user adjusted budget/threshold mid-wave
     if (liveConfig.dirty) {
       remaining = liveConfig.remaining;
@@ -1134,8 +1316,8 @@ async function main() {
     saveRunState(runDir, {
       id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective!, budget: budget ?? tasks.length,
       remaining, workerModel, plannerModel, concurrency, permissionMode,
-      usageCap, allowExtraUsage, extraUsageBudget, flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
-      lastWaveKind, overheadBudgetUsed, accCost, accCompleted, accFailed,
+      usageCap, allowExtraUsage, extraUsageBudget, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
+      lastWaveKind, overheadBudgetUsed, accCost, accCompleted, accFailed, accIn, accOut, accTools,
       branches, phase: "steering", startedAt: new Date(runStartedAt).toISOString(), cwd,
     });
 
@@ -1213,10 +1395,11 @@ async function main() {
       } catch (err: any) {
         process.stdout.write("\x1B[?25h");
         console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
-        remaining = 0;
+        // Don't zero out remaining — preserve unspent budget so resume works
         break;
       }
     }
+    if (!steered) break; // steering failed — stop, don't re-run old tasks
     waveNum++;
   }
 
@@ -1227,12 +1410,13 @@ async function main() {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
     usageCap, allowExtraUsage, extraUsageBudget, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
-    lastWaveKind, overheadBudgetUsed, accCost, accCompleted, accFailed,
+    lastWaveKind, overheadBudgetUsed, accCost, accCompleted, accFailed, accIn, accOut, accTools,
     branches, phase: finalPhase, startedAt: new Date(runStartedAt).toISOString(), cwd,
   });
   if (trulyDone) {
     try { rmSync(join(runDir, "designs"), { recursive: true, force: true }); } catch {}
     try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}
+    try { rmSync(join(runDir, "verifications"), { recursive: true, force: true }); } catch {}
   }
 
   // Switch back if we created a run branch

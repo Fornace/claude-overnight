@@ -17,15 +17,15 @@ export interface PlannerRateLimitInfo {
 
 export interface WaveSummary {
   wave: number;
-  kind: "execute" | "reflect" | "think";
+  kind: string;
   tasks: { prompt: string; status: string; filesChanged?: number; error?: string }[];
 }
 
 export interface SteerResult {
   done: boolean;
-  action: "execute" | "reflect" | "done";
   tasks: Task[];
   reasoning: string;
+  waveKind: string;
   goalUpdate?: string;
   statusUpdate?: string;
 }
@@ -33,11 +33,25 @@ export interface SteerResult {
 export interface RunMemory {
   designs: string;
   reflections: string;
+  verifications: string;
   milestones: string;
   status: string;
   goal: string;
   previousRuns?: string;
 }
+
+// The core framing for all planning. Not a checklist — a way of thinking.
+const DESIGN_THINKING = `
+HOW TO THINK ABOUT EVERY TASK:
+
+Start from the user's job. What is someone hiring this product to do? "I need to send money abroad cheaply" — not "I need a currency conversion API." Every decision — what to build, how fast it responds, what happens on error — flows from the job.
+
+The experience IS the product. A 200ms server response is not a "performance metric" — it's the difference between an app that feels alive and one that feels broken. A loading state is not "polish" — it's the user knowing the app heard them. An error message is not "error handling" — it's the app being honest. There is no line between backend and UX. The server, the API, the database query, the render — they're all one experience the user either trusts or doesn't.
+
+Build the core, verify it works, learn, iterate. Don't plan 20 features and build them all. Build the ONE thing that matters most, run it, see if it actually works from a user's chair. What you learn from seeing it run will change what you build next. Each wave should make what exists better before adding what doesn't exist yet.
+
+Consistency is what makes complex things feel simple. One design system, rigid rules, no exceptions. This is how Revolut ships a super-app with 30+ features that doesn't feel like chaos.
+`;
 
 const NUDGE_MS = 15 * 60 * 1000;   // 15 min — close & restart with "continue"
 const HARD_TIMEOUT_MS = 30 * 60 * 1000; // 30 min — give up
@@ -514,17 +528,20 @@ export function buildThinkingTasks(
 OVERALL OBJECTIVE: ${objective}
 ${prevBlock}
 YOUR FOCUS: ${theme}
-
+${DESIGN_THINKING}
 Explore the codebase thoroughly using Read, Glob, and Grep. Then write a design document to ${designDir}/focus-${i}.md with these sections:
 
 ## Findings
 Key files, patterns, and architecture you discovered. Cite specific file paths and function names.
 
+## The Job
+What is someone hiring this product to do? Not the feature — the outcome. Frame everything below through this lens.
+
 ## Proposed Work Items
 For each item:
 - **What**: What to build or change
 - **Where**: Specific file paths
-- **Why**: Why this matters
+- **Why**: How this serves the job — including how fast it needs to respond and what happens when it fails
 - **Risk**: Conflicts or complications
 
 ## Key Files
@@ -535,50 +552,6 @@ Be thorough — your findings drive the execution plan.`,
   }));
 }
 
-export function buildReflectionTasks(
-  objective: string,
-  goal: string,
-  reflectionDir: string,
-  waveNum: number,
-  plannerModel: string,
-): Task[] {
-  const goalBlock = goal ? `\nEVOLVED GOAL:\n${goal}\n` : "";
-  return [
-    {
-      id: "review-0",
-      prompt: `You are a senior code reviewer performing a deep quality audit.
-
-OBJECTIVE: ${objective}
-${goalBlock}
-Read the codebase thoroughly. Assess:
-- **Correctness**: Bugs, missing error handling, broken flows?
-- **Architecture**: Clean design? Unnecessary or missing abstractions?
-- **Code quality**: Readability, naming, duplication, dead code?
-- **Completeness**: What's missing vs. the objective? Half-done work?
-- **Polish**: Edge cases, error messages, loading states?
-
-Write findings to ${reflectionDir}/wave-${waveNum}-quality.md.
-End with a ## Verdict: is this closer to "good enough" or "amazing"? What would make the biggest difference?`,
-      model: plannerModel,
-    },
-    {
-      id: "review-1",
-      prompt: `You are a UX and integration reviewer.
-
-OBJECTIVE: ${objective}
-${goalBlock}
-Read the codebase. Assess:
-- **UX coherence**: Do user-facing flows make sense end-to-end? Consistent experience?
-- **Integration**: Do pieces fit together? Seams, inconsistencies, broken contracts?
-- **Testing**: Meaningful coverage? Testing the right things?
-- **Gaps**: Unhandled use cases? What would surprise a user?
-
-Write findings to ${reflectionDir}/wave-${waveNum}-ux.md.
-End with ## Priorities: rank the top 3 things that would most improve the result.`,
-      model: plannerModel,
-    },
-  ];
-}
 
 export async function orchestrate(
   objective: string,
@@ -606,7 +579,7 @@ Your architects explored the codebase and found:
 ${designDocs}
 
 AGENT CAPABILITY: ${capability}
-
+${DESIGN_THINKING}
 Create exactly ~${budget} concrete execution tasks based on these findings.
 
 Requirements:
@@ -615,7 +588,8 @@ Requirements:
 - ${concurrency} agents run in parallel — tasks must touch DIFFERENT files
 - Trust the research — don't tell agents to re-explore what's documented
 - Reference specific files and patterns from the findings
-- Priority order: foundational first, polish last${flexLine}
+- Build the core user job first, then expand. Each task should produce something complete and usable — not scaffolding for later
+- There is no separate "polish" phase. Loading states, error handling, sub-200ms responses, and edge cases are part of every task${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
 {"tasks": [{"prompt": "..."}]}${fileInstruction}`;
@@ -791,26 +765,28 @@ export async function steerWave(
 ): Promise<SteerResult> {
   const capability = modelCapabilityBlock(workerModel);
 
-  // Three-layer context: status (current), milestones (strategic), recent waves (tactical)
   const recentWaves = history.slice(-3);
   const recentText = recentWaves.length > 0 ? recentWaves.map(w => {
-    const tag = w.kind === "reflect" ? " (reflection)" : w.kind === "think" ? " (thinking)" : "";
     const lines = w.tasks.map(t => {
       const files = t.filesChanged ? ` (${t.filesChanged} files)` : "";
       const err = t.error ? ` — ${t.error}` : "";
       return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
     }).join("\n");
-    return `Wave ${w.wave + 1}${tag}:\n${lines}`;
+    return `Wave ${w.wave + 1} (${w.kind}):\n${lines}`;
   }).join("\n\n") : "(first wave)";
 
-  const lastWasReflection = history.length > 0 && history[history.length - 1].kind === "reflect";
-  const noReflectHint = lastWasReflection ? `\nIMPORTANT: The previous wave was a reflection. You MUST choose "execute" or "done" — not "reflect" again.\n` : "";
+  const lastKind = history.length > 0 ? history[history.length - 1].kind : "";
+  const isSyntheticKind = lastKind.includes("blocked") || lastKind.includes("capped");
+  const repeatHint = lastKind && lastKind !== "execute" && !isSyntheticKind
+    ? `\nThe previous wave was "${lastKind}". Don't repeat the same wave kind unless you have a strong reason.\n`
+    : "";
 
   const cap = (s: string, max: number) => s.length > max ? s.slice(0, max) + "\n...(truncated)" : s;
   const statusBlock = runMemory?.status ? `\nCurrent project status:\n${runMemory.status}\n` : "";
   const milestoneBlock = runMemory?.milestones ? `\nMilestone snapshots:\n${cap(runMemory.milestones, 4000)}\n` : "";
   const designBlock = runMemory?.designs ? `\nArchitectural research:\n${cap(runMemory.designs, 4000)}\n` : "";
   const reflectionBlock = runMemory?.reflections ? `\nLatest quality reports:\n${cap(runMemory.reflections, 3000)}\n` : "";
+  const verificationBlock = runMemory?.verifications ? `\nVerification results (from actually running the app):\n${cap(runMemory.verifications, 3000)}\n` : "";
   const goalBlock = runMemory?.goal ? `\nNorth star — what "amazing" means:\n${runMemory.goal}\n` : "";
   const prevRunBlock = runMemory?.previousRuns ? `\nKnowledge from previous runs:\n${cap(runMemory.previousRuns, 3000)}\n` : "";
 
@@ -820,38 +796,63 @@ Objective: ${objective}
 ${goalBlock}${statusBlock}${milestoneBlock}${prevRunBlock}
 Recent waves:
 ${recentText}
-${designBlock}${reflectionBlock}
+${designBlock}${reflectionBlock}${verificationBlock}
 Remaining budget: ${remainingBudget} agent sessions. ${concurrency} agents run in parallel — tasks must touch DIFFERENT files.
 ${capability}
+${DESIGN_THINKING}
 Total waves completed: ${history.length}
 
-Read the codebase. Assess: how close is this to the VISION? Not "what's missing" — "how good is what we built?"
+Read the codebase. Assess from the user's chair: does this product do the job someone would hire it for? Does it feel fast, honest, and trustworthy? Not "is the code clean" — "would I use this?"
 
-Then choose ONE action:
+If verification found issues, those are the priority. Fix what's broken before building what's missing. Iterate on what exists before expanding scope.
 
-**"reflect"** — Spin up 1-2 review agents for a deep quality audit. Choose when:
-  - Substantial new code shipped and hasn't been reviewed
-  - You're unsure about quality and need expert eyes
-  - A subsystem just "completed" and deserves verification
+## Compose the next wave
 
-**"execute"** — Plan the next batch of tasks. Choose when:
-  - You know what needs doing (from reviews or your own assessment)
-  - There are clear gaps, bugs, or improvements to make
+You have full creative freedom. Design the wave that will have the highest impact right now. Here are archetypes to draw from — mix, adapt, or invent your own:
 
-**"done"** — The objective is met at high quality. Choose when:
-  - The code works correctly and handles edge cases
-  - The architecture is clean and pieces fit together
-  - Further work would be diminishing returns
-${noReflectHint}
+**Execute** — Agents implement concrete changes in parallel. Each touches different files. The bread and butter.
+  Example: 5 agents each owning a different feature or fix
+
+**Explore** — Multiple agents independently tackle the same problem from different angles. Each writes a design/approach to a separate file. Use when you need creative alternatives before committing.
+  Example: 3 agents each design a different navigation approach, writing to designs/nav-{approach}.md
+
+**Critique** — Agents review what exists as skeptical experts. They read the codebase and write findings to files. Use after substantial new code ships.
+  Example: 1 code quality reviewer, 1 UX reviewer examining flows end-to-end
+
+**Synthesize** — An agent reads multiple alternatives or review findings and makes a decision. Writes the chosen approach or prioritized fix list.
+  Example: 1 agent reads 3 design docs and writes the implementation plan
+
+**Verify** — Agents actually RUN the application: build it, start it, navigate it, click things, try edge cases. They report what works and what's broken. Not code reading — real testing.
+  Example: 1 agent does end-to-end QA, writing a report with reproduction steps
+
+**User-test** — Agents emulate specific user personas interacting with the product. "First-time user who just downloaded this." "Power user trying to do X fast." They test from that perspective and report friction.
+  Example: 2 agents, one new user, one power user, each writing a report
+
+**Polish** — Agents focus purely on feel: loading states, error messages, micro-interactions, empty states, responsiveness. Not features — the texture that makes users trust the product.
+  Example: 2 agents, one on happy paths, one on error/edge states
+
+You can combine these. A wave can have 3 execute agents + 1 verification agent. Or 2 divergent explorers. Whatever the situation calls for.
+
+For non-execute tasks (critique, verify, user-test, synthesize), tell agents to write their output to files in the run directory so findings persist for future waves. Use paths like: .claude-overnight/latest/reflections/wave-N-{topic}.md or .claude-overnight/latest/verifications/wave-N-{topic}.md.
+
+IMPORTANT: You cannot declare "done" unless at least one verification wave has confirmed the app works. If you're considering done but haven't verified, compose a verification wave first.
+${repeatHint}
 Respond with ONLY a JSON object (no markdown fences):
 {
-  "action": "execute" | "reflect" | "done",
-  "done": true/false,
-  "reasoning": "your assessment and why you chose this action",
+  "done": false,
+  "waveKind": "execute",
+  "reasoning": "your assessment and why you chose this wave composition",
   "goalUpdate": "optional — refine what 'amazing' means as you learn more",
-  "statusUpdate": "REQUIRED — write a concise project status: what's built, what works, what's rough, quality level, key gaps. This replaces the previous status and is your memory for future waves.",
-  "tasks": [{"prompt": "..."}]
-}`;
+  "statusUpdate": "REQUIRED — concise project status: what's built, what works, what's rough, quality level, key gaps. This replaces the previous status.",
+  "tasks": [
+    {"prompt": "task instruction...", "model": "worker"},
+    {"prompt": "review task...", "model": "planner"}
+  ]
+}
+
+The "model" field on each task: use "worker" (${workerModel}) for implementation tasks, "planner" (${plannerModel}) for review/analysis/verification tasks. Default is "worker".
+
+If done: {"done": true, "waveKind": "done", "reasoning": "...", "statusUpdate": "...", "tasks": []}`;
 
   onLog("Assessing...");
   const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
@@ -861,31 +862,32 @@ Respond with ONLY a JSON object (no markdown fences):
     if (first) return first;
     onLog("Retrying...");
     const retryText = await runPlannerQuery(
-      `Your previous response was not valid JSON. Respond with ONLY a JSON object {"action":"execute"|"reflect"|"done","done":true/false,"reasoning":"...","tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+      `Your previous response was not valid JSON. Respond with ONLY a JSON object {"done":false,"waveKind":"execute","reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
       { cwd, model: plannerModel, permissionMode },
       onLog,
     );
-    return attemptJsonParse(retryText) ?? { action: "done", done: true, reasoning: "Could not parse steering response" };
+    const retryParsed = attemptJsonParse(retryText);
+    if (retryParsed) return retryParsed;
+    // Don't return done:true on parse failure — that permanently marks the run complete.
+    // Throw so the caller's catch block handles it as a transient steering failure.
+    throw new Error("Could not parse steering response after retry");
   })();
 
-  const action: "execute" | "reflect" | "done" = parsed.action || (parsed.done ? "done" : "execute");
-
+  const isDone = parsed.done === true;
+  const waveKind: string = parsed.waveKind || parsed.action || (isDone ? "done" : "execute");
   const statusUpdate = parsed.statusUpdate || undefined;
 
-  if (action === "done") {
-    return { done: true, action: "done", tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate, statusUpdate };
-  }
-
-  if (action === "reflect") {
-    return { done: false, action: "reflect", tasks: [], reasoning: parsed.reasoning || "Quality audit needed", goalUpdate: parsed.goalUpdate, statusUpdate };
+  if (isDone) {
+    return { done: true, tasks: [], reasoning: parsed.reasoning || "Objective complete", waveKind: "done", goalUpdate: parsed.goalUpdate, statusUpdate };
   }
 
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
     id: String(i),
     prompt: typeof t === "string" ? t : t.prompt,
+    ...(t.model && { model: t.model }),
   }));
 
   tasks = postProcess(tasks, remainingBudget, onLog);
 
-  return { done: tasks.length === 0, action: tasks.length === 0 ? "done" : "execute", tasks, reasoning: parsed.reasoning || "", goalUpdate: parsed.goalUpdate, statusUpdate };
+  return { done: tasks.length === 0, tasks, reasoning: parsed.reasoning || "", waveKind: tasks.length === 0 ? "done" : waveKind, goalUpdate: parsed.goalUpdate, statusUpdate };
 }
