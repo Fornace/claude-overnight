@@ -48,16 +48,20 @@ export function renderFrame(swarm: Swarm, showHotkeys = false): string {
       "  " +
       chalk.gray(`\u23F1 ${fmtDur(Date.now() - swarm.startedAt)}`),
   );
-  // Stats line
+  // Stats line — show wave cost + overall if there's a base
   const tokIn = fmtTokens(swarm.totalInputTokens);
   const tokOut = fmtTokens(swarm.totalOutputTokens);
-  const cost =
-    swarm.totalCostUsd > 0
-      ? chalk.yellow(`$${swarm.totalCostUsd.toFixed(3)}`)
-      : "";
+  const waveCost = swarm.totalCostUsd;
+  const totalCost = swarm.baseCostUsd + waveCost;
+  let costStr = "";
+  if (totalCost > 0) {
+    costStr = swarm.baseCostUsd > 0
+      ? chalk.yellow(`$${waveCost.toFixed(3)}`) + chalk.dim(` / $${totalCost.toFixed(2)} total`)
+      : chalk.yellow(`$${waveCost.toFixed(3)}`);
+  }
   out.push(
     chalk.gray(`  \u2191 ${tokIn} in  \u2193 ${tokOut} out`) +
-      (cost ? `  ${cost}` : ""),
+      (costStr ? `  ${costStr}` : ""),
   );
 
   // ── Usage bar(s) — cycle through windows every 3s ──
@@ -91,10 +95,7 @@ export function renderFrame(swarm: Swarm, showHotkeys = false): string {
         label = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
       }
       if (swarm.isUsingOverage && !swarm.cappedOut) {
-        const budgetInfo = swarm.extraUsageBudget != null
-          ? ` $${swarm.overageCostUsd.toFixed(2)}/$${swarm.extraUsageBudget}`
-          : "";
-        label += chalk.red(` [EXTRA USAGE${budgetInfo}]`);
+        label += chalk.red(" [EXTRA USAGE]");
       }
       const prefix = windowLabel ? chalk.dim(windowLabel.padEnd(6)) : chalk.dim("Usage ");
       out.push(`  ${prefix}${barStr}  ${label}`);
@@ -112,6 +113,22 @@ export function renderFrame(swarm: Swarm, showHotkeys = false): string {
     } else {
       renderBar(rlPct);
     }
+  }
+
+  // ── Extra usage budget bar ──
+  if (swarm.isUsingOverage && swarm.extraUsageBudget != null && swarm.extraUsageBudget > 0) {
+    const barW = Math.min(30, w - 40);
+    const pct = Math.min(1, swarm.overageCostUsd / swarm.extraUsageBudget);
+    const filled = Math.round(pct * barW);
+    let barStr = "";
+    for (let i = 0; i < barW; i++) {
+      if (i < filled) barStr += pct > 0.9 ? chalk.red("\u2588") : pct > 0.75 ? chalk.yellow("\u2588") : chalk.magenta("\u2588");
+      else barStr += chalk.gray("\u2591");
+    }
+    const label = swarm.cappedOut
+      ? chalk.red(`$${swarm.overageCostUsd.toFixed(2)}/$${swarm.extraUsageBudget} — budget hit`)
+      : `$${swarm.overageCostUsd.toFixed(2)}/$${swarm.extraUsageBudget}`;
+    out.push(`  ${chalk.dim("Extra ")}${barStr}  ${label}`);
   }
 
   out.push("");

@@ -8,7 +8,7 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, buildReflectionTasks, orchestrate } from "./planner.js";
+import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, orchestrate } from "./planner.js";
 import type { WaveSummary, RunMemory } from "./planner.js";
 import { startRenderLoop, renderSummary } from "./ui.js";
 import type { LiveConfig } from "./ui.js";
@@ -284,6 +284,7 @@ function readRunMemory(runDir: string, previousRuns?: string): RunMemory {
   return {
     designs: readMdDir(join(runDir, "designs")),
     reflections: readMdDir(join(runDir, "reflections")),
+    verifications: readMdDir(join(runDir, "verifications")),
     milestones: readMdDir(join(runDir, "milestones")),
     status,
     goal,
@@ -362,6 +363,7 @@ function createRunDir(rootDir: string): string {
   const runDir = join(rootDir, "runs", ts);
   mkdirSync(join(runDir, "designs"), { recursive: true });
   mkdirSync(join(runDir, "reflections"), { recursive: true });
+  mkdirSync(join(runDir, "verifications"), { recursive: true });
   mkdirSync(join(runDir, "milestones"), { recursive: true });
   mkdirSync(join(runDir, "sessions"), { recursive: true });
   return runDir;
@@ -1008,8 +1010,8 @@ async function main() {
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;
   let accIn = 0, accOut = 0;
   let lastCapped = false, lastAborted = false, objectiveComplete = false;
-  let lastWaveKind: "execute" | "reflect" | "think";
-  let reflectionBudgetUsed: number;
+  let lastWaveKind: string;
+  let overheadBudgetUsed: number;
   const branches: BranchRecord[] = [];
 
   if (resuming && resumeState) {
@@ -1022,7 +1024,7 @@ async function main() {
     accFailed = resumeState.accFailed;
     accTools = 0;
     lastWaveKind = resumeState.lastWaveKind;
-    reflectionBudgetUsed = resumeState.reflectionBudgetUsed;
+    overheadBudgetUsed = resumeState.overheadBudgetUsed ?? ((resumeState as any).reflectionBudgetUsed ?? 0) + ((resumeState as any).verificationBudgetUsed ?? 0);
     branches.push(...resumeState.branches);
     objective = resumeState.objective;
     workerModel = resumeState.workerModel;
@@ -1050,11 +1052,11 @@ async function main() {
     accIn = thinkingIn;
     accOut = thinkingOut;
     lastWaveKind = "execute";
-    reflectionBudgetUsed = 0;
+    overheadBudgetUsed = 0;
   }
   liveConfig.remaining = remaining;
   liveConfig.usageCap = usageCap;
-  const maxReflectionBudget = Math.max(2, Math.ceil((budget ?? 10) * 0.05));
+  const maxOverheadBudget = Math.max(4, Math.ceil((budget ?? 10) * 0.15));
 
   // For flex + branch strategy: create one target branch, waves merge via yolo into it
   let runBranch: string | undefined;
@@ -1095,6 +1097,7 @@ async function main() {
     const swarm = new Swarm({
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
       useWorktrees, mergeStrategy: waveMerge, agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
+      baseCostUsd: accCost,
     });
     currentSwarm = swarm;
 
@@ -1132,7 +1135,7 @@ async function main() {
       id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective!, budget: budget ?? tasks.length,
       remaining, workerModel, plannerModel, concurrency, permissionMode,
       usageCap, allowExtraUsage, extraUsageBudget, flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
-      lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
+      lastWaveKind, overheadBudgetUsed, accCost, accCompleted, accFailed,
       branches, phase: "steering", startedAt: new Date(runStartedAt).toISOString(), cwd,
     });
 
@@ -1149,11 +1152,10 @@ async function main() {
 
     if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
 
-    // ── Steer: assess quality and decide next action ──
-    // May loop through reflect→re-steer cycles before producing execution tasks
-    let steerDone = false;
+    // ── Steer: assess and compose the next wave ──
+    let steered = false;
     let steerAttempts = 0;
-    while (!steerDone && remaining > 0 && !stopping && steerAttempts < 4) {
+    while (!steered && remaining > 0 && !stopping && steerAttempts < 3) {
       steerAttempts++;
       console.log(chalk.cyan(`\n  ◆ Assessing...\n`));
       process.stdout.write("\x1B[?25l");
@@ -1166,80 +1168,48 @@ async function main() {
         process.stdout.write(`\x1B[2K\r`);
         process.stdout.write("\x1B[?25h");
 
-        // Persist context layers
         if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
         if (steer.goalUpdate) {
           writeGoalUpdate(runDir, steer.goalUpdate);
           console.log(chalk.dim(`  Goal refined: ${steer.goalUpdate.slice(0, 100)}\n`));
         }
-        // Archive milestone every ~5 execution waves
         const execWaves = waveHistory.filter(w => w.kind === "execute").length;
         if (execWaves > 0 && execWaves % 5 === 0) archiveMilestone(runDir, waveNum);
 
-        if (steer.done || steer.action === "done") {
-          console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
-          steerDone = true;
-          objectiveComplete = true;
-          remaining = 0; // exit outer loop too
-          break;
-        }
-
-        if (steer.action === "reflect") {
-          // Safety: no consecutive reflections, budget cap
-          const canReflect = lastWaveKind !== "reflect" && reflectionBudgetUsed + 2 <= maxReflectionBudget;
-          if (!canReflect) {
+        if (steer.done || steer.tasks.length === 0) {
+          const hasVerification = waveHistory.some(w => w.kind.includes("verif"));
+          if (!hasVerification && remaining >= 1) {
             console.log(chalk.dim(`  ${steer.reasoning}`));
-            console.log(chalk.yellow(`  Reflection skipped (${lastWaveKind === "reflect" ? "consecutive" : "budget cap"}) — re-assessing\n`));
-            lastWaveKind = "execute"; // allow next steer to see non-reflect
-            continue; // re-steer in this inner loop
+            console.log(chalk.yellow(`  Done blocked — verification required before completion\n`));
+            lastWaveKind = "done-blocked";
+            continue; // re-steer — steerer will see the hint
           }
-
-          // Run reflection wave
-          console.log(chalk.dim(`  ${steer.reasoning}`));
-          console.log(chalk.cyan(`\n  ◆ Reflection: 2 agents reviewing...\n`));
-          const reflectionDir = join(runDir, "reflections");
-          waveNum++;
-          const reflTasks = buildReflectionTasks(objective!, memory.goal, reflectionDir, waveNum, plannerModel);
-          const reflSwarm = new Swarm({
-            tasks: reflTasks, concurrency: 2, cwd,
-            model: plannerModel, permissionMode,
-            useWorktrees: false, mergeStrategy: "yolo",
-            agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
-          });
-          currentSwarm = reflSwarm;
-          const stopReflRender = startRenderLoop(reflSwarm, liveConfig);
-          try { await reflSwarm.run(); } finally { stopReflRender(); }
-          console.log(renderSummary(reflSwarm));
-
-          accCost += reflSwarm.totalCostUsd;
-          accIn += reflSwarm.totalInputTokens;
-          accOut += reflSwarm.totalOutputTokens;
-          accCompleted += reflSwarm.completed;
-          accFailed += reflSwarm.failed;
-          accTools += reflSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
-          remaining -= reflSwarm.completed + reflSwarm.failed;
-          reflectionBudgetUsed += reflSwarm.completed + reflSwarm.failed;
-
-          waveHistory.push({
-            wave: waveNum,
-            kind: "reflect",
-            tasks: reflSwarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, filesChanged: a.filesChanged, error: a.error })),
-          });
-          lastWaveKind = "reflect";
-          continue; // re-steer with reflection artifacts
-        }
-
-        // action === "execute"
-        if (steer.tasks.length === 0) {
           console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
           objectiveComplete = true;
           remaining = 0;
           break;
         }
+
+        const isOverhead = steer.waveKind !== "execute";
+
+        if (isOverhead && overheadBudgetUsed + steer.tasks.length > maxOverheadBudget) {
+          console.log(chalk.dim(`  ${steer.reasoning}`));
+          console.log(chalk.yellow(`  Overhead budget exhausted (${overheadBudgetUsed}/${maxOverheadBudget}) — re-assessing\n`));
+          lastWaveKind = "overhead-capped";
+          continue; // re-steer
+        }
+
         console.log(chalk.dim(`  ${steer.reasoning}\n`));
-        currentTasks = steer.tasks;
-        lastWaveKind = "execute";
-        steerDone = true; // exit inner loop, outer loop runs the tasks
+
+        // Resolve model aliases: "planner" → plannerModel, "worker" → workerModel
+        currentTasks = steer.tasks.map(t => ({
+          ...t,
+          model: t.model === "planner" ? plannerModel : t.model === "worker" ? workerModel
+            : isOverhead && !t.model ? plannerModel : t.model,
+        }));
+        lastWaveKind = steer.waveKind;
+        if (isOverhead) overheadBudgetUsed += currentTasks.length;
+        steered = true;
       } catch (err: any) {
         process.stdout.write("\x1B[?25h");
         console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
@@ -1257,7 +1227,7 @@ async function main() {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
     usageCap, allowExtraUsage, extraUsageBudget, flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
-    lastWaveKind, reflectionBudgetUsed, accCost, accCompleted, accFailed,
+    lastWaveKind, overheadBudgetUsed, accCost, accCompleted, accFailed,
     branches, phase: finalPhase, startedAt: new Date(runStartedAt).toISOString(), cwd,
   });
   if (trulyDone) {
@@ -1286,7 +1256,7 @@ async function main() {
   boxLines.push(`${waves} wave${waves > 1 ? "s" : ""} · ${statusLine} · $${accCost.toFixed(2)}`);
   boxLines.push(`${elapsedStr} · ${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out · ${accTools} tools`);
   if (totalMerged > 0 || totalConflicts > 0) boxLines.push(`${totalMerged} merged${totalConflicts > 0 ? ` · ${totalConflicts} conflicts` : ""}`);
-  if (reflectionBudgetUsed > 0) boxLines.push(`${reflectionBudgetUsed} reflection agents`);
+  if (overheadBudgetUsed > 0) boxLines.push(`${overheadBudgetUsed} overhead agents (review/verify/explore)`);
   if (lastCapped) boxLines.push(chalk.yellow(`Capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%`));
 
   const boxW = Math.max(...boxLines.map(l => l.replace(/\x1B\[[0-9;]*m/g, "").length)) + 4;

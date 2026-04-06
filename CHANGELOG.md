@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.1
+
+### Improved cost display
+
+- **Live overall cost.** Stats line now shows both wave cost and running total: `$0.092 / $0.45 total`. Previously showed only the current wave's cost — the accumulated cost from previous waves was only visible in the static wave header.
+- **Extra usage budget bar.** When using extra usage with a dollar budget, a dedicated progress bar shows spend vs limit: `Extra ████████░░░░░░  $0.82/$2.00`. Colors shift magenta → yellow → red as the budget fills. Replaces the old inline `[EXTRA USAGE $X/$Y]` text on the usage bar.
+
 ## 1.4.0
 
 ### Auto-simplify pass

@@ -40,6 +40,8 @@ export interface SwarmConfig {
   allowExtraUsage?: boolean;
   /** Max $ to spend on extra usage before stopping. Only applies when allowExtraUsage is true. */
   extraUsageBudget?: number;
+  /** Cost from previous waves — lets the UI show an accurate running total. */
+  baseCostUsd?: number;
 }
 
 export interface MergeResult {
@@ -90,6 +92,7 @@ export class Swarm {
   usageCap: number | undefined; // mutable — can be changed live
   readonly allowExtraUsage: boolean;
   readonly extraUsageBudget: number | undefined;
+  readonly baseCostUsd: number;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) {
@@ -116,6 +119,7 @@ export class Swarm {
     this.usageCap = config.usageCap;
     this.allowExtraUsage = config.allowExtraUsage ?? false;
     this.extraUsageBudget = config.extraUsageBudget;
+    this.baseCostUsd = config.baseCostUsd ?? 0;
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
   }

@@ -49,6 +49,7 @@ claude-overnight
 ◆ Thinking: 5 agents exploring...         ← architects analyze your codebase
 ◆ Orchestrating plan...                   ← synthesizes 50 concrete tasks
 ◆ Wave 1 · 50 tasks · $4.20 spent        ← fully autonomous from here
+  ↑ 1.2M in  ↓ 340K out  $4.20 / $4.24 total
 ◆ Assessing... how close to amazing?
 ◆ Wave 2 · 30 tasks · $18.50 spent       ← improvements from assessment
 ◆ Reflection: 2 agents reviewing          ← deep quality audit
@@ -222,6 +223,8 @@ Changes take effect between waves — active agents finish their current task.
 ### Multi-window usage display
 
 The usage bar cycles through all rate limit windows (5h, 7d, etc.) every 3 seconds, showing utilization per window. Usage info is shown during all phases — thinking, orchestration, steering, and execution.
+
+When using extra usage with a budget, a dedicated progress bar shows spend vs limit with color-coded fill (magenta → yellow → red).
 
 ## Rate limits
 
