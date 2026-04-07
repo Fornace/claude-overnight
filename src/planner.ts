@@ -265,6 +265,10 @@ async function runPlannerQuery(
   throw new Error("Planner query failed after retries");
 }
 
+/** Cumulative cost of all planner queries (steering, orchestration, etc.) across the session. */
+let _totalPlannerCostUsd = 0;
+export function getTotalPlannerCost(): number { return _totalPlannerCostUsd; }
+
 /** Shared mutable rate limit state that planner queries write to for UI display. Reset per query. */
 let _plannerRateLimitInfo: PlannerRateLimitInfo = {
   utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0,
@@ -379,6 +383,7 @@ async function runPlannerQueryOnce(
         if (typeof r.total_cost_usd === "number") {
           costUsd = r.total_cost_usd;
           _plannerRateLimitInfo.costUsd += costUsd;
+          _totalPlannerCostUsd += costUsd;
         }
         if (msg.subtype === "success") resultText = r.result || "";
         else throw new Error(`Planner failed: ${r.result || msg.subtype}`);

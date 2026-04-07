@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.0
+
+### Unified display & accurate cost tracking
+
+The TUI no longer disappears between waves. A single `RunDisplay` class owns the render loop and hotkeys for the entire run — wave → steering → next wave transitions are seamless, with the header always visible.
+
+- **Unified `RunDisplay`.** One render loop, one hotkey handler. Switches between wave mode (agent table + events) and steering mode (assessment text) without clearing the screen. No more jarring blank-then-rebuild between phases.
+- **Accurate total cost.** Planner/steering API calls between waves were silently untracked. Added a cumulative cost counter in `planner.ts`; each steering call's cost delta is now captured and added to `accCost`. The displayed total reflects the real spend.
+- **Session details in header.** Stats line now shows cumulative tokens, total cost, wave number, sessions used/budget, and remaining count (e.g. `$212.24  wave 3 · 15/100 sessions · 85 left`).
+- **Shared header rendering.** Extracted `renderHeader()` used by both wave and steering frames — consistent layout from the first thinking phase through the last wave.
+
 ## 1.6.1
 
 ### Fix: resume with zeroed remaining budget

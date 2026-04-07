@@ -8,10 +8,10 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, orchestrate } from "./planner.js";
+import { planTasks, refinePlan, detectModelTier, steerWave, identifyThemes, buildThinkingTasks, orchestrate, getTotalPlannerCost, getPlannerRateLimitInfo } from "./planner.js";
 import type { WaveSummary, RunMemory } from "./planner.js";
-import { startRenderLoop, renderSummary } from "./ui.js";
-import type { LiveConfig } from "./ui.js";
+import { RunDisplay, renderSummary } from "./ui.js";
+import type { LiveConfig, RunInfo } from "./ui.js";
 import type { Task, TaskFile, PermMode, MergeStrategy, RunState, BranchRecord } from "./types.js";
 
 // ── CLI flag parsing ──
@@ -1001,9 +1001,19 @@ async function main() {
             agentTimeoutMs,
             usageCap, allowExtraUsage, extraUsageBudget,
           });
-          const stopThinkRender = startRenderLoop(thinkingSwarm, { remaining: 0, usageCap, dirty: false });
-          try { await thinkingSwarm.run(); } finally { stopThinkRender(); }
-          console.log(renderSummary(thinkingSwarm));
+          const thinkRunInfo: RunInfo = {
+            accIn: 0, accOut: 0, accCost: 0, accCompleted: 0, accFailed: 0,
+            sessionsBudget: budget ?? 10, waveNum: -1, remaining: (budget ?? 10),
+            model: plannerModel, startedAt: Date.now(),
+          };
+          const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, dirty: false });
+          thinkDisplay.setWave(thinkingSwarm);
+          thinkDisplay.start();
+          try { await thinkingSwarm.run(); } finally {
+            thinkDisplay.pause();
+            console.log(renderSummary(thinkingSwarm));
+            thinkDisplay.stop();
+          }
           thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
           thinkingCost = thinkingSwarm.totalCostUsd;
           thinkingIn = thinkingSwarm.totalInputTokens;
@@ -1124,8 +1134,7 @@ async function main() {
   }
 
   // ── Run (wave loop) ──
-  process.stdout.write("\x1B[?25l");
-  const restore = () => process.stdout.write("\x1B[?25h\n");
+  const restore = () => { try { process.stdout.write("\x1B[?25h\n"); } catch {} };
   const runStartedAt = resuming && resumeState?.startedAt ? new Date(resumeState.startedAt).getTime() : Date.now();
 
   // Wave-loop state — either fresh or resumed
@@ -1189,6 +1198,18 @@ async function main() {
   liveConfig.usageCap = usageCap;
   const maxOverheadBudget = Math.max(4, Math.ceil((budget ?? 10) * 0.15));
 
+  // Unified display — one instance for the entire run
+  const runInfoRef: RunInfo = {
+    accIn, accOut, accCost, accCompleted, accFailed,
+    sessionsBudget: budget ?? tasks.length, waveNum, remaining,
+    model: workerModel, startedAt: runStartedAt,
+  };
+  const display = new RunDisplay(runInfoRef, liveConfig);
+  const rlGetter = () => {
+    const rl = getPlannerRateLimitInfo();
+    return { utilization: rl.utilization, isUsingOverage: rl.isUsingOverage, windows: rl.windows, resetsAt: rl.resetsAt };
+  };
+
   // For flex + branch strategy: create one target branch, waves merge via yolo into it
   let runBranch: string | undefined;
   let originalRef: string | undefined;
@@ -1207,54 +1228,56 @@ async function main() {
   // Graceful drain
   let stopping = false;
   const gracefulStop = (signal: string) => {
-    if (stopping) { currentSwarm?.cleanup(); restore(); process.exit(0); }
+    if (stopping) { currentSwarm?.cleanup(); display.stop(); restore(); process.exit(0); }
     stopping = true;
-    process.stdout.write(`\n  ${chalk.yellow(`${signal}: stopping... (send again to force)`)}\n`);
     currentSwarm?.abort();
   };
   process.on("SIGINT", () => gracefulStop("SIGINT"));
   process.on("SIGTERM", () => gracefulStop("SIGTERM"));
-  process.on("uncaughtException", (err) => { currentSwarm?.abort(); currentSwarm?.cleanup(); restore(); console.error(chalk.red(`\n  Uncaught: ${err.message}`)); process.exit(1); });
-  process.on("unhandledRejection", (reason) => { currentSwarm?.abort(); currentSwarm?.cleanup(); restore(); console.error(chalk.red(`\n  Unhandled: ${reason instanceof Error ? reason.message : reason}`)); process.exit(1); });
+  process.on("uncaughtException", (err) => { currentSwarm?.abort(); currentSwarm?.cleanup(); display.stop(); restore(); console.error(chalk.red(`\n  Uncaught: ${err.message}`)); process.exit(1); });
+  process.on("unhandledRejection", (reason) => { currentSwarm?.abort(); currentSwarm?.cleanup(); display.stop(); restore(); console.error(chalk.red(`\n  Unhandled: ${reason instanceof Error ? reason.message : reason}`)); process.exit(1); });
+
+  // Helper: sync mutable runInfo with accumulated state
+  const syncRunInfo = () => Object.assign(runInfoRef, { accIn, accOut, accCost, accCompleted, accFailed, waveNum, remaining });
 
   // When resuming a flex run with no queued tasks, steer immediately to get the next wave
   if (resuming && flex && currentTasks.length === 0 && remaining > 0) {
     let steerAttempts = 0;
+    display.setSteering(rlGetter);
+    display.start();
+
     while (currentTasks.length === 0 && remaining > 0 && !objectiveComplete && steerAttempts < 3) {
       steerAttempts++;
-      console.log(chalk.cyan(`\n  ◆ Assessing...\n`));
-      process.stdout.write("\x1B[?25l");
+      const plannerCostBefore = getTotalPlannerCost();
       try {
         const memory = readRunMemory(runDir, previousKnowledge || undefined);
         const steer = await steerWave(
           objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
-          permissionMode, concurrency, makeProgressLog(), memory,
+          permissionMode, concurrency, (text) => display.updateText(text), memory,
         );
-        process.stdout.write(`\x1B[2K\r`);
-        process.stdout.write("\x1B[?25h");
+        const steerCost = getTotalPlannerCost() - plannerCostBefore;
+        accCost += steerCost;
+        syncRunInfo();
+
         if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
         if (steer.goalUpdate) writeGoalUpdate(runDir, steer.goalUpdate);
 
         if (steer.done || steer.tasks.length === 0) {
           const hasVerification = waveHistory.some(w => w.kind.includes("verif"));
           if (!hasVerification && remaining >= 1) {
-            console.log(chalk.dim(`  ${steer.reasoning}`));
-            console.log(chalk.yellow(`  Done blocked — verification required before completion\n`));
+            display.updateText(`Done blocked \u2014 verification required`);
             lastWaveKind = "done-blocked";
             continue;
           }
-          console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
           objectiveComplete = true;
           remaining = 0;
         } else {
           const isOverhead = steer.waveKind !== "execute";
           if (isOverhead && overheadBudgetUsed + steer.tasks.length > maxOverheadBudget) {
-            console.log(chalk.dim(`  ${steer.reasoning}`));
-            console.log(chalk.yellow(`  Overhead budget exhausted (${overheadBudgetUsed}/${maxOverheadBudget}) — re-assessing\n`));
+            display.updateText(`Overhead budget exhausted (${overheadBudgetUsed}/${maxOverheadBudget}) \u2014 re-assessing`);
             lastWaveKind = "overhead-capped";
             continue;
           }
-          console.log(chalk.dim(`  ${steer.reasoning}\n`));
           currentTasks = steer.tasks.map(t => ({
             ...t,
             model: t.model === "planner" ? plannerModel : t.model === "worker" ? workerModel
@@ -1264,20 +1287,22 @@ async function main() {
           if (isOverhead) overheadBudgetUsed += currentTasks.length;
         }
       } catch (err: any) {
-        process.stdout.write("\x1B[?25h");
+        const steerCost = getTotalPlannerCost() - plannerCostBefore;
+        accCost += steerCost;
+        display.stop();
         console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
         break;
       }
     }
   }
 
+  // Start unified display (first call — idempotent)
+  if (!display.runInfo.startedAt) display.runInfo.startedAt = runStartedAt;
+  display.start();
+
   while (remaining > 0 && currentTasks.length > 0 && !stopping) {
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
-
-    if (flex) {
-      const costSoFar = accCost > 0 ? ` · $${accCost.toFixed(2)} spent` : "";
-      console.log(chalk.cyan(`\n  ◆ Wave ${waveNum + 1}`) + chalk.dim(` · ${currentTasks.length} tasks · ${remaining} remaining${costSoFar}\n`));
-    }
+    syncRunInfo();
 
     const swarm = new Swarm({
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
@@ -1286,16 +1311,18 @@ async function main() {
     });
     currentSwarm = swarm;
 
-    const stopRender = startRenderLoop(swarm, liveConfig);
+    display.setWave(swarm);
+    display.resume();
     try {
       await swarm.run();
     } catch (err: unknown) {
-      if (isAuthError(err)) { stopRender(); restore(); console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`)); process.exit(1); }
+      if (isAuthError(err)) { display.stop(); restore(); console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`)); process.exit(1); }
       throw err;
-    } finally {
-      stopRender();
-      console.log(renderSummary(swarm));
     }
+
+    // Show wave summary (pauses render, prints, then we switch to steering)
+    display.pause();
+    console.log(renderSummary(swarm));
 
     // Accumulate
     accCost += swarm.totalCostUsd;
@@ -1305,10 +1332,8 @@ async function main() {
     accFailed += swarm.failed;
     accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
     remaining = Math.max(0, remaining - swarm.completed - swarm.failed);
-    // Sanity check: remaining should never drop below budget - total consumed
     const expectedFloor = Math.max(0, (budget ?? 0) - accCompleted - accFailed);
     if (remaining < expectedFloor) remaining = expectedFloor;
-    // Apply live config changes if user adjusted budget/threshold mid-wave
     if (liveConfig.dirty) {
       remaining = liveConfig.remaining;
       usageCap = liveConfig.usageCap;
@@ -1341,55 +1366,49 @@ async function main() {
     if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
 
     // ── Steer: assess and compose the next wave ──
+    syncRunInfo();
+    display.setSteering(rlGetter);
+    display.resume();
+
     let steered = false;
     let steerAttempts = 0;
     while (!steered && remaining > 0 && !stopping && steerAttempts < 3) {
       steerAttempts++;
-      console.log(chalk.cyan(`\n  ◆ Assessing...\n`));
-      process.stdout.write("\x1B[?25l");
+      const plannerCostBefore = getTotalPlannerCost();
       try {
         const memory = readRunMemory(runDir, previousKnowledge || undefined);
         const steer = await steerWave(
           objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
-          permissionMode, concurrency, makeProgressLog(), memory,
+          permissionMode, concurrency, (text) => display.updateText(text), memory,
         );
-        process.stdout.write(`\x1B[2K\r`);
-        process.stdout.write("\x1B[?25h");
+        const steerCost = getTotalPlannerCost() - plannerCostBefore;
+        accCost += steerCost;
+        syncRunInfo();
 
         if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
-        if (steer.goalUpdate) {
-          writeGoalUpdate(runDir, steer.goalUpdate);
-          console.log(chalk.dim(`  Goal refined: ${steer.goalUpdate.slice(0, 100)}\n`));
-        }
+        if (steer.goalUpdate) writeGoalUpdate(runDir, steer.goalUpdate);
         const execWaves = waveHistory.filter(w => w.kind === "execute").length;
         if (execWaves > 0 && execWaves % 5 === 0) archiveMilestone(runDir, waveNum);
 
         if (steer.done || steer.tasks.length === 0) {
           const hasVerification = waveHistory.some(w => w.kind.includes("verif"));
           if (!hasVerification && remaining >= 1) {
-            console.log(chalk.dim(`  ${steer.reasoning}`));
-            console.log(chalk.yellow(`  Done blocked — verification required before completion\n`));
+            display.updateText(`Done blocked \u2014 verification required`);
             lastWaveKind = "done-blocked";
-            continue; // re-steer — steerer will see the hint
+            continue;
           }
-          console.log(chalk.green(`  \u2713 ${steer.reasoning}\n`));
           objectiveComplete = true;
           remaining = 0;
           break;
         }
 
         const isOverhead = steer.waveKind !== "execute";
-
         if (isOverhead && overheadBudgetUsed + steer.tasks.length > maxOverheadBudget) {
-          console.log(chalk.dim(`  ${steer.reasoning}`));
-          console.log(chalk.yellow(`  Overhead budget exhausted (${overheadBudgetUsed}/${maxOverheadBudget}) — re-assessing\n`));
+          display.updateText(`Overhead budget exhausted (${overheadBudgetUsed}/${maxOverheadBudget}) \u2014 re-assessing`);
           lastWaveKind = "overhead-capped";
-          continue; // re-steer
+          continue;
         }
 
-        console.log(chalk.dim(`  ${steer.reasoning}\n`));
-
-        // Resolve model aliases: "planner" → plannerModel, "worker" → workerModel
         currentTasks = steer.tasks.map(t => ({
           ...t,
           model: t.model === "planner" ? plannerModel : t.model === "worker" ? workerModel
@@ -1399,15 +1418,18 @@ async function main() {
         if (isOverhead) overheadBudgetUsed += currentTasks.length;
         steered = true;
       } catch (err: any) {
-        process.stdout.write("\x1B[?25h");
+        const steerCost = getTotalPlannerCost() - plannerCostBefore;
+        accCost += steerCost;
+        display.stop();
         console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
-        // Don't zero out remaining — preserve unspent budget so resume works
         break;
       }
     }
-    if (!steered) break; // steering failed — stop, don't re-run old tasks
+    if (!steered) break;
     waveNum++;
   }
+
+  display.stop();
 
   // Only truly "done" if steering explicitly completed the objective (or non-flex single wave with budget exhausted)
   const trulyDone = objectiveComplete || (!flex && remaining <= 0);
