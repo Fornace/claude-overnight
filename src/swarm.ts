@@ -294,11 +294,12 @@ export class Swarm {
 
         let resumePrompt = "Continue. Complete the task.";
         const runOnce = async (isResume: boolean): Promise<void> => {
+          const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
           const agentPrompt = isResume
             ? resumePrompt
             : this.config.useWorktrees && !task.noWorktree
-              ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
-              : task.prompt;
+              ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${preamble}${task.prompt}`
+              : `${preamble}${task.prompt}`;
 
           const agentQuery = query({
             prompt: agentPrompt,
