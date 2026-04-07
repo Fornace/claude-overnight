@@ -254,7 +254,7 @@ export class Swarm {
 
     // Create worktree if enabled
     let agentCwd = task.cwd || this.config.cwd;
-    if (this.config.useWorktrees && this.worktreeBase) {
+    if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree) {
       try {
         const branch = `swarm/task-${id}`;
         const dir = join(this.worktreeBase, `agent-${id}`);
@@ -296,7 +296,7 @@ export class Swarm {
         const runOnce = async (isResume: boolean): Promise<void> => {
           const agentPrompt = isResume
             ? resumePrompt
-            : this.config.useWorktrees
+            : this.config.useWorktrees && !task.noWorktree
               ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${task.prompt}`
               : task.prompt;
 

@@ -8,6 +8,8 @@ export interface Task {
   cwd?: string;
   /** Claude model override for this specific task (e.g. "sonnet", "opus"). */
   model?: string;
+  /** When true, skip worktree isolation — run in the real project directory with env files, dependencies, and local config. */
+  noWorktree?: boolean;
 }
 
 /** Schema for a JSON task file that defines a batch of work for the swarm. */

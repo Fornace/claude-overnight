@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.1
+
+### Fix: verification agents run in the real project directory
+
+Verification agents were running in isolated git worktrees that lacked env files, installed dependencies, and local config — making it impossible to start a dev server or do real browser testing. They silently fell back to static code analysis and declared "verified."
+
+- **`noWorktree` task field.** Tasks can now opt out of worktree isolation. The planner sets `"noWorktree": true` on verify and user-test tasks so they run in the main project directory with full access to the real environment.
+- **Zero side-effect by design.** Agents without a worktree branch are automatically excluded from auto-commit and merge — no additional guards needed.
+- **Planner prompt updated.** Verify and user-test wave descriptions now instruct the steering agent to set `noWorktree`, with a schema example in the JSON template.
+
 ## 1.7.0
 
 ### Unified display & accurate cost tracking

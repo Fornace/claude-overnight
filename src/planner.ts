@@ -827,10 +827,10 @@ You have full creative freedom. Design the wave that will have the highest impac
 **Synthesize** — An agent reads multiple alternatives or review findings and makes a decision. Writes the chosen approach or prioritized fix list.
   Example: 1 agent reads 3 design docs and writes the implementation plan
 
-**Verify** — Agents actually RUN the application: build it, start it, navigate it, click things, try edge cases. They report what works and what's broken. Not code reading — real testing.
+**Verify** — Agents actually RUN the application: build it, start it, navigate it, click things, try edge cases. They report what works and what's broken. Not code reading — real testing. Always set "noWorktree": true so they run in the real project environment (env files, dependencies, config).
   Example: 1 agent does end-to-end QA, writing a report with reproduction steps
 
-**User-test** — Agents emulate specific user personas interacting with the product. "First-time user who just downloaded this." "Power user trying to do X fast." They test from that perspective and report friction.
+**User-test** — Agents emulate specific user personas interacting with the product. Always set "noWorktree": true. "First-time user who just downloaded this." "Power user trying to do X fast." They test from that perspective and report friction.
   Example: 2 agents, one new user, one power user, each writing a report
 
 **Polish** — Agents focus purely on feel: loading states, error messages, micro-interactions, empty states, responsiveness. Not features — the texture that makes users trust the product.
@@ -851,11 +851,13 @@ Respond with ONLY a JSON object (no markdown fences):
   "statusUpdate": "REQUIRED — concise project status: what's built, what works, what's rough, quality level, key gaps. This replaces the previous status.",
   "tasks": [
     {"prompt": "task instruction...", "model": "worker"},
-    {"prompt": "review task...", "model": "planner"}
+    {"prompt": "review task...", "model": "planner"},
+    {"prompt": "verify the app end-to-end...", "model": "planner", "noWorktree": true}
   ]
 }
 
 The "model" field on each task: use "worker" (${workerModel}) for implementation tasks, "planner" (${plannerModel}) for review/analysis/verification tasks. Default is "worker".
+Set "noWorktree": true for verify/user-test tasks — they run in the real project directory instead of an isolated worktree, with access to env files, installed dependencies, and local config.
 
 If done: {"done": true, "waveKind": "done", "reasoning": "...", "statusUpdate": "...", "tasks": []}`;
 
@@ -890,6 +892,7 @@ If done: {"done": true, "waveKind": "done", "reasoning": "...", "statusUpdate": 
     id: String(i),
     prompt: typeof t === "string" ? t : t.prompt,
     ...(t.model && { model: t.model }),
+    ...(t.noWorktree && { noWorktree: true }),
   }));
 
   tasks = postProcess(tasks, remainingBudget, onLog);
