@@ -1459,37 +1459,62 @@ async function main() {
 
   const totalMerged = branches.filter(b => b.status === "merged").length;
   const totalConflicts = branches.filter(b => b.status === "merge-failed").length;
+  const termW = Math.max((process.stdout.columns ?? 80) || 80, 50);
 
-  console.log(chalk.dim(`\n  ${"─".repeat(36)}`));
-  console.log(`  ${accFailed === 0 ? chalk.green("✓") : chalk.yellow("⚠")} ${chalk.bold("Complete")}\n`);
-
-  const boxLines: string[] = [];
-  const statusLine = accFailed > 0 ? `${accCompleted} done · ${accFailed} failed` : `${accCompleted} done`;
-  boxLines.push(`${waves} wave${waves > 1 ? "s" : ""} · ${statusLine} · $${accCost.toFixed(2)}`);
-  boxLines.push(`${elapsedStr} · ${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out · ${accTools} tools`);
-  if (totalMerged > 0 || totalConflicts > 0) boxLines.push(`${totalMerged} merged${totalConflicts > 0 ? ` · ${totalConflicts} conflicts` : ""}`);
-  if (overheadBudgetUsed > 0) boxLines.push(`${overheadBudgetUsed} overhead agents (review/verify/explore)`);
-  if (lastCapped) boxLines.push(chalk.yellow(`Capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%`));
-
-  const boxW = Math.max(...boxLines.map(l => l.replace(/\x1B\[[0-9;]*m/g, "").length)) + 4;
-  console.log(chalk.dim(`  ╭${"─".repeat(boxW)}╮`));
-  for (const line of boxLines) {
-    const plainLen = line.replace(/\x1B\[[0-9;]*m/g, "").length;
-    console.log(chalk.dim("  │") + `  ${line}${" ".repeat(Math.max(0, boxW - 2 - plainLen))}` + chalk.dim("│"));
+  // Banner
+  console.log("");
+  const bannerChar = accFailed === 0 ? "=" : "-";
+  console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+  if (trulyDone) {
+    console.log(chalk.bold.green(`  CLAUDE OVERNIGHT — COMPLETE`));
+  } else {
+    console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — BUDGET EXHAUSTED`));
   }
-  console.log(chalk.dim(`  ╰${"─".repeat(boxW)}╯`));
+  console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+  console.log("");
 
+  // Stats grid
+  const statRows = [
+    [chalk.bold("Waves"), String(waves), chalk.bold("Sessions"), `${accCompleted} done${accFailed > 0 ? ` / ${accFailed} failed` : ""}`],
+    [chalk.bold("Cost"), chalk.green(`$${accCost.toFixed(2)}`), chalk.bold("Elapsed"), elapsedStr],
+    [chalk.bold("Merged"), `${totalMerged} branches`, chalk.bold("Conflicts"), totalConflicts > 0 ? chalk.red(String(totalConflicts)) : chalk.green("0")],
+    [chalk.bold("Tokens"), `${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out`, chalk.bold("Tool calls"), String(accTools)],
+  ];
+  for (const [k1, v1, k2, v2] of statRows) {
+    console.log(`  ${k1}  ${v1.padEnd(20)}  ${k2}  ${v2}`);
+  }
+  if (overheadBudgetUsed > 0) console.log(`  ${chalk.bold("Overhead")}  ${overheadBudgetUsed} agents (review/verify/explore)`);
+  if (lastCapped) console.log(`  ${chalk.yellow(`Capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%`)}`);
+  console.log("");
+
+  // Status summary (the product-level assessment from the planner)
+  const statusFile = join(runDir, "status.md");
+  if (existsSync(statusFile)) {
+    const statusContent = readFileSync(statusFile, "utf-8").trim();
+    if (statusContent) {
+      console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
+      console.log(chalk.bold("  Status"));
+      console.log("");
+      for (const line of statusContent.split("\n")) {
+        console.log(`  ${line}`);
+      }
+      console.log("");
+    }
+  }
+
+  // Conflicts detail
   if (totalConflicts > 0) {
+    console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
     const conflictBranches = branches.filter(b => b.status === "merge-failed");
-    console.log(chalk.red(`\n  Unresolved conflicts:`));
+    console.log(chalk.red(`  Unresolved conflicts:`));
     for (const c of conflictBranches) console.log(chalk.red(`    ${c.branch}`));
     console.log(chalk.dim("  git merge <branch> to resolve"));
+    console.log("");
   }
 
-  if (runBranch) {
-    console.log(chalk.dim(`\n  Branch: ${runBranch} — git merge ${runBranch}`));
-  }
-
+  // Footer
+  console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
+  if (runBranch) console.log(chalk.dim(`  Branch: ${runBranch} — git merge ${runBranch}`));
   console.log(chalk.dim(`  Run: ${runDir}`));
   if (currentSwarm?.logFile) console.log(chalk.dim(`  Log: ${currentSwarm.logFile}`));
   console.log("");
