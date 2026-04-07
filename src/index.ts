@@ -686,7 +686,7 @@ async function main() {
         console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
         const boxLines = [
           `${obj}${obj.length >= 50 ? "…" : ""}`,
-          `${prev.accCompleted}/${prev.budget} sessions · ${prev.remaining} remaining · $${prev.accCost.toFixed(2)}`,
+          `${prev.accCompleted}/${prev.budget} sessions · ${Math.max(1, (prev.budget ?? 0) - prev.accCompleted)} remaining · $${prev.accCost.toFixed(2)}`,
           `Wave ${prev.waveNum + 1} · ${prev.phase}`,
         ];
         if (lastStatus) boxLines.push(lastStatus);
@@ -1148,7 +1148,10 @@ async function main() {
 
   if (resuming && resumeState) {
     // Restore wave-loop state (config already restored in the early resume block + ternaries above)
-    remaining = resumeState.remaining;
+    // Recalculate remaining from budget — don't trust saved value which counts failures
+    // and may have been zeroed by a premature "done" signal from the steerer.
+    // The user explicitly chose Resume, so give back budget not yet successfully used.
+    remaining = Math.max(1, (resumeState.budget ?? 0) - resumeState.accCompleted);
     currentTasks = resumeState.currentTasks;
     waveNum = resumeState.waveNum;
     accCost = resumeState.accCost;
@@ -1302,6 +1305,9 @@ async function main() {
     accFailed += swarm.failed;
     accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
     remaining = Math.max(0, remaining - swarm.completed - swarm.failed);
+    // Sanity check: remaining should never drop below budget - total consumed
+    const expectedFloor = Math.max(0, (budget ?? 0) - accCompleted - accFailed);
+    if (remaining < expectedFloor) remaining = expectedFloor;
     // Apply live config changes if user adjusted budget/threshold mid-wave
     if (liveConfig.dirty) {
       remaining = liveConfig.remaining;

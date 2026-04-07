@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.1
+
+### Fix: resume with zeroed remaining budget
+
+Resuming a run that had `remaining: 0` (despite unspent budget) would immediately exit with no work done. The saved `remaining` counter could drift to 0 through steerer "done" signals or unexplained consumption even when `accCompleted` was far below `budget`.
+
+- **Resume recalculates remaining** from `budget - accCompleted` instead of restoring the saved value. Ensures the user gets back sessions that weren't successfully used.
+- **Display matches recalculation.** The unfinished-run box now shows the true resumable budget, not the stale saved value.
+- **Runtime drift guard.** After each wave, if `remaining` drops below `budget - accCompleted - accFailed`, it's corrected. Prevents ghost budget consumption regardless of cause.
+
 ## 1.6.0
 
 ### Free-form wave composition
