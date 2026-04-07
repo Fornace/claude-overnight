@@ -827,7 +827,7 @@ You have full creative freedom. Design the wave that will have the highest impac
 **Synthesize** — An agent reads multiple alternatives or review findings and makes a decision. Writes the chosen approach or prioritized fix list.
   Example: 1 agent reads 3 design docs and writes the implementation plan
 
-**Verify** — Agents actually RUN the application: build it, start it, navigate it, click things, try edge cases. They report what works and what's broken. Not code reading — real testing. Always set "noWorktree": true so they run in the real project environment (env files, dependencies, config).
+**Verify** — Agents actually RUN the application: build it, start it, navigate it, click things, try edge cases. They report what works and what's broken. Not code reading — real testing. Always set "noWorktree": true so they run in the real project environment (env files, dependencies, config). Tell verify agents: if the app requires authentication, DO NOT give up — search the codebase for dev login routes, test tokens, seed users, env vars with keys/secrets, CLI auth commands, or any other mechanism that lets you in. Try everything before declaring auth impossible.
   Example: 1 agent does end-to-end QA, writing a report with reproduction steps
 
 **User-test** — Agents emulate specific user personas interacting with the product. Always set "noWorktree": true. "First-time user who just downloaded this." "Power user trying to do X fast." They test from that perspective and report friction.
