@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.4
+
+### Done-blocked fix, steering diagnostics, accurate exit messages
+
+The steerer could say "done" but the done-blocked gate (requiring a verification wave) would reject it 3 times, exhaust the steering retry budget, and exit showing "BUDGET EXHAUSTED" — even with 135 of 200 sessions remaining. Runs stopped for no visible reason with no way to debug.
+
+- **Auto-verification on done-blocked.** When the steerer says "done" but no verification wave has run, the system auto-composes a verification wave instead of retrying the same steering call that will say "done" again. After verification, the steerer can assess real results.
+- **Steering reasoning saved to disk.** Every steering decision writes `steering/wave-N-attempt-M.json` with `done`, `waveKind`, `reasoning`, `taskCount`, `statusUpdate`, and `goalUpdate`. No more invisible decisions.
+- **`reasoning` and `statusUpdate` required in schema.** The structured output schema now enforces these fields so the model can't skip them.
+- **Accurate exit messages.** "BUDGET EXHAUSTED" only when budget is actually zero. New labels: "RATE LIMITED" (usage cap or extra usage budget hit), "INTERRUPTED" (SIGINT/abort), "STOPPED" (other exits). Sessions line shows remaining count.
+- **45-minute wall-clock limit on planner calls.** Safety net against planner sessions that stay alive but make no real progress due to rate limits. The nudge/timeout mechanism only detected silence — a rate-limited session producing occasional file reads could run for hours.
+
 ## 1.8.2
 
 ### Structured output schemas + steering retry

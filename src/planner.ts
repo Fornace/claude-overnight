@@ -55,6 +55,7 @@ Consistency is what makes complex things feel simple. One design system, rigid r
 
 const NUDGE_MS = 15 * 60 * 1000;   // 15 min — close & restart with "continue"
 const HARD_TIMEOUT_MS = 30 * 60 * 1000; // 30 min — give up
+const WALL_CLOCK_LIMIT_MS = 45 * 60 * 1000; // 45 min — absolute max per planner call
 
 // ── JSON schemas for structured output ──
 
@@ -95,7 +96,7 @@ const STEER_SCHEMA = {
         },
       },
     },
-    required: ["done", "tasks"],
+    required: ["done", "tasks", "reasoning", "statusUpdate"],
   },
 };
 
@@ -369,7 +370,14 @@ async function runPlannerQueryOnce(
   let timer: NodeJS.Timeout;
   const watchdog = new Promise<never>((_, reject) => {
     const check = () => {
+      const elapsed = Date.now() - startedAt;
       const silent = Date.now() - lastActivity;
+      // Wall-clock limit: kill if session has been running too long regardless of activity
+      if (elapsed >= WALL_CLOCK_LIMIT_MS) {
+        pq.interrupt().catch(() => pq.close());
+        reject(new Error(`Planner hit wall-clock limit (${Math.round(elapsed / 60000)}min) — likely rate limited`));
+        return;
+      }
       if (silent >= timeoutMs) {
         // Try interrupt (graceful), fall back to close (hard kill)
         pq.interrupt().catch(() => pq.close());

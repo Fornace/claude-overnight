@@ -1262,13 +1262,37 @@ async function main() {
 
         if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
         if (steer.goalUpdate) writeGoalUpdate(runDir, steer.goalUpdate);
+        // Persist steering reasoning for debugging
+        const steerDir0 = join(runDir, "steering");
+        mkdirSync(steerDir0, { recursive: true });
+        writeFileSync(join(steerDir0, `pre-wave-attempt-${steerAttempts}.json`), JSON.stringify({
+          done: steer.done, waveKind: steer.waveKind, reasoning: steer.reasoning,
+          taskCount: steer.tasks.length, statusUpdate: steer.statusUpdate, goalUpdate: steer.goalUpdate,
+        }, null, 2), "utf-8");
 
         if (steer.done || steer.tasks.length === 0) {
           const hasVerification = waveHistory.some(w => w.kind.includes("verif"));
           if (!hasVerification && remaining >= 1) {
-            display.updateText(`Done blocked \u2014 verification required`);
-            lastWaveKind = "done-blocked";
-            continue;
+            // Auto-compose verification instead of retrying steering
+            display.updateText(`Done blocked — auto-composing verification wave`);
+            currentTasks = [{
+              id: "verify-0",
+              prompt: `## Verification: Build, run, and test the application end-to-end
+
+You are the final gatekeeper before this run is marked complete. The steerer believes the objective is done. Your job: prove it or disprove it.
+
+1. Run the build (npm run build, or whatever this project uses). Report ALL errors.
+2. Start the dev server. If a port is taken, try another. If a dependency is missing, install it.
+3. Navigate key flows as a real user would. Check that the main features work.
+4. Write your findings to .claude-overnight/latest/verifications/final-verify.md
+
+Be relentless. Do not give up if the first approach fails. Search the codebase for dev login routes, test tokens, seed users, env vars, CLI auth commands, or any bypass.`,
+              noWorktree: true,
+              model: plannerModel,
+            } as any];
+            lastWaveKind = "verification";
+            overheadBudgetUsed += 1;
+            break;
           }
           objectiveComplete = true;
           remaining = 0;
@@ -1388,15 +1412,40 @@ async function main() {
 
         if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
         if (steer.goalUpdate) writeGoalUpdate(runDir, steer.goalUpdate);
+        // Persist steering reasoning for debugging
+        const steerDir = join(runDir, "steering");
+        mkdirSync(steerDir, { recursive: true });
+        writeFileSync(join(steerDir, `wave-${waveNum}-attempt-${steerAttempts}.json`), JSON.stringify({
+          done: steer.done, waveKind: steer.waveKind, reasoning: steer.reasoning,
+          taskCount: steer.tasks.length, statusUpdate: steer.statusUpdate, goalUpdate: steer.goalUpdate,
+        }, null, 2), "utf-8");
         const execWaves = waveHistory.filter(w => w.kind === "execute").length;
         if (execWaves > 0 && execWaves % 5 === 0) archiveMilestone(runDir, waveNum);
 
         if (steer.done || steer.tasks.length === 0) {
           const hasVerification = waveHistory.some(w => w.kind.includes("verif"));
           if (!hasVerification && remaining >= 1) {
-            display.updateText(`Done blocked \u2014 verification required`);
-            lastWaveKind = "done-blocked";
-            continue;
+            // Auto-compose a verification wave instead of retrying steering
+            display.updateText(`Done blocked — auto-composing verification wave`);
+            currentTasks = [{
+              id: "verify-0",
+              prompt: `## Verification: Build, run, and test the application end-to-end
+
+You are the final gatekeeper before this run is marked complete. The steerer believes the objective is done. Your job: prove it or disprove it.
+
+1. Run the build (npm run build, or whatever this project uses). Report ALL errors.
+2. Start the dev server. If a port is taken, try another. If a dependency is missing, install it.
+3. Navigate key flows as a real user would. Check that the main features work.
+4. Write your findings to .claude-overnight/latest/verifications/final-verify.md
+
+Be relentless. Do not give up if the first approach fails. Search the codebase for dev login routes, test tokens, seed users, env vars, CLI auth commands, or any bypass.`,
+              noWorktree: true,
+              model: plannerModel,
+            } as any];
+            lastWaveKind = "verification";
+            overheadBudgetUsed += 1;
+            steered = true;
+            break;
           }
           objectiveComplete = true;
           remaining = 0;
@@ -1439,7 +1488,8 @@ async function main() {
 
   // Only truly "done" if steering explicitly completed the objective (or non-flex single wave with budget exhausted)
   const trulyDone = objectiveComplete || (!flex && remaining <= 0);
-  const finalPhase = trulyDone ? "done" : steeringFailed ? "steering" : "capped";
+  const wasCapped = lastCapped || lastAborted;
+  const finalPhase = trulyDone ? "done" : steeringFailed ? "steering" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
   saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
@@ -1475,15 +1525,21 @@ async function main() {
     console.log(chalk.bold.green(`  CLAUDE OVERNIGHT — COMPLETE`));
   } else if (steeringFailed) {
     console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — STEERING FAILED`));
-  } else {
+  } else if (remaining <= 0) {
     console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — BUDGET EXHAUSTED`));
+  } else if (lastCapped) {
+    console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — RATE LIMITED`));
+  } else if (stopping || lastAborted) {
+    console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — INTERRUPTED`));
+  } else {
+    console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — STOPPED`));
   }
   console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
   console.log("");
 
   // Stats grid
   const statRows = [
-    [chalk.bold("Waves"), String(waves), chalk.bold("Sessions"), `${accCompleted} done${accFailed > 0 ? ` / ${accFailed} failed` : ""}`],
+    [chalk.bold("Waves"), String(waves), chalk.bold("Sessions"), `${accCompleted} done${accFailed > 0 ? ` / ${accFailed} failed` : ""}${remaining > 0 ? ` (${remaining} remaining)` : ""}`],
     [chalk.bold("Cost"), chalk.green(`$${accCost.toFixed(2)}`), chalk.bold("Elapsed"), elapsedStr],
     [chalk.bold("Merged"), `${totalMerged} branches`, chalk.bold("Conflicts"), totalConflicts > 0 ? chalk.red(String(totalConflicts)) : chalk.green("0")],
     [chalk.bold("Tokens"), `${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out`, chalk.bold("Tool calls"), String(accTools)],
