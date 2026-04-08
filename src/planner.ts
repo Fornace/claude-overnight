@@ -56,12 +56,57 @@ Consistency is what makes complex things feel simple. One design system, rigid r
 const NUDGE_MS = 15 * 60 * 1000;   // 15 min — close & restart with "continue"
 const HARD_TIMEOUT_MS = 30 * 60 * 1000; // 30 min — give up
 
+// ── JSON schemas for structured output ──
+
+const TASKS_SCHEMA = {
+  type: "json_schema" as const,
+  schema: {
+    type: "object",
+    properties: { tasks: { type: "array", items: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] } } },
+    required: ["tasks"],
+  },
+};
+
+const THEMES_SCHEMA = {
+  type: "json_schema" as const,
+  schema: {
+    type: "object",
+    properties: { themes: { type: "array", items: { type: "string" } } },
+    required: ["themes"],
+  },
+};
+
+const STEER_SCHEMA = {
+  type: "json_schema" as const,
+  schema: {
+    type: "object",
+    properties: {
+      done: { type: "boolean" },
+      waveKind: { type: "string" },
+      reasoning: { type: "string" },
+      statusUpdate: { type: "string" },
+      goalUpdate: { type: "string" },
+      tasks: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { prompt: { type: "string" }, model: { type: "string" }, noWorktree: { type: "boolean" } },
+          required: ["prompt"],
+        },
+      },
+    },
+    required: ["done", "tasks"],
+  },
+};
+
 interface PlannerOpts {
   cwd: string;
   model: string;
   permissionMode: PermMode;
   /** Resume a previous session instead of starting fresh. */
   resumeSessionId?: string;
+  /** When set, the SDK enforces JSON schema on the final response and retries internally. */
+  outputFormat?: { type: "json_schema"; schema: Record<string, unknown> };
 }
 
 // ── Model tier detection ──
@@ -282,6 +327,7 @@ async function runPlannerQueryOnce(
 ): Promise<string> {
   _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0 };
   let resultText = "";
+  let structuredOutput: unknown;
   const startedAt = Date.now();
   const isResume = !!opts.resumeSessionId;
   const pq = query({
@@ -296,6 +342,7 @@ async function runPlannerQueryOnce(
       persistSession: true, // needed for interrupt+resume
       includePartialMessages: true,
       ...(isResume && { resume: opts.resumeSessionId }),
+      ...(opts.outputFormat && { outputFormat: opts.outputFormat }),
     },
   });
 
@@ -385,7 +432,10 @@ async function runPlannerQueryOnce(
           _plannerRateLimitInfo.costUsd += costUsd;
           _totalPlannerCostUsd += costUsd;
         }
-        if (msg.subtype === "success") resultText = r.result || "";
+        if (msg.subtype === "success") {
+          structuredOutput = r.structured_output;
+          resultText = r.result || "";
+        }
         else throw new Error(`Planner failed: ${r.result || msg.subtype}`);
       }
     }
@@ -394,6 +444,10 @@ async function runPlannerQueryOnce(
   try { await Promise.race([consume(), watchdog]); }
   finally { clearTimeout(timer!); clearInterval(ticker); }
 
+  // Prefer SDK-validated structured output — guaranteed to match the schema
+  if (structuredOutput != null && typeof structuredOutput === "object") {
+    return JSON.stringify(structuredOutput);
+  }
   return resultText;
 }
 
@@ -471,7 +525,7 @@ export async function planTasks(
   const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
   const resultText = await runPlannerQuery(
     prompt + fileInstruction,
-    { cwd, model: plannerModel, permissionMode },
+    { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA },
     onLog,
   );
 
@@ -479,7 +533,7 @@ export async function planTasks(
     onLog("Retrying...");
     return runPlannerQuery(
       `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-      { cwd, model: plannerModel, permissionMode },
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA },
       onLog,
     );
   }, onLog, outFile);
@@ -507,7 +561,7 @@ export async function identifyThemes(
 ): Promise<string[]> {
   const resultText = await runPlannerQuery(
     `Split this objective into exactly ${count} independent research angles for architects exploring a codebase. Each angle should cover a distinct aspect.\n\nObjective: ${objective}\n\nReturn ONLY a JSON object: {"themes": ["angle description", ...]}`,
-    { cwd: process.cwd(), model, permissionMode },
+    { cwd: process.cwd(), model, permissionMode, outputFormat: THEMES_SCHEMA },
     onLog,
   );
 
@@ -600,13 +654,13 @@ Respond with ONLY a JSON object (no markdown fences):
 {"tasks": [{"prompt": "..."}]}${fileInstruction}`;
 
   onLog("Synthesizing...");
-  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog);
 
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
     return runPlannerQuery(
       `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-      { cwd, model: plannerModel, permissionMode },
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA },
       onLog,
     );
   }, onLog, outFile);
@@ -660,13 +714,13 @@ ${scaleNote} ${concurrency} agents run in parallel. Update the plan accordingly.
 Respond with ONLY a JSON object (no markdown):
 {"tasks":[{"prompt":"..."}]}`;
 
-  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog);
 
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
     return runPlannerQuery(
       `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-      { cwd, model: plannerModel, permissionMode },
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA },
       onLog,
     );
   }, onLog);
@@ -862,22 +916,25 @@ Set "noWorktree": true for verify/user-test tasks — they run in the real proje
 If done: {"done": true, "waveKind": "done", "reasoning": "...", "statusUpdate": "...", "tasks": []}`;
 
   onLog("Assessing...");
-  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode }, onLog);
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA }, onLog);
 
   const parsed = await (async () => {
     const first = attemptJsonParse(resultText);
     if (first) return first;
-    onLog("Retrying...");
+    // Log what failed so we can debug
+    onLog(`Steering parse failed (${resultText.length} chars). Asking model to fix...`);
+    // Send the broken response back so the model can fix its own output
+    const snippet = resultText.length > 2000 ? resultText.slice(0, 1000) + "\n...\n" + resultText.slice(-800) : resultText;
     const retryText = await runPlannerQuery(
-      `Your previous response was not valid JSON. Respond with ONLY a JSON object {"done":false,"waveKind":"execute","reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-      { cwd, model: plannerModel, permissionMode },
+      `Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"waveKind":"execute"|"done","reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`,
+      { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA },
       onLog,
     );
     const retryParsed = attemptJsonParse(retryText);
     if (retryParsed) return retryParsed;
     // Don't return done:true on parse failure — that permanently marks the run complete.
     // Throw so the caller's catch block handles it as a transient steering failure.
-    throw new Error("Could not parse steering response after retry");
+    throw new Error(`Could not parse steering response after retry (${resultText.length} chars: ${resultText.slice(0, 120)}...)`);
   })();
 
   const isDone = parsed.done === true;

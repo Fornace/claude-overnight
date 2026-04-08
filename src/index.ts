@@ -1227,6 +1227,7 @@ async function main() {
 
   // Graceful drain
   let stopping = false;
+  let steeringFailed = false;
   const gracefulStop = (signal: string) => {
     if (stopping) { currentSwarm?.cleanup(); display.stop(); restore(); process.exit(0); }
     stopping = true;
@@ -1420,8 +1421,13 @@ async function main() {
       } catch (err: any) {
         const steerCost = getTotalPlannerCost() - plannerCostBefore;
         accCost += steerCost;
+        if (steerAttempts < 3) {
+          display.updateText(`Steering failed (attempt ${steerAttempts}/3) — retrying...`);
+          continue;
+        }
         display.stop();
-        console.log(chalk.yellow(`  Steering failed: ${err.message?.slice(0, 80)} \u2014 stopping\n`));
+        console.log(chalk.yellow(`  Steering failed after ${steerAttempts} attempts: ${err.message?.slice(0, 80)} — stopping\n`));
+        steeringFailed = true;
         break;
       }
     }
@@ -1433,7 +1439,7 @@ async function main() {
 
   // Only truly "done" if steering explicitly completed the objective (or non-flex single wave with budget exhausted)
   const trulyDone = objectiveComplete || (!flex && remaining <= 0);
-  const finalPhase = trulyDone ? "done" : "capped";
+  const finalPhase = trulyDone ? "done" : steeringFailed ? "steering" : "capped";
   saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: budget ?? tasks.length,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
@@ -1467,6 +1473,8 @@ async function main() {
   console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
   if (trulyDone) {
     console.log(chalk.bold.green(`  CLAUDE OVERNIGHT — COMPLETE`));
+  } else if (steeringFailed) {
+    console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — STEERING FAILED`));
   } else {
     console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — BUDGET EXHAUSTED`));
   }
