@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.8.2
+
+### Structured output schemas + steering retry
+
+Steering parse failures silently killed runs. The retry logic existed but was dead code, and failed steers showed a misleading "BUDGET EXHAUSTED" banner.
+
+- **SDK-enforced JSON schemas.** All planner calls (tasks, themes, steering) use `outputFormat` with JSON schemas so the SDK validates and retries internally before manual fallbacks fire.
+- **Steering retry actually works.** Up to 3 retries, broken response sent back to the model for self-repair.
+- **Honest failure banner.** Steering failures now show "STEERING FAILED" instead of "BUDGET EXHAUSTED."
+- **File size guardrail.** Agents are instructed to keep files under ~500 lines.
+
+## 1.8.1
+
+### Completion screen
+
+The end-of-run output was a cramped box that buried useful info. Replaced with a full-width completion screen.
+
+- **Banner.** Green `COMPLETE` or yellow `BUDGET EXHAUSTED` header scaled to terminal width.
+- **Stats grid.** Two-column layout: waves, sessions, cost, elapsed, merged branches, conflicts, tokens, tool calls — all scannable at a glance.
+- **Status summary.** If the planner wrote a `status.md`, its content is displayed inline so you see the product-level assessment without opening files.
+
 ## 1.8.0
 
 ### Verification agents that actually verify
