@@ -1,5 +1,5 @@
 import type { Task, PermMode } from "./types.js";
-import { runPlannerQuery, extractTaskJson, postProcess, detectModelTier, modelCapabilityBlock } from "./planner-query.js";
+import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess, detectModelTier, modelCapabilityBlock } from "./planner-query.js";
 
 // The core framing for all planning. Not a checklist — a way of thinking.
 export const DESIGN_THINKING = `
@@ -191,14 +191,14 @@ export async function planTasks(
 }
 
 export async function identifyThemes(
-  objective: string, count: number, model: string, permissionMode: PermMode,
+  objective: string, count: number, cwd: string, model: string, permissionMode: PermMode,
   onLog: (text: string) => void = () => {},
 ): Promise<string[]> {
   const resultText = await runPlannerQuery(
     `Split this objective into exactly ${count} independent research angles for architects exploring a codebase. Each angle should cover a distinct aspect.\n\nObjective: ${objective}\n\nReturn ONLY a JSON object: {"themes": ["angle description", ...]}`,
-    { cwd: process.cwd(), model, permissionMode, outputFormat: THEMES_SCHEMA }, onLog,
+    { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA }, onLog,
   );
-  const parsed = (await import("./planner-query.js")).attemptJsonParse(resultText);
+  const parsed = attemptJsonParse(resultText);
   if (parsed?.themes && Array.isArray(parsed.themes)) return parsed.themes.slice(0, count);
   const fallback = ["architecture, patterns, and conventions", "data models, state, and persistence", "user-facing flows, components, and UX", "APIs, integrations, and services", "testing, quality, and error handling", "security, performance, and infrastructure", "build, deployment, and configuration", "documentation and developer experience"];
   return Array.from({ length: count }, (_, i) => fallback[i % fallback.length]);

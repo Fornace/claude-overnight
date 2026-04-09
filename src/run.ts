@@ -73,7 +73,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
 
   if (cfg.resuming && cfg.resumeState) {
     const rs = cfg.resumeState;
-    remaining = Math.max(1, (rs.budget ?? 0) - rs.accCompleted);
+    remaining = Math.max(1, rs.remaining);
     currentTasks = rs.currentTasks;
     waveNum = rs.waveNum;
     accCost = rs.accCost; accCompleted = rs.accCompleted; accFailed = rs.accFailed;
@@ -236,7 +236,8 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     accCompleted += swarm.completed; accFailed += swarm.failed;
     accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
     remaining = Math.max(0, remaining - swarm.completed - swarm.failed);
-    const expectedFloor = Math.max(0, cfg.budget - accCompleted - accFailed);
+    const totalConsumed = accCompleted + accFailed + cfg.thinkingUsed;
+    const expectedFloor = Math.max(0, cfg.budget - totalConsumed);
     if (remaining < expectedFloor) remaining = expectedFloor;
     if (liveConfig.dirty) { remaining = liveConfig.remaining; usageCap = liveConfig.usageCap; liveConfig.dirty = false; }
     liveConfig.remaining = remaining;

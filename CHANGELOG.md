@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.9.1
+
+### Crash fix + budget accounting
+
+A resumed run crashed with `require is not defined` right after merging unmerged branches. Turned out `isGitRepo` was using a CommonJS `require("child_process")` inside an ESM package, and `validateGitRepo` hit that path on every resume with worktrees enabled.
+
+- **ESM require crash.** `src/cli.ts` now imports `execSync` statically at the top instead of `require`-ing it inside `isGitRepo`.
+- **Resume remaining ignored failed sessions.** The resume path computed `budget - accCompleted` and ignored `accFailed`, so every failed session in the original run handed back an extra session on resume. Now uses the saved `remaining` directly.
+- **Floor check refunded thinking sessions.** The per-wave floor `budget - accCompleted - accFailed` didn't know about thinking sessions, so the first wave after thinking always inflated `remaining` by `thinkingUsed`. Floor now subtracts `thinkingUsed` too.
+- **`identifyThemes` ran in the wrong directory.** It hardcoded `process.cwd()` instead of the project cwd, so theme analysis ran in whatever directory the CLI was launched from — wrong when a task file specified a different `cwd`. Now takes `cwd` as a parameter.
+- **Dynamic import removed.** `identifyThemes` was doing `(await import("./planner-query.js")).attemptJsonParse(...)` for a module already statically imported. Replaced with a normal import.
+- **`formatTimeAgo` NaN guard.** A run state missing `startedAt` would render "NaNd ago" in the resume box; now returns "unknown".
+
 ## 1.8.4
 
 ### Done-blocked fix, steering diagnostics, accurate exit messages

@@ -339,7 +339,7 @@ async function main() {
 
     try {
       if (useThinking) {
-        let themes = await identifyThemes(objective!, thinkingCount, plannerModel, permissionMode, makeProgressLog());
+        let themes = await identifyThemes(objective!, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog());
         process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`);
         planRestore();
         let reviewing = true;
@@ -352,7 +352,7 @@ async function main() {
             const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
             if (!feedback) continue;
             process.stdout.write("\x1B[?25l");
-            try { themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, plannerModel, permissionMode, makeProgressLog()); process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`); }
+            try { themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog()); process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`); }
             catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
             planRestore();
           } else { console.log(chalk.dim("\n  Aborted.\n")); process.exit(0); }

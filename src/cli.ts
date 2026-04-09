@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { createInterface } from "readline";
@@ -227,7 +228,6 @@ export function validateConcurrency(value: unknown): asserts value is number {
 }
 
 export function isGitRepo(cwd: string): boolean {
-  const { execSync } = require("child_process");
   try { execSync("git rev-parse --git-dir", { cwd, encoding: "utf-8", stdio: "pipe" }); return true; } catch { return false; }
 }
 
