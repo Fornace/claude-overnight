@@ -126,6 +126,32 @@ export class NudgeError extends Error {
   }
 }
 
+/** Summary of one completed wave, used by steering to decide next actions. */
+export interface WaveSummary {
+  wave: number;
+  tasks: { prompt: string; status: string; filesChanged?: number; error?: string }[];
+}
+
+/** Result from the steering function. */
+export interface SteerResult {
+  done: boolean;
+  tasks: Task[];
+  reasoning: string;
+  goalUpdate?: string;
+  statusUpdate?: string;
+}
+
+/** Accumulated run memory — designs, verifications, etc. — fed to the steerer. */
+export interface RunMemory {
+  designs: string;
+  reflections: string;
+  verifications: string;
+  milestones: string;
+  status: string;
+  goal: string;
+  previousRuns?: string;
+}
+
 /** Persisted run state for crash recovery and resume. */
 export interface RunState {
   id: string;
@@ -144,8 +170,6 @@ export interface RunState {
   mergeStrategy: MergeStrategy;
   waveNum: number;
   currentTasks: Task[];
-  lastWaveKind: string;
-  overheadBudgetUsed: number;
   accCost: number;
   accCompleted: number;
   accFailed: number;

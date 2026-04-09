@@ -1,0 +1,268 @@
+import { readFileSync } from "fs";
+import { resolve } from "path";
+import { createInterface } from "readline";
+import chalk from "chalk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
+import type { Task, PermMode, MergeStrategy } from "./types.js";
+
+// ── CLI flag parsing ──
+
+export function parseCliFlags(argv: string[]) {
+  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget"]);
+  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex", "--allow-extra-usage"]);
+  const flags: Record<string, string> = {};
+  const positional: string[] = [];
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (booleans.has(arg)) continue;
+    const eq = arg.match(/^--(\w[\w-]*)=(.+)$/);
+    if (eq && known.has(eq[1])) { flags[eq[1]] = eq[2]; continue; }
+    const bare = arg.match(/^--(\w[\w-]*)$/);
+    if (bare && known.has(bare[1]) && i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+      flags[bare[1]] = argv[++i]; continue;
+    }
+    if (!arg.startsWith("--")) positional.push(arg);
+  }
+  return { flags, positional };
+}
+
+// ── Auth error detection ──
+
+const AUTH_PATTERNS = ["unauthorized", "forbidden", "invalid_api_key", "authentication"];
+
+export function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return AUTH_PATTERNS.some((p) => msg.toLowerCase().includes(p));
+}
+
+// ── Fetch models via SDK ──
+
+export async function fetchModels(timeoutMs = 10_000): Promise<ModelInfo[]> {
+  let q: ReturnType<typeof query> | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    q = query({ prompt: "", options: { persistSession: false } });
+    const models = await Promise.race([
+      q.supportedModels(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("model_fetch_timeout")), timeoutMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    q.close();
+    return models;
+  } catch (err: any) {
+    clearTimeout(timer);
+    q?.close();
+    if (err.message === "model_fetch_timeout") {
+      console.warn(chalk.yellow("\n  Model fetch timed out — continuing with defaults"));
+    } else if (isAuthError(err)) {
+      console.error(chalk.red("\n  Authentication failed — check your API key or run: claude auth\n"));
+      process.exit(1);
+    } else {
+      console.warn(chalk.yellow(`\n  Could not fetch models: ${String(err.message || err).slice(0, 80)} — continuing with defaults`));
+    }
+    return [];
+  }
+}
+
+// ── Interactive primitives ──
+
+export function ask(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((res) => {
+    rl.question(question, (answer) => { rl.close(); res(answer.trim()); });
+  });
+}
+
+export async function select<T>(label: string, items: { name: string; value: T; hint?: string }[], defaultIdx = 0): Promise<T> {
+  const { stdin, stdout } = process;
+  let idx = defaultIdx;
+
+  const draw = (first = false) => {
+    if (!first) stdout.write(`\x1B[${items.length}A`);
+    for (let i = 0; i < items.length; i++) {
+      const sel = i === idx;
+      const radio = sel ? chalk.cyan("  ● ") : chalk.dim("  ○ ");
+      const name = sel ? chalk.white(items[i].name) : chalk.dim(items[i].name);
+      const hint = items[i].hint ? chalk.dim(` · ${items[i].hint}`) : "";
+      stdout.write(`\x1B[2K${radio}${name}${hint}\n`);
+    }
+  };
+
+  stdout.write(`\n  ${chalk.bold(label)}\n`);
+  draw(true);
+
+  return new Promise((resolve) => {
+    stdin.setRawMode!(true);
+    stdin.resume();
+    const done = (val: T) => {
+      stdin.setRawMode!(false);
+      stdin.removeListener("data", handler);
+      stdin.pause();
+      resolve(val);
+    };
+    const handler = (buf: Buffer) => {
+      const s = buf.toString();
+      if (s === "\x1B[A") { idx = (idx - 1 + items.length) % items.length; draw(); }
+      else if (s === "\x1B[B") { idx = (idx + 1) % items.length; draw(); }
+      else if (s === "\r") done(items[idx].value);
+      else if (s === "\x03") { stdin.setRawMode!(false); process.exit(0); }
+      else if (/^[1-9]$/.test(s)) {
+        const n = parseInt(s) - 1;
+        if (n < items.length) { idx = n; draw(); done(items[idx].value); }
+      }
+    };
+    stdin.on("data", handler);
+  });
+}
+
+export async function selectKey(label: string, options: { key: string; desc: string }[]): Promise<string> {
+  const { stdin, stdout } = process;
+  const keys = options.map((o) => o.key.toLowerCase());
+  const optStr = options.map((o) => `${chalk.cyan.bold(o.key.toUpperCase())}${chalk.dim(o.desc)}`).join(chalk.dim("  │  "));
+  stdout.write(`\n  ${label}\n  ${optStr}\n  `);
+
+  return new Promise((resolve) => {
+    stdin.setRawMode!(true);
+    stdin.resume();
+    const handler = (buf: Buffer) => {
+      const s = buf.toString().toLowerCase();
+      if (s === "\x03") { stdin.setRawMode!(false); process.exit(0); }
+      if (s === "\r") { stdin.setRawMode!(false); stdin.removeListener("data", handler); stdin.pause(); resolve(keys[0]); return; }
+      if (keys.includes(s)) { stdin.setRawMode!(false); stdin.removeListener("data", handler); stdin.pause(); resolve(s); }
+    };
+    stdin.on("data", handler);
+  });
+}
+
+// ── Task file loading ──
+
+export interface FileArgs {
+  tasks: Task[];
+  objective?: string;
+  concurrency?: number;
+  model?: string;
+  permissionMode?: PermMode;
+  cwd?: string;
+  allowedTools?: string[];
+  useWorktrees?: boolean;
+  mergeStrategy?: MergeStrategy;
+  usageCap?: number;
+  flexiblePlan?: boolean;
+}
+
+const KNOWN_TASK_FILE_KEYS = new Set([
+  "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
+]);
+
+export function loadTaskFile(file: string): FileArgs {
+  const path = resolve(file);
+  let raw: string;
+  try { raw = readFileSync(path, "utf-8"); } catch { throw new Error(`Cannot read task file: ${path}`); }
+
+  let json: unknown;
+  try { json = JSON.parse(raw); } catch { throw new Error(`Task file is not valid JSON: ${path}`); }
+
+  const parsed: any = Array.isArray(json) ? { tasks: json } : json;
+
+  if (!Array.isArray(json) && typeof json === "object" && json !== null) {
+    const unknown = Object.keys(json).filter((k) => !KNOWN_TASK_FILE_KEYS.has(k));
+    if (unknown.length > 0) {
+      throw new Error(`Unknown key${unknown.length > 1 ? "s" : ""} in task file: ${unknown.join(", ")}. Allowed: ${[...KNOWN_TASK_FILE_KEYS].join(", ")}`);
+    }
+  }
+
+  if (!Array.isArray(parsed.tasks)) throw new Error(`Task file must contain a "tasks" array (got ${typeof parsed.tasks})`);
+
+  const tasks: Task[] = [];
+  for (let i = 0; i < parsed.tasks.length; i++) {
+    const t = parsed.tasks[i];
+    const id = String(tasks.length);
+    if (typeof t === "string") {
+      if (!t.trim()) throw new Error(`Task ${i} is an empty string`);
+      tasks.push({ id, prompt: t });
+    } else if (typeof t === "object" && t !== null) {
+      if (typeof t.prompt !== "string" || !t.prompt.trim()) throw new Error(`Task ${i} is missing a "prompt" string`);
+      tasks.push({ id, prompt: t.prompt, cwd: t.cwd ? resolve(t.cwd) : undefined, model: t.model });
+    } else {
+      throw new Error(`Task ${i} must be a string or object with a "prompt" field (got ${typeof t})`);
+    }
+  }
+
+  if (parsed.concurrency !== undefined) validateConcurrency(parsed.concurrency);
+
+  const usageCap = parsed.usageCap;
+  if (usageCap != null && (typeof usageCap !== "number" || usageCap < 0 || usageCap > 100)) {
+    throw new Error(`usageCap must be a number between 0 and 100 (got ${JSON.stringify(usageCap)})`);
+  }
+
+  if (parsed.flexiblePlan && typeof parsed.objective !== "string") {
+    throw new Error(`flexiblePlan requires an "objective" string in the task file`);
+  }
+
+  return {
+    tasks,
+    objective: typeof parsed.objective === "string" ? parsed.objective : undefined,
+    concurrency: parsed.concurrency,
+    model: parsed.model,
+    cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
+    permissionMode: parsed.permissionMode,
+    allowedTools: parsed.allowedTools,
+    useWorktrees: parsed.worktrees,
+    mergeStrategy: parsed.mergeStrategy,
+    usageCap,
+    flexiblePlan: parsed.flexiblePlan,
+  };
+}
+
+// ── Validation helpers ──
+
+export function validateConcurrency(value: unknown): asserts value is number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error(`Concurrency must be a positive integer (got ${JSON.stringify(value)})`);
+  }
+}
+
+export function isGitRepo(cwd: string): boolean {
+  const { execSync } = require("child_process");
+  try { execSync("git rev-parse --git-dir", { cwd, encoding: "utf-8", stdio: "pipe" }); return true; } catch { return false; }
+}
+
+export function validateGitRepo(cwd: string): void {
+  if (!isGitRepo(cwd)) {
+    throw new Error(
+      `Worktrees require a git repository, but ${cwd} is not inside one.\n` +
+      `  Run: cd ${cwd} && git init\n` +
+      `  Or set "worktrees": false in your task file.`,
+    );
+  }
+}
+
+// ── Display helpers ──
+
+export function showPlan(tasks: Task[]) {
+  const w = Math.max((process.stdout.columns ?? 80) - 6, 40);
+  const ruleLen = Math.min(w, 70);
+  console.log(chalk.dim(`  ─── ${tasks.length} tasks ${"─".repeat(Math.max(0, ruleLen - String(tasks.length).length - 10))}`));
+  for (const t of tasks) {
+    const num = chalk.dim(String(Number(t.id) + 1).padStart(4) + ".");
+    console.log(`${num} ${t.prompt.slice(0, w)}`);
+  }
+  console.log(chalk.dim(`  ${"─".repeat(ruleLen)}\n`));
+}
+
+export const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+export function makeProgressLog(): (text: string) => void {
+  let frame = 0;
+  return (text: string) => {
+    const spin = chalk.cyan(BRAILLE[frame++ % BRAILLE.length]);
+    const maxW = (process.stdout.columns ?? 80) - 6;
+    const clean = text.replace(/\n/g, " ");
+    const line = clean.length > maxW ? clean.slice(0, maxW - 1) + "\u2026" : clean;
+    process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim(line)}`);
+  };
+}
