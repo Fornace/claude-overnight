@@ -5,15 +5,17 @@ import chalk from "chalk";
 import type { Task, PermMode, MergeStrategy, RunState, BranchRecord, WaveSummary, RunMemory } from "./types.js";
 import { Swarm } from "./swarm.js";
 import { steerWave } from "./steering.js";
-import { getTotalPlannerCost, getPlannerRateLimitInfo } from "./planner-query.js";
+import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery } from "./planner-query.js";
 import { RunDisplay } from "./ui.js";
-import type { LiveConfig, RunInfo } from "./ui.js";
+import type { LiveConfig, RunInfo, SteeringContext } from "./ui.js";
+import type { PlannerLog } from "./planner-query.js";
 import { renderSummary } from "./render.js";
 import { fmtTokens } from "./render.js";
 import { isAuthError } from "./cli.js";
 import {
   readRunMemory, writeStatus, writeGoalUpdate, saveRunState,
   saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone,
+  writeSteerInbox, consumeSteerInbox, countSteerInbox,
 } from "./state.js";
 
 export interface RunConfig {
@@ -100,13 +102,74 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     accIn, accOut, accCost, accCompleted, accFailed,
     sessionsBudget: cfg.budget, waveNum, remaining,
     model: workerModel, startedAt: cfg.runStartedAt,
+    pendingSteer: countSteerInbox(runDir),
   };
-  const display = new RunDisplay(runInfoRef, liveConfig);
+  let display!: RunDisplay;
+  const onSteer = (text: string) => {
+    try {
+      writeSteerInbox(runDir, text);
+      runInfoRef.pendingSteer = countSteerInbox(runDir);
+      if (currentSwarm) currentSwarm.log(-1, `Steer queued: ${text.slice(0, 80)}`);
+    } catch {}
+  };
+  let askInFlight = false;
+  const onAsk = (question: string) => {
+    if (askInFlight) return;
+    askInFlight = true;
+    display.setAskBusy(true);
+    display.setAsk({ question, answer: "", streaming: true });
+    void (async () => {
+      const plannerCostBefore = getTotalPlannerCost();
+      try {
+        const memory = readRunMemory(runDir, previousKnowledge || undefined);
+        const cap = (s: string, max: number) => s && s.length > max ? s.slice(0, max) + "\n...(truncated)" : (s || "");
+        const memBlob = [
+          objective ? `Objective: ${objective}` : "",
+          memory.goal ? `Goal:\n${cap(memory.goal, 1500)}` : "",
+          memory.status ? `Current status:\n${cap(memory.status, 2000)}` : "",
+          memory.verifications ? `Latest verification:\n${cap(memory.verifications, 1500)}` : "",
+          memory.reflections ? `Latest reflections:\n${cap(memory.reflections, 1500)}` : "",
+          waveHistory.length ? `Waves completed: ${waveHistory.length}` : "",
+        ].filter(Boolean).join("\n\n");
+        const prompt = `You are answering a user question about an in-progress autonomous agent run. Use the context below; read files in the repo if needed. Answer concisely (a few sentences) and cite files or waves when relevant.\n\n${memBlob}\n\n---\nUser question: ${question}`;
+        const answer = await runPlannerQuery(
+          prompt,
+          { cwd, model: plannerModel, permissionMode },
+          () => { /* swallow ticker — don't clobber main status */ },
+        );
+        accCost += getTotalPlannerCost() - plannerCostBefore;
+        syncRunInfo();
+        display.setAsk({ question, answer: answer.trim() || "(no answer)", streaming: false });
+      } catch (err: any) {
+        accCost += getTotalPlannerCost() - plannerCostBefore;
+        syncRunInfo();
+        display.setAsk({ question, answer: "", streaming: false, error: err?.message?.slice(0, 200) || "ask failed" });
+      } finally {
+        askInFlight = false;
+        display.setAskBusy(false);
+      }
+    })();
+  };
+  display = new RunDisplay(runInfoRef, liveConfig, { onSteer, onAsk });
   const rlGetter = () => {
     const rl = getPlannerRateLimitInfo();
     return { utilization: rl.utilization, isUsingOverage: rl.isUsingOverage, windows: rl.windows, resetsAt: rl.resetsAt };
   };
   const syncRunInfo = () => Object.assign(runInfoRef, { accIn, accOut, accCost, accCompleted, accFailed, waveNum, remaining });
+
+  const buildSteeringContext = (): SteeringContext => {
+    let status: string | undefined;
+    try { status = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
+    return {
+      objective: objective || undefined,
+      status,
+      lastWave: waveHistory[waveHistory.length - 1],
+    };
+  };
+  const steeringLog: PlannerLog = (text, kind) => {
+    if (kind === "event") display.appendSteeringEvent(text);
+    else display.updateSteeringStatus(text);
+  };
 
   // For flex + branch strategy: create one target branch
   let runBranch: string | undefined;
@@ -144,9 +207,11 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       const plannerCostBefore = getTotalPlannerCost();
       try {
         const memory = readRunMemory(runDir, previousKnowledge || undefined);
+        const appliedGuidance = memory.userGuidance;
+        if (appliedGuidance) display.appendSteeringEvent(`User directives applied: ${appliedGuidance.slice(0, 80)}`);
         const steer = await steerWave(
           objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
-          permissionMode, concurrency, (text) => display.updateText(text), memory,
+          permissionMode, concurrency, steeringLog, memory,
         );
         accCost += getTotalPlannerCost() - plannerCostBefore;
         syncRunInfo();
@@ -158,13 +223,18 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         writeFileSync(join(steerDir, `wave-${waveNum}-attempt-${steerAttempts}.json`), JSON.stringify({
           done: steer.done, reasoning: steer.reasoning,
           taskCount: steer.tasks.length, statusUpdate: steer.statusUpdate, goalUpdate: steer.goalUpdate,
+          appliedGuidance: appliedGuidance || undefined,
         }, null, 2), "utf-8");
+        if (appliedGuidance) {
+          consumeSteerInbox(runDir, waveNum);
+          runInfoRef.pendingSteer = countSteerInbox(runDir);
+        }
         if (waveHistory.length > 0 && waveHistory.length % 5 === 0) archiveMilestone(runDir, waveNum);
 
         if (steer.done || steer.tasks.length === 0) {
           const hasVerification = waveHistory.some(w => w.tasks.some(t => t.prompt.toLowerCase().includes("verif")));
           if (!hasVerification && remaining >= 1) {
-            display.updateText(`Done blocked — auto-composing verification wave`);
+            display.appendSteeringEvent("Done blocked — auto-composing verification wave");
             currentTasks = [{
               id: "verify-0",
               prompt: `## Verification: Build, run, and test the application end-to-end\n\nYou are the final gatekeeper before this run is marked complete. The steerer believes the objective is done. Your job: prove it or disprove it.\n\n1. Run the build (npm run build, or whatever this project uses). Report ALL errors.\n2. Start the dev server. If a port is taken, try another. If a dependency is missing, install it.\n3. Navigate key flows as a real user would. Check that the main features work.\n4. Write your findings to .claude-overnight/latest/verifications/final-verify.md\n\nBe relentless. Do not give up if the first approach fails. Search the codebase for dev login routes, test tokens, seed users, env vars, CLI auth commands, or any bypass.`,
@@ -186,7 +256,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       } catch (err: any) {
         accCost += getTotalPlannerCost() - plannerCostBefore;
         if (steerAttempts < 3) {
-          display.updateText(`Steering failed (attempt ${steerAttempts}/3) — retrying...`);
+          display.appendSteeringEvent(`Steering failed (attempt ${steerAttempts}/3) — retrying...`);
           continue;
         }
         display.stop();
@@ -200,7 +270,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
 
   // Resume: steer immediately if no queued tasks
   if (cfg.resuming && flex && currentTasks.length === 0 && remaining > 0) {
-    display.setSteering(rlGetter);
+    display.setSteering(rlGetter, buildSteeringContext());
     display.start();
     await runSteering();
   }
@@ -261,7 +331,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
 
     syncRunInfo();
-    display.setSteering(rlGetter);
+    display.setSteering(rlGetter, buildSteeringContext());
     display.resume();
     const steered = await runSteering();
     if (!steered) break;

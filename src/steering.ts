@@ -1,5 +1,5 @@
 import type { Task, PermMode, SteerResult, RunMemory, WaveSummary } from "./types.js";
-import { runPlannerQuery, attemptJsonParse, postProcess, modelCapabilityBlock } from "./planner-query.js";
+import { runPlannerQuery, attemptJsonParse, postProcess, modelCapabilityBlock, type PlannerLog } from "./planner-query.js";
 import { DESIGN_THINKING } from "./planner.js";
 
 const STEER_SCHEMA = {
@@ -33,7 +33,7 @@ export async function steerWave(
   workerModel: string,
   permissionMode: PermMode,
   concurrency: number,
-  onLog: (text: string) => void,
+  onLog: PlannerLog,
   runMemory?: RunMemory,
 ): Promise<SteerResult> {
   const capability = modelCapabilityBlock(workerModel);
@@ -56,9 +56,10 @@ export async function steerWave(
   const verificationBlock = runMemory?.verifications ? `\nVerification results (from actually running the app):\n${cap(runMemory.verifications, 3000)}\n` : "";
   const goalBlock = runMemory?.goal ? `\nNorth star — what "amazing" means:\n${runMemory.goal}\n` : "";
   const prevRunBlock = runMemory?.previousRuns ? `\nKnowledge from previous runs:\n${cap(runMemory.previousRuns, 3000)}\n` : "";
+  const guidanceBlock = runMemory?.userGuidance ? `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nUSER DIRECTIVES — highest priority\nThese come directly from the user running this session. They override prior assumptions about status, goal, and next steps. Incorporate them into the wave you compose below. If they conflict with earlier decisions, the user wins. Reflect the new direction in statusUpdate so future waves remember.\n\n${cap(runMemory.userGuidance, 4000)}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` : "";
 
   const prompt = `You are the quality director for an autonomous multi-wave agent system. Your job is to push the work toward "amazing," not just "done."
-
+${guidanceBlock}
 Objective: ${objective}
 ${goalBlock}${statusBlock}${milestoneBlock}${prevRunBlock}
 Recent waves:
@@ -122,13 +123,14 @@ Set "noWorktree": true for verify/user-test tasks — they need the real project
 
 If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "tasks": []}`;
 
-  onLog("Assessing...");
+  onLog("Assessing...", "status");
+  onLog(`Reading codebase — wave ${history.length + 1}`, "event");
   const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA }, onLog);
 
   const parsed = await (async () => {
     const first = attemptJsonParse(resultText);
     if (first) return first;
-    onLog(`Steering parse failed (${resultText.length} chars). Asking model to fix...`);
+    onLog(`Steering parse failed (${resultText.length} chars). Asking model to fix...`, "event");
     const snippet = resultText.length > 2000 ? resultText.slice(0, 1000) + "\n...\n" + resultText.slice(-800) : resultText;
     const retryText = await runPlannerQuery(
       `Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`,

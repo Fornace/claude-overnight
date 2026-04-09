@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
-import type { AgentState, RateLimitWindow } from "./types.js";
-import type { RunInfo } from "./ui.js";
+import type { AgentState, RateLimitWindow, WaveSummary } from "./types.js";
+import type { RunInfo, SteeringContext, SteeringEvent } from "./ui.js";
 
 const SPINNER = ["|", "/", "-", "\\"] as const;
 const WINDOW_SHORT_NAMES: Record<string, string> = {
@@ -203,12 +203,94 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     out.push(chalk.gray(`  ${t} `) + tag + ` ${colorEvent(truncate(entry.text, w - 22))}`);
   }
 
-  if (showHotkeys) out.push(chalk.dim("  [b] budget  [t] threshold  [q] stop"));
+  if (showHotkeys) {
+    const pending = runInfo?.pendingSteer ?? 0;
+    const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
+    out.push(chalk.dim("  [b] budget  [t] threshold  [s] steer  [?] ask  [q] stop") + chip);
+  }
   out.push("");
   return out.join("\n");
 }
 
-export function renderSteeringFrame(runInfo: RunInfo, steeringText: string, showHotkeys: boolean, rlGetter?: RLGetter): string {
+export interface SteeringViewData {
+  /** The ephemeral ticker heartbeat — elapsed, tool count, cost, current reasoning snippet. */
+  statusLine: string;
+  /** Persistent scrollback of discrete events (tool uses, retries, nudges). */
+  events: SteeringEvent[];
+  /** Optional context read from disk at setSteering() time. */
+  context?: SteeringContext;
+}
+
+function section(out: string[], w: number, title: string): void {
+  const inner = ` ${title} `;
+  const dashW = Math.max(3, Math.min(w - 6, 96) - inner.length);
+  out.push(chalk.gray("  \u2500\u2500\u2500" + inner + "\u2500".repeat(dashW)));
+}
+
+function renderSteeringUsageBar(out: string[], w: number, rl: { utilization: number; isUsingOverage: boolean; windows: Map<string, RateLimitWindow>; resetsAt?: number }): void {
+  const rlBarW = Math.min(30, w - 40);
+  const draw = (pct: number, label?: string) => {
+    let barStr = "";
+    const f = Math.round(pct * rlBarW);
+    for (let i = 0; i < rlBarW; i++) {
+      if (i < f) barStr += pct > 0.9 ? chalk.red("\u2588") : pct > 0.75 ? chalk.yellow("\u2588") : chalk.blue("\u2588");
+      else barStr += chalk.gray("\u2591");
+    }
+    let lbl = `${Math.round(pct * 100)}% used`;
+    if (rl.isUsingOverage) lbl += chalk.red(" [EXTRA USAGE]");
+    if (rl.resetsAt && rl.resetsAt > Date.now()) {
+      const waitSec = Math.ceil((rl.resetsAt - Date.now()) / 1000);
+      const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
+      lbl = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
+    }
+    const prefix = label ? chalk.dim(label.padEnd(6)) : chalk.dim("Usage ");
+    out.push(`  ${prefix}${barStr}  ${lbl}`);
+  };
+  if (rl.windows.size > 1) {
+    const wins = Array.from(rl.windows.values());
+    const idx = Math.floor(Date.now() / 3000) % wins.length;
+    draw(wins[idx].utilization, wins[idx].type.replace(/_/g, " ").slice(0, 5));
+  } else {
+    draw(rl.utilization);
+  }
+}
+
+function renderLastWave(out: string[], w: number, lw: WaveSummary): void {
+  section(out, w, `Wave ${lw.wave + 1} summary`);
+  const done = lw.tasks.filter(t => t.status === "done").length;
+  const failed = lw.tasks.filter(t => t.status === "error").length;
+  const running = lw.tasks.filter(t => t.status === "running").length;
+  const parts: string[] = [];
+  if (done > 0) parts.push(chalk.green(`\u2713 ${done} done`));
+  if (failed > 0) parts.push(chalk.red(`\u2717 ${failed} failed`));
+  if (running > 0) parts.push(chalk.blue(`~ ${running} running`));
+  if (parts.length === 0) parts.push(chalk.dim("(no tasks)"));
+  out.push("  " + parts.join("  "));
+  const show = lw.tasks.slice(0, 5);
+  for (const t of show) {
+    const icon = t.status === "done" ? chalk.green("\u2713")
+      : t.status === "error" ? chalk.red("\u2717")
+      : t.status === "running" ? chalk.blue("~")
+      : chalk.gray("\u00b7");
+    const line = t.prompt.replace(/\n/g, " ");
+    out.push(`    ${icon} ${chalk.dim(truncate(line, w - 8))}`);
+  }
+  if (lw.tasks.length > 5) out.push(chalk.dim(`    \u2026 + ${lw.tasks.length - 5} more`));
+}
+
+function renderStatusBlock(out: string[], w: number, status: string): void {
+  const lines = status.trim().split("\n").filter(l => l.trim()).slice(0, 6);
+  if (lines.length === 0) return;
+  section(out, w, "Status");
+  for (const ln of lines) out.push(`  ${chalk.dim(truncate(ln.trim(), w - 4))}`);
+}
+
+export function renderSteeringFrame(
+  runInfo: RunInfo,
+  data: SteeringViewData,
+  showHotkeys: boolean,
+  rlGetter?: RLGetter,
+): string {
   const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
   const out: string[] = [];
   const totalUsed = runInfo.accCompleted + runInfo.accFailed;
@@ -226,41 +308,49 @@ export function renderSteeringFrame(runInfo: RunInfo, steeringText: string, show
   });
 
   const rl = rlGetter?.();
-  if (rl && (rl.utilization > 0 || rl.windows.size > 0)) {
-    const rlBarW = Math.min(30, w - 40);
-    const renderBar = (pct: number, label?: string) => {
-      const f = Math.round(pct * rlBarW);
-      let barStr = "";
-      for (let i = 0; i < rlBarW; i++) {
-        if (i < f) barStr += pct > 0.9 ? chalk.red("\u2588") : pct > 0.75 ? chalk.yellow("\u2588") : chalk.blue("\u2588");
-        else barStr += chalk.gray("\u2591");
-      }
-      let lbl = `${Math.round(pct * 100)}% used`;
-      if (rl.isUsingOverage) lbl += chalk.red(" [EXTRA USAGE]");
-      if (rl.resetsAt && rl.resetsAt > Date.now()) {
-        const waitSec = Math.ceil((rl.resetsAt - Date.now()) / 1000);
-        const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
-        lbl = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
-      }
-      const prefix = label ? chalk.dim(label.padEnd(6)) : chalk.dim("Usage ");
-      out.push(`  ${prefix}${barStr}  ${lbl}`);
-    };
-    if (rl.windows.size > 1) {
-      const wins = Array.from(rl.windows.values());
-      const idx = Math.floor(Date.now() / 3000) % wins.length;
-      renderBar(wins[idx].utilization, wins[idx].type.replace(/_/g, " ").slice(0, 5));
-    } else {
-      renderBar(rl.utilization);
-    }
-  }
+  if (rl && (rl.utilization > 0 || rl.windows.size > 0)) renderSteeringUsageBar(out, w, rl);
 
   out.push("");
-  out.push(chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, 60))));
-  const clean = steeringText.replace(/\n/g, " ");
-  const maxTextW = w - 8;
-  out.push(`  ${chalk.cyan("\u25C6")} ${clean.length > maxTextW ? clean.slice(0, maxTextW - 1) + "\u2026" : clean}`);
+
+  const ctx = data.context;
+
+  if (ctx?.objective) {
+    const obj = ctx.objective.replace(/\s+/g, " ").trim();
+    out.push(`  ${chalk.bold.white("Objective")}  ${chalk.dim(truncate(obj, w - 15))}`);
+    out.push("");
+  }
+
+  if (ctx?.lastWave && ctx.lastWave.tasks.length > 0) {
+    renderLastWave(out, w, ctx.lastWave);
+    out.push("");
+  }
+
+  if (ctx?.status) {
+    renderStatusBlock(out, w, ctx.status);
+    out.push("");
+  }
+
+  section(out, w, "Planner activity");
+  const events = data.events.slice(-10);
+  if (events.length === 0) {
+    out.push(chalk.dim("  (waiting for planner\u2026)"));
+  } else {
+    for (const e of events) {
+      const t = new Date(e.time).toLocaleTimeString("en", { hour12: false });
+      out.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + colorEvent(truncate(e.text, w - 22)));
+    }
+  }
   out.push("");
-  if (showHotkeys) out.push(chalk.dim("  [b] budget  [q] stop"));
+
+  const liveClean = data.statusLine.replace(/\n/g, " ");
+  out.push(`  ${chalk.cyan("\u25B6")} ${chalk.dim(truncate(liveClean, w - 6))}`);
+  out.push("");
+
+  if (showHotkeys) {
+    const pending = runInfo?.pendingSteer ?? 0;
+    const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
+    out.push(chalk.dim("  [b] budget  [s] steer  [q] stop") + chip);
+  }
   out.push("");
   return out.join("\n");
 }

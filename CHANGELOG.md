@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10.0
+
+### Steer and ask — user channel into an autonomous run
+
+Previously a running claude-overnight was fully autonomous after the Run button: no way to nudge direction or ask the planner a question mid-flight. Now there's a safe, non-disruptive channel for both.
+
+- **Steer — queue directives for the next wave.** Press `s` during execute or steering to open a text input. On Enter the directive is written to `.claude-overnight/latest/steer-inbox/` as its own timestamped file. The next successful steering call reads the inbox as `memory.userGuidance`, injects it at the top of the steering prompt as **USER DIRECTIVES — highest priority** (overrides prior status/goal assumptions), and the files are moved atomically into `steer-inbox/processed/wave-N/` so each directive applies exactly once. Running agents are never interrupted.
+- **File-based inbox works without a TTY.** Anything dropped into `steer-inbox/*.md` from another shell (or an `echo` under `nohup`) is picked up by the next steering cycle. Hotkeys are the convenience, the inbox is the contract.
+- **Ask — non-blocking planner side query.** Press `?` during execute to ask the planner a question. A compact `RunMemory` blob (objective, goal, status, latest verification/reflections, wave count) plus the question is sent to `runPlannerQuery`; the answer streams into a new `--- Ask ---` panel below the main frame. Agents keep running. Cost is billed to the run budget via the same delta pattern as steering. Disabled during the steering phase to avoid planner-call contention.
+- **Steering view enrichment.** The steering frame now shows the objective, the last wave summary (done/failed/running counts + the first few task prompts), and the current status block, in addition to a dedicated planner-activity event log. Ephemeral ticker heartbeat and persistent scrollback are now separate: `PlannerLog` callbacks carry a `kind: "status" | "event"` so status ticks update the bottom line while tool uses, retries, and nudges append to the scrollback.
+- **Hotkey hint row.** Execute: `[b] budget  [t] threshold  [s] steer  [?] ask  [q] stop`. Steering: `[b] budget  [s] steer  [q] stop`. A `✎ N steer queued` chip appears when the inbox is non-empty.
+- **Applied directives recorded.** Each `steering/wave-N-attempt-M.json` now includes the `appliedGuidance` string when user directives were consumed, so post-run audits show exactly where the user intervened.
+
 ## 1.9.1
 
 ### Crash fix + budget accounting

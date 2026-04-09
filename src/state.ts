@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync, symlinkSync, unlinkSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync, symlinkSync, unlinkSync, renameSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
 import chalk from "chalk";
@@ -26,7 +26,54 @@ export function readRunMemory(runDir: string, previousRuns?: string): RunMemory 
     verifications: readMdDir(join(runDir, "verifications")),
     milestones: readMdDir(join(runDir, "milestones")),
     status, goal, previousRuns,
+    userGuidance: readSteerInbox(runDir),
   };
+}
+
+// ── Steer inbox (user directives queued for the next steering call) ──
+
+/** Read pending .md files in steer-inbox/ (top-level only, not processed/). */
+export function readSteerInbox(runDir: string): string {
+  const dir = join(runDir, "steer-inbox");
+  try {
+    const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
+    return files.map(f => {
+      try { return readFileSync(join(dir, f), "utf-8").trim(); } catch { return ""; }
+    }).filter(Boolean).join("\n\n---\n\n");
+  } catch { return ""; }
+}
+
+/** Count pending steer files without reading them. */
+export function countSteerInbox(runDir: string): number {
+  try { return readdirSync(join(runDir, "steer-inbox")).filter(f => f.endsWith(".md")).length; }
+  catch { return 0; }
+}
+
+/** Append a user directive to the inbox as its own timestamped file. Returns the file path. */
+export function writeSteerInbox(runDir: string, text: string): string {
+  const dir = join(runDir, "steer-inbox");
+  mkdirSync(dir, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const rand = Math.random().toString(36).slice(2, 6);
+  const path = join(dir, `${ts}-${rand}.md`);
+  writeFileSync(path, text.trim() + "\n", "utf-8");
+  return path;
+}
+
+/** Move all pending .md files from steer-inbox/ into steer-inbox/processed/wave-N/. Returns moved count. */
+export function consumeSteerInbox(runDir: string, waveNum: number): number {
+  const dir = join(runDir, "steer-inbox");
+  let moved = 0;
+  try {
+    const files = readdirSync(dir).filter(f => f.endsWith(".md"));
+    if (files.length === 0) return 0;
+    const processedDir = join(dir, "processed", `wave-${waveNum}`);
+    mkdirSync(processedDir, { recursive: true });
+    for (const f of files) {
+      try { renameSync(join(dir, f), join(processedDir, f)); moved++; } catch {}
+    }
+  } catch {}
+  return moved;
 }
 
 export function writeStatus(baseDir: string, status: string): void {

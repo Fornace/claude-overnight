@@ -150,6 +150,8 @@ export interface RunMemory {
   status: string;
   goal: string;
   previousRuns?: string;
+  /** Pending user directives from the steer inbox, consumed by the next successful steering call. */
+  userGuidance?: string;
 }
 
 /** Persisted run state for crash recovery and resume. */

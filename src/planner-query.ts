@@ -5,6 +5,14 @@ import type { Task, PermMode, RateLimitWindow } from "./types.js";
 
 // ── Types ──
 
+/**
+ * Logging callback used by planner/steering queries.
+ * `kind` distinguishes ephemeral status updates (heartbeat ticker) from
+ * discrete events worth persisting in a scrollback log (tool uses, retries).
+ * Plain (text) callers still work — extra arg is ignored.
+ */
+export type PlannerLog = (text: string, kind?: "status" | "event") => void;
+
 export interface PlannerRateLimitInfo {
   utilization: number;
   status: string;
@@ -73,7 +81,7 @@ const WALL_CLOCK_LIMIT_MS = 45 * 60 * 1000;
 export async function runPlannerQuery(
   prompt: string,
   opts: PlannerOpts,
-  onLog: (text: string) => void,
+  onLog: PlannerLog,
 ): Promise<string> {
   const MAX_RETRIES = 3;
   const BACKOFF = [30_000, 60_000, 120_000];
@@ -86,17 +94,17 @@ export async function runPlannerQuery(
     } catch (err: any) {
       if (err instanceof NudgeError) {
         if (err.sessionId) {
-          onLog("Silent 15m — resuming session with continue");
+          onLog("Silent 15m — resuming session with continue", "event");
           currentPrompt = "Continue. Complete the task.";
           currentOpts = { ...opts, resumeSessionId: err.sessionId };
         } else {
-          onLog("Silent 15m — restarting planner (no session to resume)");
+          onLog("Silent 15m — restarting planner (no session to resume)", "event");
         }
         continue;
       }
       if (attempt < MAX_RETRIES && isRateLimitError(err)) {
         const waitMs = BACKOFF[attempt];
-        onLog(`Rate limited — waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`);
+        onLog(`Rate limited — waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`, "event");
         await new Promise((r) => setTimeout(r, waitMs));
         continue;
       }
@@ -109,7 +117,7 @@ export async function runPlannerQuery(
 async function runPlannerQueryOnce(
   prompt: string,
   opts: PlannerOpts,
-  onLog: (text: string) => void,
+  onLog: PlannerLog,
 ): Promise<string> {
   _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0 };
   let resultText = "";
@@ -145,7 +153,7 @@ async function runPlannerQueryOnce(
     const rlPct = _plannerRateLimitInfo.utilization;
     const rlStr = rlPct > 0 ? ` · ${Math.round(rlPct * 100)}%` : "";
     const extra = lastLogText ? ` · ${lastLogText}` : "";
-    onLog(`${timeStr}${toolStr}${costStr}${rlStr}${extra}`);
+    onLog(`${timeStr}${toolStr}${costStr}${rlStr}${extra}`, "status");
   }, 500);
 
   const timeoutMs = isResume ? HARD_TIMEOUT_MS : NUDGE_MS;
@@ -181,7 +189,7 @@ async function runPlannerQueryOnce(
         if (ev?.type === "content_block_start" && ev.content_block?.type === "tool_use") {
           toolCount++;
           lastLogText = ev.content_block.name;
-          onLog(ev.content_block.name);
+          onLog(ev.content_block.name, "event");
         }
         if (ev?.type === "content_block_delta") {
           const delta = (ev as any).delta;

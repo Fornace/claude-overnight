@@ -1,7 +1,17 @@
 import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
-import type { RateLimitWindow } from "./types.js";
+import type { RateLimitWindow, WaveSummary } from "./types.js";
 import { renderFrame, renderSteeringFrame } from "./render.js";
+
+/** Short-lived context the steering view renders around its live log. */
+export interface SteeringContext {
+  objective?: string;
+  status?: string;
+  lastWave?: WaveSummary;
+}
+
+/** One scrollback line in the steering event log. */
+export interface SteeringEvent { time: number; text: string }
 
 /** Cumulative run-level stats — mutable, updated between phases. */
 export interface RunInfo {
@@ -15,6 +25,8 @@ export interface RunInfo {
   remaining: number;
   model?: string;
   startedAt: number;
+  /** Number of pending directives in the steer inbox; displayed as a chip in the hotkey row. */
+  pendingSteer?: number;
 }
 
 /** Mutable config that can be changed live during execution. */
@@ -24,28 +36,58 @@ export interface LiveConfig {
   dirty: boolean;
 }
 
+/** State of an in-flight or recently-completed ask side query. */
+export interface AskState {
+  question: string;
+  answer: string;
+  streaming: boolean;
+  error?: string;
+}
+
 type RLGetter = () => { utilization: number; isUsingOverage: boolean; windows: Map<string, RateLimitWindow>; resetsAt?: number };
+
+const MAX_STEERING_EVENTS = 60;
+const MAX_INPUT_LEN = 600;
 
 export class RunDisplay {
   readonly runInfo: RunInfo;
   private liveConfig?: LiveConfig;
   private swarm?: Swarm;
-  private steeringText?: string;
+  private steeringActive = false;
+  private steeringStatusLine = "Assessing...";
+  private steeringEvents: SteeringEvent[] = [];
+  private steeringContext?: SteeringContext;
   private rlGetter?: RLGetter;
   private interval?: ReturnType<typeof setInterval>;
   private keyHandler?: (buf: Buffer) => void;
-  private inputMode: "none" | "budget" | "threshold" = "none";
+  private inputMode: "none" | "budget" | "threshold" | "steer" | "ask" = "none";
   private inputBuf = "";
   private started = false;
   private readonly isTTY: boolean;
   private lastSeq = 0;
   private lastCompleted = -1;
+  private askState?: AskState;
+  private askBusy = false;
+  private onSteer?: (text: string) => void;
+  private onAsk?: (text: string) => void;
 
-  constructor(runInfo: RunInfo, liveConfig?: LiveConfig) {
+  constructor(
+    runInfo: RunInfo,
+    liveConfig?: LiveConfig,
+    callbacks?: { onSteer?: (text: string) => void; onAsk?: (text: string) => void },
+  ) {
     this.runInfo = runInfo;
     this.liveConfig = liveConfig;
+    this.onSteer = callbacks?.onSteer;
+    this.onAsk = callbacks?.onAsk;
     this.isTTY = !!process.stdout.isTTY;
   }
+
+  /** Replace the ask state. Called by run.ts as the side query streams and completes. */
+  setAsk(state: AskState | undefined): void { this.askState = state; }
+
+  /** Signal to the UI whether an ask is in progress (prevents duplicate firings). */
+  setAskBusy(busy: boolean): void { this.askBusy = busy; }
 
   start(): void {
     if (this.started) return;
@@ -56,19 +98,32 @@ export class RunDisplay {
 
   setWave(swarm: Swarm): void {
     this.swarm = swarm;
-    this.steeringText = undefined;
+    this.steeringActive = false;
     this.rlGetter = undefined;
     this.lastSeq = 0;
     this.lastCompleted = -1;
   }
 
-  setSteering(rlGetter?: RLGetter): void {
+  setSteering(rlGetter?: RLGetter, ctx?: SteeringContext): void {
     this.swarm = undefined;
-    this.steeringText = "Assessing...";
+    this.steeringActive = true;
+    this.steeringStatusLine = "Assessing...";
+    this.steeringEvents = [];
+    this.steeringContext = ctx;
     this.rlGetter = rlGetter;
   }
 
-  updateText(text: string): void { this.steeringText = text; }
+  /** Replace the single live status line (ticker heartbeat). */
+  updateSteeringStatus(text: string): void { this.steeringStatusLine = text; }
+
+  /** Append a discrete, persistent line to the steering scrollback. */
+  appendSteeringEvent(text: string): void {
+    this.steeringEvents.push({ time: Date.now(), text });
+    if (this.steeringEvents.length > MAX_STEERING_EVENTS) this.steeringEvents.shift();
+  }
+
+  /** Backwards-compat alias — treats input as the current status line. */
+  updateText(text: string): void { this.updateSteeringStatus(text); }
 
   pause(): void {
     if (this.interval) { clearInterval(this.interval); this.interval = undefined; }
@@ -107,22 +162,55 @@ export class RunDisplay {
   }
 
   private render(): string {
+    let frame = "";
     if (this.swarm) {
-      let frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo);
-      if (this.inputMode !== "none") {
-        const label = this.inputMode === "budget" ? "New budget (remaining sessions)" : "New usage cap (0-100%)";
-        frame += `\n  ${chalk.cyan(">")} ${label}: ${this.inputBuf}\u2588`;
-      }
-      return frame;
+      frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo);
+    } else if (this.steeringActive) {
+      frame = renderSteeringFrame(this.runInfo, {
+        statusLine: this.steeringStatusLine,
+        events: this.steeringEvents,
+        context: this.steeringContext,
+      }, this.hasHotkeys(), this.rlGetter);
+    } else {
+      return "";
     }
-    if (this.steeringText != null) {
-      let frame = renderSteeringFrame(this.runInfo, this.steeringText, this.hasHotkeys(), this.rlGetter);
-      if (this.inputMode === "budget") {
-        frame += `\n  ${chalk.cyan(">")} New budget (remaining sessions): ${this.inputBuf}\u2588`;
-      }
-      return frame;
+    frame += this.renderInputPrompt();
+    frame += this.renderAskPanel();
+    return frame;
+  }
+
+  private renderInputPrompt(): string {
+    if (this.inputMode === "none") return "";
+    if (this.inputMode === "budget") {
+      return `\n  ${chalk.cyan(">")} New budget (remaining sessions): ${this.inputBuf}\u2588`;
+    }
+    if (this.inputMode === "threshold") {
+      return `\n  ${chalk.cyan(">")} New usage cap (0-100%): ${this.inputBuf}\u2588`;
+    }
+    if (this.inputMode === "steer") {
+      return `\n  ${chalk.cyan(">")} ${chalk.bold("Steer next wave")} ${chalk.dim("(Enter to queue, Esc to cancel)")}\n  ${this.inputBuf}\u2588`;
+    }
+    if (this.inputMode === "ask") {
+      return `\n  ${chalk.cyan(">")} ${chalk.bold("Ask the planner")} ${chalk.dim("(Enter to send, Esc to cancel)")}\n  ${this.inputBuf}\u2588`;
     }
     return "";
+  }
+
+  private renderAskPanel(): string {
+    const a = this.askState;
+    if (!a) return "";
+    const out: string[] = ["", chalk.gray("  \u2500\u2500\u2500 Ask " + "\u2500".repeat(40))];
+    out.push(`  ${chalk.bold.cyan("Q:")} ${a.question}`);
+    if (a.error) {
+      out.push(`  ${chalk.red("A:")} ${chalk.red(a.error)}`);
+    } else if (a.streaming) {
+      out.push(`  ${chalk.dim("A: " + (a.answer || "thinking..."))}`);
+    } else {
+      const lines = a.answer.split("\n").slice(0, 20);
+      out.push(`  ${chalk.bold.green("A:")} ${lines[0] || ""}`);
+      for (const ln of lines.slice(1)) out.push(`     ${ln}`);
+    }
+    return "\n" + out.join("\n");
   }
 
   private hasHotkeys(): boolean {
@@ -136,7 +224,7 @@ export class RunDisplay {
     const lc = this.liveConfig;
     this.keyHandler = (buf: Buffer) => {
       const s = buf.toString();
-      if (this.inputMode !== "none") {
+      if (this.inputMode === "budget" || this.inputMode === "threshold") {
         if (s === "\r" || s === "\n") {
           const val = parseFloat(this.inputBuf);
           if (this.inputMode === "budget" && !isNaN(val) && val > 0) {
@@ -162,9 +250,44 @@ export class RunDisplay {
         }
         return;
       }
+      if (this.inputMode === "steer" || this.inputMode === "ask") {
+        for (const ch of s) {
+          if (ch === "\r" || ch === "\n") {
+            const text = this.inputBuf.trim();
+            const wasAsk = this.inputMode === "ask";
+            this.inputMode = "none";
+            this.inputBuf = "";
+            if (text) {
+              if (wasAsk) this.onAsk?.(text);
+              else this.onSteer?.(text);
+            }
+            return;
+          }
+          if (ch === "\x1B" || ch === "\x03") {
+            this.inputMode = "none";
+            this.inputBuf = "";
+            return;
+          }
+          if (ch === "\x7F" || ch === "\b") {
+            this.inputBuf = this.inputBuf.slice(0, -1);
+            continue;
+          }
+          const code = ch.charCodeAt(0);
+          if (code >= 0x20 && code <= 0x7E && this.inputBuf.length < MAX_INPUT_LEN) {
+            this.inputBuf += ch;
+          }
+        }
+        return;
+      }
       if (s === "b" || s === "B") { this.inputMode = "budget"; this.inputBuf = ""; }
       else if (s === "t" || s === "T") {
         if (this.swarm) { this.inputMode = "threshold"; this.inputBuf = ""; }
+      }
+      else if ((s === "s" || s === "S") && this.onSteer) {
+        this.inputMode = "steer"; this.inputBuf = "";
+      }
+      else if (s === "?" && this.onAsk && this.swarm && !this.askBusy) {
+        this.inputMode = "ask"; this.inputBuf = "";
       }
       else if (s === "q" || s === "Q" || s === "\x03") {
         if (this.swarm) {
