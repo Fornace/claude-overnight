@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.11.0
+
+### Restored interactive options, CLI flags, worktree resilience
+
+The interactive flow lost its worktree, merge strategy, and permission prompts back in 0.2.0. They're back, plus concurrency is now user-controlled, and every option is also available as a CLI flag.
+
+- **Interactive flow expanded to 8 steps.** ① Objective ② Budget ③ Max concurrency ④ Worker model ⑤ Usage cap ⑥ Extra usage ⑦ Permissions (auto / bypass all / prompt each) ⑧ Git isolation (worktrees+yolo / worktrees+branch / no worktrees). Steps ⑦ and ⑧ are skipped when CLI flags preset them.
+- **Max concurrency prompt.** Was hardcoded to `min(5, budget)`. Now ③ asks for max concurrency — the planner decides how many agents are safe per wave, up to this limit.
+- **Chat on themes review.** The themes screen (pre-thinking) now has `c` for chat, same as the task review screen. Ask questions about themes before committing to thinking agents.
+- **New CLI flags.** `--worktrees` / `--no-worktrees` (force on/off), `--merge=yolo|branch`, `--perm=auto|bypassPermissions|default`, `--yolo` (shorthand for `--perm=bypassPermissions --no-worktrees`). All flags work in both interactive and non-interactive modes — in interactive mode they skip the corresponding prompt.
+- **Worktree creation resilience.** When `git worktree add` fails, the agent now force-deletes the conflicting branch, prunes, and retries once. If the retry still fails, the agent runs without isolation instead of erroring out. Previously, stale `swarm/task-*` branches from crashed runs caused immediate agent errors with no recovery.
+- **`[f] fix` hotkey.** During a wave, press `f` to re-queue all errored agents' tasks back into the active worker pool. Shown in the hotkey bar when there are failed agents and active workers that can pick them up.
+- **`requeueFailed()` on Swarm.** New method resets errored agents to pending and pushes their tasks back into the queue, decrementing the failed counter.
+
 ## 1.10.0
 
 ### Steer and ask — user channel into an autonomous run

@@ -139,6 +139,21 @@ export class Swarm {
     this.activeQueries.clear();
   }
 
+  /** Re-queue all errored agents' tasks for retry within this wave. */
+  requeueFailed(): number {
+    const errored = this.agents.filter(a => a.status === "error");
+    if (errored.length === 0) return 0;
+    for (const a of errored) {
+      this.queue.push(a.task);
+      a.status = "pending";
+      a.error = undefined;
+      a.finishedAt = undefined;
+    }
+    this.failed -= errored.length;
+    this.log(-1, `Re-queued ${errored.length} failed task(s)`);
+    return errored.length;
+  }
+
   logSequence = 0;
 
   log(agentId: number, text: string) {
@@ -221,18 +236,28 @@ export class Swarm {
 
     let agentCwd = task.cwd || this.config.cwd;
     if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree) {
-      try {
-        const branch = `swarm/task-${id}`;
-        const dir = join(this.worktreeBase, `agent-${id}`);
-        gitExec(`git worktree add -b "${branch}" "${dir}" HEAD`, this.config.cwd);
+      const branch = `swarm/task-${id}`;
+      const dir = join(this.worktreeBase, `agent-${id}`);
+      let worktreeOk = false;
+      for (let wt = 0; wt < 2 && !worktreeOk; wt++) {
+        try {
+          gitExec(`git worktree add -b "${branch}" "${dir}" HEAD`, this.config.cwd);
+          worktreeOk = true;
+        } catch (e: any) {
+          if (wt === 0) {
+            this.log(id, `Worktree failed, cleaning up: ${e.message?.slice(0, 50)}`);
+            try { gitExec(`git branch -D "${branch}"`, this.config.cwd); } catch {}
+            try { rmSync(dir, { recursive: true, force: true }); } catch {}
+            try { gitExec("git worktree prune", this.config.cwd); } catch {}
+          }
+        }
+      }
+      if (worktreeOk) {
         agentCwd = dir;
         agent.branch = branch;
         this.log(id, `Worktree: ${branch}`);
-      } catch (e: any) {
-        this.log(id, `Worktree failed: ${e.message?.slice(0, 60)}`);
-        agent.status = "error"; agent.error = "worktree creation failed"; agent.finishedAt = Date.now();
-        this.failed++;
-        return;
+      } else {
+        this.log(id, `Worktree failed after retry — running without isolation`);
       }
     }
 

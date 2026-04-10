@@ -10,8 +10,8 @@ import type { Task, PermMode, MergeStrategy } from "./types.js";
 // ── CLI flag parsing ──
 
 export function parseCliFlags(argv: string[]) {
-  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget"]);
-  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex", "--allow-extra-usage"]);
+  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget", "merge", "perm"]);
+  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex", "--allow-extra-usage", "--worktrees", "--no-worktrees", "--yolo"]);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
 

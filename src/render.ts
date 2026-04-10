@@ -206,7 +206,8 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
   if (showHotkeys) {
     const pending = runInfo?.pendingSteer ?? 0;
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
-    out.push(chalk.dim("  [b] budget  [t] threshold  [s] steer  [?] ask  [q] stop") + chip);
+    const fixChip = swarm.failed > 0 && swarm.active > 0 ? chalk.yellow("  [f] fix") : "";
+    out.push(chalk.dim("  [b] budget  [t] threshold  [s] steer  [?] ask  [q] stop") + fixChip + chip);
   }
   out.push("");
   return out.join("\n");

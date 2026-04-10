@@ -283,6 +283,9 @@ export class RunDisplay {
       else if (s === "t" || s === "T") {
         if (this.swarm) { this.inputMode = "threshold"; this.inputBuf = ""; }
       }
+      else if ((s === "f" || s === "F") && this.swarm && this.swarm.failed > 0 && this.swarm.active > 0) {
+        this.swarm.requeueFailed();
+      }
       else if ((s === "s" || s === "S") && this.onSteer) {
         this.inputMode = "steer"; this.inputBuf = "";
       }

@@ -56,6 +56,11 @@ async function main() {
     --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
     --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 900s, nudges at timeout, kills at 2×)")}
     --no-flex              Disable adaptive multi-wave planning ${chalk.dim("(run all tasks in one shot)")}
+    --worktrees            Force worktree isolation on ${chalk.dim("(default: auto-detect git repo)")}
+    --no-worktrees         Disable worktree isolation ${chalk.dim("(all agents work in real cwd)")}
+    --merge=MODE           Merge strategy: yolo or branch ${chalk.dim("(default: yolo)")}
+    --perm=MODE            Permission mode: auto, bypassPermissions, default ${chalk.dim("(default: auto)")}
+    --yolo                 Shorthand for --perm=bypassPermissions --no-worktrees
 
   ${chalk.cyan("Defaults")} ${chalk.dim("(non-interactive)")}
     model: first available    concurrency: 5    worktrees: auto    merge: yolo    perms: auto
@@ -215,6 +220,9 @@ async function main() {
   let usageCap: number | undefined;
   let allowExtraUsage = false;
   let extraUsageBudget: number | undefined;
+  let permissionMode: PermMode = "auto";
+  let useWorktrees = false;
+  let mergeStrategy: MergeStrategy = "yolo";
 
   if (resuming) {
     workerModel = resumeState!.workerModel; plannerModel = resumeState!.plannerModel;
@@ -222,6 +230,9 @@ async function main() {
     objective = resumeState!.objective; usageCap = resumeState!.usageCap;
     allowExtraUsage = resumeState!.allowExtraUsage ?? false;
     extraUsageBudget = resumeState!.extraUsageBudget;
+    permissionMode = resumeState!.permissionMode;
+    useWorktrees = resumeState!.useWorktrees;
+    mergeStrategy = resumeState!.mergeStrategy;
   } else if (!nonInteractive) {
     while (true) {
       objective = await ask(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")}\n  ${chalk.cyan(">")} `);
@@ -234,6 +245,16 @@ async function main() {
     budget = parseInt(budgetAns) || 10;
     if (budget < 1) { console.error(chalk.red(`  Budget must be a positive number`)); process.exit(1); }
 
+    // ③ Max concurrency (skip if --concurrency set)
+    if (cliFlags.concurrency) {
+      concurrency = parseInt(cliFlags.concurrency);
+    } else {
+      const defaultC = Math.min(5, budget);
+      const concAns = await ask(`\n  ${chalk.cyan("③")} ${chalk.dim("Max concurrency")} ${chalk.dim("[")}${chalk.white(String(defaultC))}${chalk.dim("]:")} `);
+      concurrency = parseInt(concAns) || defaultC;
+      if (concurrency < 1) concurrency = 1;
+    }
+
     let modelFrame = 0;
     const modelSpinner = setInterval(() => {
       process.stdout.write(`\x1B[2K\r  ${chalk.cyan(BRAILLE[modelFrame++ % BRAILLE.length])} ${chalk.dim("loading models...")}`);
@@ -242,18 +263,18 @@ async function main() {
     try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
     plannerModel = models[0]?.value || "claude-sonnet-4-6";
     if (models.length > 0) {
-      workerModel = await select(`${chalk.cyan("③")} Worker model:`, models.map(m => ({ name: m.displayName, value: m.value, hint: m.description })));
+      workerModel = await select(`${chalk.cyan("④")} Worker model:`, models.map(m => ({ name: m.displayName, value: m.value, hint: m.description })));
     } else {
-      const ans = await ask(`  ${chalk.cyan("③")} ${chalk.dim("Worker model [claude-sonnet-4-6]:")} `);
+      const ans = await ask(`  ${chalk.cyan("④")} ${chalk.dim("Worker model [claude-sonnet-4-6]:")} `);
       workerModel = ans || "claude-sonnet-4-6";
     }
-    usageCap = await select(`${chalk.cyan("④")} Usage cap:`, [
+    usageCap = await select(`${chalk.cyan("⑤")} Usage cap:`, [
       { name: "Unlimited", value: undefined as any, hint: "full capacity, wait through rate limits" },
       { name: "90%", value: 0.9, hint: "leave 10% for other work" },
       { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
       { name: "50%", value: 0.5, hint: "use half, keep the rest" },
     ]);
-    const extraChoice = await select(`${chalk.cyan("⑤")} Allow extra usage ${chalk.dim("(billed separately)")}:`, [
+    const extraChoice = await select(`${chalk.cyan("⑥")} Allow extra usage ${chalk.dim("(billed separately)")}:`, [
       { name: "No", value: "no", hint: "stop when plan limits are reached" },
       { name: "Yes, with $ limit", value: "budget", hint: "set a spending cap" },
       { name: "Yes, unlimited", value: "unlimited", hint: "keep going no matter what" },
@@ -264,7 +285,41 @@ async function main() {
       if (!extraUsageBudget || extraUsageBudget <= 0) extraUsageBudget = 5;
       allowExtraUsage = true;
     } else if (extraChoice === "unlimited") allowExtraUsage = true;
-    concurrency = Math.min(5, budget);
+
+    // ⑦ Permission mode (skip if --yolo or --perm set)
+    const cliYolo = argv.includes("--yolo");
+    if (cliFlags.perm) {
+      permissionMode = cliFlags.perm as PermMode;
+    } else if (cliYolo) {
+      permissionMode = "bypassPermissions";
+    } else {
+      permissionMode = await select(`${chalk.cyan("⑦")} Permissions:`, [
+        { name: "Auto", value: "auto" as PermMode, hint: "accept low-risk, reject high-risk" },
+        { name: "Bypass all", value: "bypassPermissions" as PermMode, hint: "agents can run anything (yolo)" },
+        { name: "Prompt each", value: "default" as PermMode, hint: "ask for every dangerous op" },
+      ]);
+    }
+
+    // ⑧ Worktrees + merge (skip if --yolo, --worktrees, --no-worktrees, or --merge set)
+    const gitRepo = isGitRepo(cwd);
+    if (cliYolo || argv.includes("--no-worktrees")) {
+      useWorktrees = false;
+      mergeStrategy = (cliFlags.merge as MergeStrategy) || "yolo";
+    } else if (argv.includes("--worktrees")) {
+      useWorktrees = true;
+      mergeStrategy = (cliFlags.merge as MergeStrategy) || "yolo";
+    } else if (gitRepo) {
+      const wtChoice = await select(`${chalk.cyan("⑧")} Git isolation:`, [
+        { name: "Worktrees + yolo merge", value: "wt-yolo", hint: "isolate agents, merge into current branch" },
+        { name: "Worktrees + new branch", value: "wt-branch", hint: "isolate agents, merge into a new branch" },
+        { name: "No worktrees", value: "no-wt", hint: "all agents share the working directory" },
+      ]);
+      useWorktrees = wtChoice !== "no-wt";
+      mergeStrategy = wtChoice === "wt-branch" ? "branch" : "yolo";
+    } else {
+      useWorktrees = false;
+      mergeStrategy = "yolo";
+    }
 
     const parts: string[] = [];
     if (workerModel !== plannerModel) parts.push(`${detectModelTier(workerModel)} → ${detectModelTier(plannerModel)}`);
@@ -273,6 +328,9 @@ async function main() {
     if (budget > 2) parts.push("flex");
     if (usageCap != null) parts.push(`cap ${Math.round(usageCap * 100)}%`);
     parts.push(allowExtraUsage ? (extraUsageBudget ? `extra $${extraUsageBudget}` : "extra ∞") : "no extra");
+    if (permissionMode !== "auto") parts.push(permissionMode === "bypassPermissions" ? "yolo" : "prompt");
+    if (useWorktrees) parts.push(mergeStrategy === "branch" ? "wt→branch" : "wt→yolo");
+    else parts.push("no wt");
     if (completedRuns.length > 0) parts.push(`${completedRuns.length} prior`);
     const inner = parts.join(chalk.dim(" · "));
     const innerLen = parts.join(" · ").length;
@@ -305,10 +363,25 @@ async function main() {
   }
 
   validateConcurrency(concurrency);
-  const permissionMode: PermMode = resuming ? resumeState!.permissionMode : (fileCfg?.permissionMode ?? "auto");
-  const useWorktrees = resuming ? resumeState!.useWorktrees : (fileCfg?.useWorktrees ?? isGitRepo(cwd));
+  // Resolve permissionMode, useWorktrees, mergeStrategy for non-interactive + non-resume
+  if (!resuming && nonInteractive) {
+    const yolo = argv.includes("--yolo");
+    permissionMode = cliFlags.perm ? cliFlags.perm as PermMode
+      : yolo ? "bypassPermissions"
+      : (fileCfg?.permissionMode ?? "auto");
+    if (!["auto", "bypassPermissions", "default"].includes(permissionMode)) {
+      console.error(chalk.red(`  --perm must be auto, bypassPermissions, or default (got ${permissionMode})`)); process.exit(1);
+    }
+    useWorktrees = argv.includes("--no-worktrees") || yolo ? false
+      : argv.includes("--worktrees") ? true
+      : (fileCfg?.useWorktrees ?? isGitRepo(cwd));
+    mergeStrategy = cliFlags.merge ? cliFlags.merge as MergeStrategy
+      : (fileCfg?.mergeStrategy ?? "yolo");
+    if (!["yolo", "branch"].includes(mergeStrategy)) {
+      console.error(chalk.red(`  --merge must be yolo or branch (got ${mergeStrategy})`)); process.exit(1);
+    }
+  }
   if (useWorktrees) validateGitRepo(cwd);
-  const mergeStrategy: MergeStrategy = resuming ? resumeState!.mergeStrategy : (fileCfg?.mergeStrategy ?? "yolo");
 
   if (nonInteractive) {
     const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
@@ -346,7 +419,7 @@ async function main() {
         while (reviewing) {
           for (let i = 0; i < themes.length; i++) console.log(chalk.dim(`  ${String(i + 1).padStart(3)}.`) + ` ${themes[i]}`);
           console.log(chalk.dim(`\n  ${thinkingCount} thinking agents → orchestrate → ${(budget ?? 10) - thinkingCount} execution sessions\n`));
-          const action = await selectKey(`${chalk.white(`${themes.length} themes`)} ${chalk.dim(`· ${thinkingCount} thinking · ${concurrency} concurrent`)}`, [{ key: "r", desc: "un" }, { key: "e", desc: "dit" }, { key: "q", desc: "uit" }]);
+          const action = await selectKey(`${chalk.white(`${themes.length} themes`)} ${chalk.dim(`· ${thinkingCount} thinking · ${concurrency} concurrent`)}`, [{ key: "r", desc: "un" }, { key: "e", desc: "dit" }, { key: "c", desc: "hat" }, { key: "q", desc: "uit" }]);
           if (action === "r") { reviewing = false; break; }
           if (action === "e") {
             const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
@@ -355,6 +428,19 @@ async function main() {
             try { themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog()); process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`); }
             catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
             planRestore();
+          } else if (action === "c") {
+            const question = await ask(`\n  ${chalk.bold("Ask about the themes:")}\n  ${chalk.cyan(">")} `);
+            if (!question) continue;
+            process.stdout.write("\x1B[?25l");
+            try {
+              let answer = "";
+              for await (const msg of query({
+                prompt: `You're planning work for: "${objective}"\n\nThemes identified:\n${themes.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n\nUser question: ${question}`,
+                options: { cwd, model: plannerModel, permissionMode, persistSession: false },
+              })) { if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || ""; }
+              planRestore();
+              if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
+            } catch { planRestore(); }
           } else { console.log(chalk.dim("\n  Aborted.\n")); process.exit(0); }
         }
         process.stdout.write("\x1B[?25l");
