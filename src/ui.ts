@@ -153,12 +153,18 @@ export class RunDisplay {
       return;
     }
     try { process.stdout.write("\x1B[?25l\x1B[H\x1B[J"); } catch { return; }
-    this.interval = setInterval(() => {
-      try {
-        process.stdout.write("\x1B[H\x1B[J");
-        process.stdout.write(this.render());
-      } catch { this.pause(); }
-    }, 250);
+    this.interval = setInterval(() => this.flush(), 250);
+  }
+
+  /** Write the full frame to stdout, clamped to terminal height. */
+  private flush(): void {
+    try {
+      const maxRows = (process.stdout.rows || 40) - 1;
+      const frame = this.render();
+      const lines = frame.split("\n");
+      process.stdout.write("\x1B[H\x1B[J");
+      process.stdout.write(lines.length > maxRows ? lines.slice(0, maxRows).join("\n") : frame);
+    } catch { this.pause(); }
   }
 
   private render(): string {
@@ -248,6 +254,7 @@ export class RunDisplay {
         } else if (/^[0-9.]$/.test(s)) {
           this.inputBuf += s;
         }
+        this.flush();
         return;
       }
       if (this.inputMode === "steer" || this.inputMode === "ask") {
@@ -261,11 +268,20 @@ export class RunDisplay {
               if (wasAsk) this.onAsk?.(text);
               else this.onSteer?.(text);
             }
+            this.flush();
             return;
           }
-          if (ch === "\x1B" || ch === "\x03") {
+          if (ch === "\x03") {
             this.inputMode = "none";
             this.inputBuf = "";
+            this.flush();
+            return;
+          }
+          // Ignore raw ESC only — let ANSI sequences (arrows etc.) fall through
+          if (ch === "\x1B" && s.length === 1) {
+            this.inputMode = "none";
+            this.inputBuf = "";
+            this.flush();
             return;
           }
           if (ch === "\x7F" || ch === "\b") {
@@ -277,6 +293,12 @@ export class RunDisplay {
             this.inputBuf += ch;
           }
         }
+        this.flush();
+        return;
+      }
+      // Dismiss completed ask panel on Escape
+      if (s === "\x1B" && this.askState && !this.askState.streaming) {
+        this.askState = undefined;
         return;
       }
       if (s === "b" || s === "B") { this.inputMode = "budget"; this.inputBuf = ""; }
@@ -290,6 +312,8 @@ export class RunDisplay {
         this.inputMode = "steer"; this.inputBuf = "";
       }
       else if (s === "?" && this.onAsk && this.swarm && !this.askBusy) {
+        // If ask panel is showing a completed answer, dismiss it instead of opening new
+        if (this.askState && !this.askState.streaming) { this.askState = undefined; return; }
         this.inputMode = "ask"; this.inputBuf = "";
       }
       else if (s === "q" || s === "Q" || s === "\x03") {
