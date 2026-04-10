@@ -382,7 +382,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
   if (trulyDone) console.log(chalk.bold.green(`  CLAUDE OVERNIGHT — COMPLETE`));
   else if (remaining <= 0) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — BUDGET EXHAUSTED`));
-  else if (lastCapped) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — RATE LIMITED`));
+  else if (lastCapped) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — EXTRA USAGE BUDGET HIT`));
   else if (stopping || lastAborted) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — INTERRUPTED`));
   else console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — STOPPED`));
   console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
@@ -395,7 +395,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     [chalk.bold("Tokens"), `${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out`, chalk.bold("Tool calls"), String(accTools)],
   ];
   for (const [k1, v1, k2, v2] of statRows) console.log(`  ${k1}  ${v1.padEnd(20)}  ${k2}  ${v2}`);
-  if (lastCapped) console.log(`  ${chalk.yellow(`Capped at ${usageCap != null ? Math.round(usageCap * 100) : 100}%`)}`);
+  if (lastCapped) console.log(`  ${chalk.yellow(`Extra usage budget exhausted`)}`);
   console.log("");
 
   const statusFile = join(runDir, "status.md");

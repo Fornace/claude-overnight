@@ -60,7 +60,6 @@ export class Swarm {
   rateLimitWindows: Map<string, RateLimitWindow> = new Map();
   rateLimitPaused = 0;
   isUsingOverage = false;
-  overageDisabledReason?: string;
   overageCostUsd = 0;
 
   private queue: Task[];
@@ -199,41 +198,39 @@ export class Swarm {
 
   private async throttle(): Promise<void> {
     if (this.cappedOut) return;
-    if (this.isUsingOverage && !this.allowExtraUsage) {
-      this.capForOverage(`Extra usage detected but not allowed — stopping dispatch`);
-      return;
-    }
+
+    // Hard stop: overage budget exhausted (only legitimate cap)
     if (this.isUsingOverage && this.extraUsageBudget != null && this.overageCostUsd >= this.extraUsageBudget) {
       this.capForOverage(`Extra usage budget $${this.extraUsageBudget} reached ($${this.overageCostUsd.toFixed(2)} spent) — stopping dispatch`);
       return;
     }
+
+    // Wait: rejected, or in disallowed overage, or user cap exceeded
     const cap = this.usageCap;
-    if (cap != null && cap < 1 && this.rateLimitUtilization >= cap) {
+    const overageBlocked = this.isUsingOverage && !this.allowExtraUsage;
+    const capExceeded = cap != null && cap < 1 && this.rateLimitUtilization >= cap;
+    const rejected = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now();
+    if (overageBlocked || capExceeded || rejected) {
       const waitMs = this.rateLimitResetsAt
         ? Math.max(5000, this.rateLimitResetsAt - Date.now())
         : 60_000;
-      this.log(-1, `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap * 100)}%), waiting ${Math.ceil(waitMs / 1000)}s for cooldown`);
+      const reason = overageBlocked ? "Extra usage detected (not allowed)"
+        : capExceeded ? `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap! * 100)}%)`
+        : "Rate limited";
+      this.log(-1, `${reason}, waiting ${Math.ceil(waitMs / 1000)}s`);
       this.rateLimitPaused++;
       await sleep(waitMs);
       this.rateLimitPaused--;
+      this.isUsingOverage = false;
       this.rateLimitUtilization = 0;
       this.rateLimitResetsAt = undefined;
       return;
     }
-    if (this.rateLimitResetsAt) {
-      const resetTarget = this.rateLimitResetsAt;
-      const waitMs = resetTarget - Date.now();
-      if (waitMs > 0) {
-        this.log(-1, `Rate limited, pausing ${Math.ceil(waitMs / 1000)}s`);
-        this.rateLimitPaused++;
-        await sleep(waitMs);
-        this.rateLimitPaused--;
-      }
-      if (this.rateLimitResetsAt === resetTarget) this.rateLimitResetsAt = undefined;
-    } else if (this.rateLimitUtilization > 0.75) {
+
+    // Soft delay: high utilization, pace requests
+    if (this.rateLimitUtilization > 0.75) {
       const delay = Math.floor((this.rateLimitUtilization - 0.75) * 60000);
-      this.log(-1, `Soft throttle: ${Math.round(this.rateLimitUtilization * 100)}% utilization, pausing ${(delay / 1000).toFixed(1)}s`);
-      await sleep(delay);
+      if (delay > 0) await sleep(delay);
     }
   }
 
@@ -438,21 +435,18 @@ export class Swarm {
         const rl = msg as SDKRateLimitEvent;
         const info = rl.rate_limit_info;
         this.rateLimitUtilization = info.utilization ?? 0;
-        if (info.status === "rejected" && info.resetsAt && !this.allowExtraUsage) this.rateLimitResetsAt = info.resetsAt;
+        if (info.resetsAt) this.rateLimitResetsAt = info.resetsAt;
         else if (info.status !== "rejected") this.rateLimitResetsAt = undefined;
+        if ((info as any).isUsingOverage) this.isUsingOverage = true;
         const windowType = (info as any).rateLimitType as string | undefined;
         if (windowType) {
           this.rateLimitWindows.set(windowType, {
             type: windowType, utilization: info.utilization ?? 0, status: info.status, resetsAt: info.resetsAt,
           });
         }
-        if ((info as any).isUsingOverage) this.isUsingOverage = true;
-        if ((info as any).overageDisabledReason) this.overageDisabledReason = (info as any).overageDisabledReason;
-        if (this.isUsingOverage && !this.allowExtraUsage) this.capForOverage(`Extra usage detected but not allowed — stopping dispatch`);
         const pct = info.utilization != null ? `${Math.round(info.utilization * 100)}%` : "";
         const overageTag = this.isUsingOverage ? " [EXTRA]" : "";
-        const statusLabel = info.status === "rejected" && this.allowExtraUsage ? "switching to extra usage" : info.status;
-        this.log(agent.id, `Rate: ${statusLabel} ${pct}${overageTag}${windowType ? ` (${windowType})` : ""}`);
+        this.log(agent.id, `Rate: ${info.status} ${pct}${overageTag}${windowType ? ` (${windowType})` : ""}`);
         break;
       }
     }

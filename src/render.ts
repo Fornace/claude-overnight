@@ -97,8 +97,9 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
     }
     let label = `${Math.round(pct * 100)}% used`;
     if (swarm.cappedOut) {
-      if (swarm.isUsingOverage && !swarm.allowExtraUsage) label = chalk.red("Extra usage blocked \u2014 stopping");
-      else label = chalk.yellow(`Capped at ${capFrac != null ? Math.round(capFrac * 100) : 100}% \u2014 finishing active`);
+      label = swarm.isUsingOverage
+        ? chalk.red(`Extra usage budget exhausted \u2014 finishing active`)
+        : chalk.yellow(`Capped at ${capFrac != null ? Math.round(capFrac * 100) : 100}% \u2014 finishing active`);
     } else if (swarm.rateLimitPaused > 0) {
       label = chalk.yellow(`Cooling down \u2014 ${swarm.rateLimitPaused} worker(s) waiting`);
     } else if (swarm.rateLimitResetsAt && swarm.rateLimitResetsAt > Date.now()) {
