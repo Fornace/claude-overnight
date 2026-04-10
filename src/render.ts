@@ -97,8 +97,8 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
     }
     let label = `${Math.round(pct * 100)}% used`;
     if (swarm.cappedOut) {
-      label = swarm.isUsingOverage
-        ? chalk.red(`Extra usage budget exhausted \u2014 finishing active`)
+      label = swarm.extraUsageBudget != null
+        ? chalk.red(`Budget $${swarm.extraUsageBudget} exhausted \u2014 finishing active`)
         : chalk.yellow(`Capped at ${capFrac != null ? Math.round(capFrac * 100) : 100}% \u2014 finishing active`);
     } else if (swarm.rateLimitPaused > 0) {
       label = chalk.yellow(`Cooling down \u2014 ${swarm.rateLimitPaused} worker(s) waiting`);
@@ -107,7 +107,7 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
       const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
       label = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
     }
-    if (swarm.isUsingOverage && !swarm.cappedOut) label += chalk.red(" [EXTRA USAGE]");
+    if (swarm.isUsingOverage && !swarm.cappedOut) label += chalk.red(" [OVERAGE]");
     const prefix = windowLabel ? chalk.dim(windowLabel.padEnd(6)) : chalk.dim("Usage ");
     out.push(`  ${prefix}${barStr}  ${label}`);
   };

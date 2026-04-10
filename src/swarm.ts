@@ -205,26 +205,31 @@ export class Swarm {
       return;
     }
 
-    // Wait: rejected, or in disallowed overage, or user cap exceeded
-    const cap = this.usageCap;
-    const overageBlocked = this.isUsingOverage && !this.allowExtraUsage;
-    const capExceeded = cap != null && cap < 1 && this.rateLimitUtilization >= cap;
-    const rejected = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now();
-    if (overageBlocked || capExceeded || rejected) {
-      const waitMs = this.rateLimitResetsAt
+    // Wait loop: keep waiting until the blocking condition clears
+    // isUsingOverage is purely informational — the API enforces overage via 429s
+    // which the retry loop handles. Throttle only gates on actual rejections and user cap.
+    let consecutiveWaits = 0;
+    for (;;) {
+      if (this.aborted || this.cappedOut) return;
+      const cap = this.usageCap;
+      const capExceeded = cap != null && cap < 1 && this.rateLimitUtilization >= cap;
+      const rejected = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now();
+      if (!capExceeded && !rejected) break;
+
+      const fallbackMs = Math.min(300_000, 60_000 * (1 + consecutiveWaits * 2));
+      const waitMs = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now()
         ? Math.max(5000, this.rateLimitResetsAt - Date.now())
-        : 60_000;
-      const reason = overageBlocked ? "Extra usage detected (not allowed)"
-        : capExceeded ? `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap! * 100)}%)`
+        : fallbackMs;
+      const reason = capExceeded
+        ? `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap! * 100)}%)`
         : "Rate limited";
-      this.log(-1, `${reason}, waiting ${Math.ceil(waitMs / 1000)}s`);
+      this.log(-1, `${reason} — waiting ${Math.ceil(waitMs / 1000)}s then retrying`);
       this.rateLimitPaused++;
       await sleep(waitMs);
       this.rateLimitPaused--;
-      this.isUsingOverage = false;
       this.rateLimitUtilization = 0;
       this.rateLimitResetsAt = undefined;
-      return;
+      consecutiveWaits++;
     }
 
     // Soft delay: high utilization, pace requests
@@ -363,6 +368,21 @@ export class Swarm {
         break;
       } catch (err: any) {
         if (agent.status !== "running") break;
+        // Rate-limit errors: wait and retry WITHOUT burning the retry budget
+        if (!this.aborted && isRateLimitError(err)) {
+          const waitMs = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now()
+            ? Math.max(5000, this.rateLimitResetsAt - Date.now())
+            : 120_000;
+          this.log(id, `Rate limited — waiting ${Math.ceil(waitMs / 1000)}s (attempt not counted)`);
+          this.rateLimitPaused++;
+          await sleep(waitMs);
+          this.rateLimitPaused--;
+          this.isUsingOverage = false;
+          this.rateLimitUtilization = 0;
+          this.rateLimitResetsAt = undefined;
+          attempt--; // don't count this against retries
+          continue;
+        }
         const canRetry = attempt < maxRetries && !this.aborted && isTransientError(err);
         if (canRetry) { this.log(id, `Transient error: ${String(err.message || err).slice(0, 80)}`); continue; }
         agent.status = "error"; agent.error = String(err.message || err).slice(0, 120);
@@ -458,6 +478,16 @@ class AgentTimeoutError extends Error {
     super(`Agent silent for ${Math.round(silentMs / 1000)}s — assumed hung`);
     this.name = "AgentTimeoutError";
   }
+}
+
+function isRateLimitError(err: unknown): boolean {
+  const status: number | undefined = (err as any)?.status ?? (err as any)?.statusCode;
+  if (status === 429) return true;
+  const msg = String((err as any)?.message || err).toLowerCase();
+  if (msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("too many requests")) return true;
+  const cause = (err as any)?.cause;
+  if (cause && cause !== err) return isRateLimitError(cause);
+  return false;
 }
 
 function isTransientError(err: unknown): boolean {

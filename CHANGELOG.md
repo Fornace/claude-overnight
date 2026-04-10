@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.11.5
+
+### Rate limits: truly wait forever instead of stopping
+
+1.11.3/1.11.4 still stopped on plan-level rate limits. Now rate limits never kill a run — workers wait as long as needed and resume.
+
+- **Throttle loops until clear.** Instead of waiting once (60s) and proceeding, `throttle()` now loops — re-checking the blocking condition after each wait. If still blocked, waits again with escalating intervals (1m → 3m → 5m max). Only breaks the loop when the rate limit actually clears.
+- **Rate-limit errors don't burn retries.** When an agent throws a 429 / "rate limit" error, the worker waits 2 minutes (or until `rateLimitResetsAt`), then retries the same task without decrementing the retry counter. Only non-rate-limit transient errors count against retries.
+- **`cappedOut` is budget-only.** The only path to `cappedOut = true` is `extraUsageBudget` exhaustion. Plan-level overage blocks and `usageCap` hits are always wait-and-resume.
+
 ## 1.11.3
 
 ### Rate limit: wait and resume instead of quitting
