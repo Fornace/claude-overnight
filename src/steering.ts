@@ -41,11 +41,13 @@ export async function steerWave(
   const recentWaves = history.slice(-3);
   const recentText = recentWaves.length > 0 ? recentWaves.map(w => {
     const lines = w.tasks.map(t => {
-      const files = t.filesChanged ? ` (${t.filesChanged} files)` : "";
+      const files = t.filesChanged ? ` (${t.filesChanged} files)` : " (0 files)";
       const err = t.error ? ` — ${t.error}` : "";
       return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
     }).join("\n");
-    return `Wave ${w.wave + 1}:\n${lines}`;
+    const zeroChange = w.tasks.filter(t => t.status === "done" && !t.filesChanged).length;
+    const warn = zeroChange > w.tasks.length / 2 ? `\n  ⚠ ${zeroChange}/${w.tasks.length} agents changed 0 files — tasks may be mis-scoped or blocked` : "";
+    return `Wave ${w.wave + 1}:\n${lines}${warn}`;
   }).join("\n\n") : "(first wave)";
 
   const cap = (s: string, max: number) => s.length > max ? s.slice(0, max) + "\n...(truncated)" : s;

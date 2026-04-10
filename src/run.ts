@@ -70,7 +70,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const waveHistory: WaveSummary[] = [];
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;
   let accIn = 0, accOut = 0;
-  let lastCapped = false, lastAborted = false, objectiveComplete = false;
+  let lastCapped = false, lastAborted = false, objectiveComplete = false, lastHealed = false;
   const branches: BranchRecord[] = [];
 
   if (cfg.resuming && cfg.resumeState) {
@@ -187,7 +187,6 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const waveMerge: MergeStrategy = (flex && runBranch) ? "yolo" : mergeStrategy;
 
   let stopping = false;
-  let steeringFailed = false;
   const gracefulStop = () => {
     if (stopping) { currentSwarm?.cleanup(); display.stop(); restore(); process.exit(0); }
     stopping = true;
@@ -259,9 +258,14 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
           display.appendSteeringEvent(`Steering failed (attempt ${steerAttempts}/3) — retrying...`);
           continue;
         }
-        display.stop();
-        console.log(chalk.yellow(`  Steering failed after ${steerAttempts} attempts: ${err.message?.slice(0, 80)} — stopping\n`));
-        steeringFailed = true;
+        display.appendSteeringEvent(`Steering failed ${steerAttempts}× — falling back`);
+        let fallbackStatus = "";
+        try { fallbackStatus = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
+        currentTasks = [{
+          id: "fallback-0",
+          prompt: `Steering couldn't decide the next step. Read the project, assess what's done vs. remaining, and do the most impactful work.\n\nObjective: ${objective}${fallbackStatus ? `\n\nStatus:\n${fallbackStatus}` : ""}`,
+        }];
+        steered = true;
         break;
       }
     }
@@ -281,6 +285,10 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
 
   // ── Main wave loop ──
   while (remaining > 0 && currentTasks.length > 0 && !stopping) {
+    if (!lastHealed) {
+      const healTask = checkProjectHealth(cwd);
+      if (healTask && remaining > 0) { lastHealed = true; currentTasks = [healTask]; }
+    } else { lastHealed = false; }
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
     syncRunInfo();
 
@@ -343,7 +351,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   // ── Finalize ──
   const trulyDone = objectiveComplete || (!flex && remaining <= 0);
   const wasCapped = lastCapped || lastAborted;
-  const finalPhase = trulyDone ? "done" : steeringFailed ? "steering" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
+  const finalPhase = trulyDone ? "done" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
   saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
     remaining, workerModel, plannerModel, concurrency, permissionMode,
@@ -373,7 +381,6 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const bannerChar = accFailed === 0 ? "=" : "-";
   console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
   if (trulyDone) console.log(chalk.bold.green(`  CLAUDE OVERNIGHT — COMPLETE`));
-  else if (steeringFailed) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — STEERING FAILED`));
   else if (remaining <= 0) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — BUDGET EXHAUSTED`));
   else if (lastCapped) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — RATE LIMITED`));
   else if (stopping || lastAborted) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — INTERRUPTED`));
@@ -420,4 +427,31 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
 
   if (accFailed > 0) process.exit(1);
   if (lastAborted || accCompleted === 0) process.exit(2);
+}
+
+function checkProjectHealth(cwd: string): Task | undefined {
+  let pkg: any;
+  try { pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8")); } catch { return undefined; }
+  const scripts = pkg.scripts || {};
+  let scriptName: string | undefined;
+  for (const name of ["typecheck", "check:types", "type-check", "build"]) {
+    if (scripts[name]) { scriptName = name; break; }
+  }
+  if (!scriptName) return undefined;
+  const pm = existsSync(join(cwd, "pnpm-lock.yaml")) ? "pnpm"
+    : existsSync(join(cwd, "bun.lockb")) || existsSync(join(cwd, "bun.lock")) ? "bun"
+    : existsSync(join(cwd, "yarn.lock")) ? "yarn" : "npm";
+  const cmd = `${pm} run ${scriptName}`;
+  try {
+    execSync(cmd, { cwd, encoding: "utf-8", stdio: "pipe", timeout: 60_000 });
+    return undefined;
+  } catch (err: any) {
+    if (err.killed) return undefined;
+    const output = ((err.stdout || "") + "\n" + (err.stderr || "")).trim();
+    const trimmed = output.length > 4000 ? output.slice(0, 2000) + "\n…\n" + output.slice(-2000) : output;
+    return {
+      id: "heal-0",
+      prompt: `Fix the broken build. \`${cmd}\` fails after merging parallel work:\n\`\`\`\n${trimmed}\n\`\`\`\nFix every error. Run \`${cmd}\` when done to verify.`,
+    };
+  }
 }
