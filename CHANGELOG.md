@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.11.3
+
+### Rate limit: wait and resume instead of quitting
+
+The usage cap (`--usage-cap`) was killing all remaining work when utilization hit the threshold. Now it waits for the rate limit window to cool down and resumes dispatching — the core promise.
+
+- **Wait, don't quit.** When utilization reaches the cap, workers sleep until the rate limit resets (or 60s fallback), then re-dispatch. `cappedOut` is now only set for genuine hard stops (extra usage blocked, extra usage budget exceeded).
+- **Self-regulating concurrency.** Active agents finish naturally while workers wait. As agents complete, concurrency drops to zero. After cooldown, workers wake one-by-one and get fresh utilization from rate limit events. If still hot, they wait again.
+- **COOLING phase.** UI shows `COOLING` tag and `Cooling down — N worker(s) waiting` on the usage bar when workers are paused for rate limits.
+- **Paused counter on hard rejections too.** Both cap-wait and rejection-wait now increment `rateLimitPaused` so the UI always reflects blocked workers.
+
 ## 1.11.0
 
 ### Restored interactive options, CLI flags, worktree resilience

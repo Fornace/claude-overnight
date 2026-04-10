@@ -81,7 +81,7 @@ function renderHeader(
 function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
   const windows = Array.from(swarm.rateLimitWindows.values());
   const rlPct = swarm.rateLimitUtilization;
-  if (rlPct <= 0 && !swarm.rateLimitResetsAt && !swarm.cappedOut && windows.length === 0) return;
+  if (rlPct <= 0 && !swarm.rateLimitResetsAt && !swarm.cappedOut && swarm.rateLimitPaused <= 0 && windows.length === 0) return;
 
   const barW = Math.min(30, w - 40);
   const capFrac = swarm.usageCap;
@@ -99,6 +99,8 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
     if (swarm.cappedOut) {
       if (swarm.isUsingOverage && !swarm.allowExtraUsage) label = chalk.red("Extra usage blocked \u2014 stopping");
       else label = chalk.yellow(`Capped at ${capFrac != null ? Math.round(capFrac * 100) : 100}% \u2014 finishing active`);
+    } else if (swarm.rateLimitPaused > 0) {
+      label = chalk.yellow(`Cooling down \u2014 ${swarm.rateLimitPaused} worker(s) waiting`);
     } else if (swarm.rateLimitResetsAt && swarm.rateLimitResetsAt > Date.now()) {
       const waitSec = Math.ceil((swarm.rateLimitResetsAt - Date.now()) / 1000);
       const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
@@ -146,7 +148,8 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
 
   const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
   const phaseLabel = swarm.phase === "planning" ? chalk.magenta("PLANNING")
-    : swarm.phase === "merging" ? chalk.yellow("MERGING") : "";
+    : swarm.phase === "merging" ? chalk.yellow("MERGING")
+    : swarm.rateLimitPaused > 0 ? chalk.yellow("COOLING") : "";
   const phase = [phaseLabel, stoppingTag].filter(Boolean).join(" ");
 
   const waveUsed = swarm.completed + swarm.failed;

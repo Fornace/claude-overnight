@@ -58,6 +58,7 @@ export class Swarm {
   rateLimitUtilization = 0;
   rateLimitResetsAt?: number;
   rateLimitWindows: Map<string, RateLimitWindow> = new Map();
+  rateLimitPaused = 0;
   isUsingOverage = false;
   overageDisabledReason?: string;
   overageCostUsd = 0;
@@ -198,12 +199,6 @@ export class Swarm {
 
   private async throttle(): Promise<void> {
     if (this.cappedOut) return;
-    const cap = this.usageCap;
-    if (cap != null && cap < 1 && this.rateLimitUtilization >= cap) {
-      this.cappedOut = true;
-      this.log(-1, `Usage cap ${Math.round(cap * 100)}% reached (at ${Math.round(this.rateLimitUtilization * 100)}%) — finishing active agents, no new tasks`);
-      return;
-    }
     if (this.isUsingOverage && !this.allowExtraUsage) {
       this.capForOverage(`Extra usage detected but not allowed — stopping dispatch`);
       return;
@@ -212,12 +207,27 @@ export class Swarm {
       this.capForOverage(`Extra usage budget $${this.extraUsageBudget} reached ($${this.overageCostUsd.toFixed(2)} spent) — stopping dispatch`);
       return;
     }
+    const cap = this.usageCap;
+    if (cap != null && cap < 1 && this.rateLimitUtilization >= cap) {
+      const waitMs = this.rateLimitResetsAt
+        ? Math.max(5000, this.rateLimitResetsAt - Date.now())
+        : 60_000;
+      this.log(-1, `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap * 100)}%), waiting ${Math.ceil(waitMs / 1000)}s for cooldown`);
+      this.rateLimitPaused++;
+      await sleep(waitMs);
+      this.rateLimitPaused--;
+      this.rateLimitUtilization = 0;
+      this.rateLimitResetsAt = undefined;
+      return;
+    }
     if (this.rateLimitResetsAt) {
       const resetTarget = this.rateLimitResetsAt;
       const waitMs = resetTarget - Date.now();
       if (waitMs > 0) {
         this.log(-1, `Rate limited, pausing ${Math.ceil(waitMs / 1000)}s`);
+        this.rateLimitPaused++;
         await sleep(waitMs);
+        this.rateLimitPaused--;
       }
       if (this.rateLimitResetsAt === resetTarget) this.rateLimitResetsAt = undefined;
     } else if (this.rateLimitUtilization > 0.75) {
