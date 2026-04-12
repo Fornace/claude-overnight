@@ -14,6 +14,15 @@ npm install -g claude-overnight
 
 Requires Node.js >= 20 and Claude authentication (`claude auth login`, or set `ANTHROPIC_API_KEY`).
 
+### Claude Code plugin
+
+This repo also ships a Claude Code plugin so any Claude instance (inside this repo or any other) knows how to use, inspect, and resume `claude-overnight` runs:
+
+```
+/plugin marketplace add Fornace/claude-overnight
+/plugin install claude-overnight
+```
+
 ## Quick start
 
 ```bash
