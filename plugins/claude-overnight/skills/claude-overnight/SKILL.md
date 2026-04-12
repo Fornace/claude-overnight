@@ -47,6 +47,8 @@ The newest subfolder under `runs/` is the current/last run. A run that never rea
 
 To assess status of a run from scratch, read in this order: `goal.md` → `status.md` → newest file in `milestones/` → newest `sessions/wave-*.json` → `run.json`. Five reads and you know exactly where it stands.
 
+**Durable run history (committed, survives cleanup):** `claude-overnight.log.md` at the repo root is updated on every run with a block per run ID — original objective, start/finish times, cost, outcome, branch. If the user asks "what was my prompt" or "what did last night's run do" and `.claude-overnight/runs/` is empty, this file is the canonical recovery path.
+
 # Resume / continue
 
 Just run `claude-overnight` again in the same repo. It auto-detects the unfinished run and shows a **Resume / Fresh / Quit** prompt. On resume: unmerged `swarm/task-*` branches auto-merge, the wave loop continues, status/goal/milestones/designs are preserved. If orchestration crashed after the thinking wave, surviving `designs/*.md` are reused — no re-paying for architects.

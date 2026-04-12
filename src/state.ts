@@ -91,6 +91,78 @@ export function writeGoalUpdate(baseDir: string, update: string): void {
   writeFileSync(goalPath, trimmed, "utf-8");
 }
 
+// ── Durable run log (claude-overnight.log.md, committed) ──
+// Tiny human-readable record per run so the objective survives even after
+// .claude-overnight/ is cleaned up. Append-only friendly: each run's block
+// is keyed by runId (the run dir basename) so concurrent runs on different
+// machines don't collide.
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export interface OvernightLogStart {
+  objective: string;
+  model: string;
+  budget: number;
+  flex: boolean;
+  usageCap?: number;
+  branch?: string;
+}
+
+export interface OvernightLogEnd {
+  cost: number;
+  completed: number;
+  failed: number;
+  waves: number;
+  phase: string;
+  elapsedSec: number;
+}
+
+export function appendOvernightLogStart(cwd: string, runId: string, meta: OvernightLogStart): void {
+  const path = join(cwd, "claude-overnight.log.md");
+  const startedAt = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  const capStr = meta.usageCap != null ? ` · **Cap:** ${meta.usageCap}%` : "";
+  const branchLine = meta.branch ? `\n- **Branch:** ${meta.branch}` : "";
+  const block = [
+    `## ${runId}`,
+    `- **Objective:** ${meta.objective || "(none)"}`,
+    `- **Started:** ${startedAt}`,
+    `- **Model:** ${meta.model} · **Budget:** ${meta.budget} · **Flex:** ${meta.flex ? "yes" : "no"}${capStr}${branchLine}`,
+    `- **Status:** running`,
+    "",
+    "",
+  ].join("\n");
+  let existing = "";
+  try { existing = readFileSync(path, "utf-8"); } catch {}
+  const header = existing ? "" : "# claude-overnight — run history\n\n";
+  writeFileSync(path, header + existing + block, "utf-8");
+}
+
+export function updateOvernightLogEnd(cwd: string, runId: string, meta: OvernightLogEnd): void {
+  const path = join(cwd, "claude-overnight.log.md");
+  let existing = "";
+  try { existing = readFileSync(path, "utf-8"); } catch { return; }
+  const finishedAt = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  const sec = meta.elapsedSec;
+  const elapsed = sec < 60 ? `${sec}s` : sec < 3600 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+  const outcome = meta.phase === "done" ? "✓ done" : meta.phase === "capped" ? "⊘ capped" : "⊘ stopped";
+  const endLines = [
+    `- **Finished:** ${finishedAt} (${elapsed})`,
+    `- **Cost:** $${meta.cost.toFixed(2)}`,
+    `- **Tasks:** ${meta.completed} done${meta.failed > 0 ? ` / ${meta.failed} failed` : ""} · **Waves:** ${meta.waves}`,
+    `- **Status:** ${outcome}`,
+  ].join("\n");
+  const re = new RegExp(`(## ${escapeRegExp(runId)}\\n(?:(?!\\n## )[\\s\\S])*?)- \\*\\*Status:\\*\\* running`);
+  if (re.test(existing)) {
+    writeFileSync(path, existing.replace(re, `$1${endLines}`), "utf-8");
+  } else {
+    const header = existing ? "" : "# claude-overnight — run history\n\n";
+    const block = `## ${runId}\n${endLines}\n\n`;
+    writeFileSync(path, header + existing + block, "utf-8");
+  }
+}
+
 // ── Run state persistence ──
 
 export function saveRunState(runDir: string, state: RunState): void {

@@ -16,6 +16,7 @@ import {
   readRunMemory, writeStatus, writeGoalUpdate, saveRunState,
   saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone,
   writeSteerInbox, consumeSteerInbox, countSteerInbox,
+  appendOvernightLogStart, updateOvernightLogEnd,
 } from "./state.js";
 
 export interface RunConfig {
@@ -185,6 +186,20 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     } catch {}
   }
   const waveMerge: MergeStrategy = (flex && runBranch) ? "yolo" : mergeStrategy;
+
+  const runId = runDir.split(/[/\\]/).pop() ?? "";
+  if (!cfg.resuming) {
+    try {
+      appendOvernightLogStart(cwd, runId, {
+        objective: objective || "",
+        model: workerModel,
+        budget: cfg.budget,
+        flex,
+        usageCap,
+        branch: runBranch,
+      });
+    } catch {}
+  }
 
   let stopping = false;
   const gracefulStop = () => {
@@ -365,6 +380,16 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}
     try { rmSync(join(runDir, "verifications"), { recursive: true, force: true }); } catch {}
   }
+  try {
+    updateOvernightLogEnd(cwd, runId, {
+      cost: accCost,
+      completed: accCompleted,
+      failed: accFailed,
+      waves: waveNum + 1,
+      phase: finalPhase,
+      elapsedSec: Math.round((Date.now() - cfg.runStartedAt) / 1000),
+    });
+  } catch {}
   if (runBranch && originalRef) {
     try { execSync(`git checkout "${originalRef}"`, { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
   }

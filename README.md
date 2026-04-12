@@ -140,7 +140,9 @@ If the thinking phase succeeds but orchestration crashes, the next run detects t
 
 **Knowledge carries forward** — new runs inherit knowledge from completed previous runs. Thinking agents and steering see what past runs built. Run 2 knows run 1 already built the auth system.
 
-Add `.claude-overnight` to your `.gitignore`.
+Add `.claude-overnight/` to your `.gitignore` (with the trailing slash — see below).
+
+A separate, tiny `claude-overnight.log.md` is also written at the repo root on every run. It's human-readable, append-only, one block per run (objective, start/finish, cost, outcome, branch), and is designed to be **committed** — so even after `.claude-overnight/` is cleaned up you can still recover which prompt produced which commits. Use `.claude-overnight/` (with trailing slash) in your gitignore so this file isn't matched by accident.
 
 ## Other usage modes
 

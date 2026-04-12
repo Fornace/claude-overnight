@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.11.6
+
+### Durable run history: `claude-overnight.log.md`
+
+The `.claude-overnight/` directory is ephemeral (and often gitignored), so once it's cleaned up the original objective, start time, and outcome of past runs are lost. 1.11.6 adds a small, committed, append-only log that survives cleanup.
+
+- **On run start**, a block is appended to `claude-overnight.log.md` at the repo root with the run ID, objective, model, budget, flex flag, usage cap, and branch. Status is marked `running`.
+- **On run end**, the same block is updated in place with finished timestamp, elapsed, cost, tasks done/failed, wave count, and outcome (`✓ done`, `⊘ capped`, `⊘ stopped`).
+- **Merge-friendly.** Each block is keyed by run ID (the run dir basename), so concurrent runs on different machines never collide. Two teammates running in parallel get two separate blocks.
+- **Filename chosen deliberately** — no dot prefix — so a `.claude-overnight` gitignore pattern (with or without trailing slash) never accidentally ignores it.
+
+Recover the objective of a past run: just open `claude-overnight.log.md` and find the matching run ID. No more "what was my prompt" archaeology through swarm/task-* branches.
+
 ## 1.11.5
 
 ### Rate limits: truly wait forever instead of stopping
