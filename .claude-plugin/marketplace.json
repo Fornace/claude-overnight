@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-overnight",
+  "description": "Claude Code plugin for claude-overnight — parallel agent orchestration, inspection, and resume guidance.",
+  "owner": {
+    "name": "Francesco Fornace"
+  },
+  "plugins": [
+    {
+      "name": "claude-overnight",
+      "description": "Understand, install, and inspect claude-overnight runs. Includes on-disk run layout, status/resume flow, and diagnostics guidance.",
+      "source": "./plugins/claude-overnight",
+      "category": "development",
+      "homepage": "https://github.com/Fornace/claude-overnight"
+    }
+  ]
+}

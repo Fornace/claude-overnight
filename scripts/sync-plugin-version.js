@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 const pkgVersion = JSON.parse(readFileSync("package.json", "utf-8")).version;
-const pluginPath = ".claude-plugin/plugin.json";
+const pluginPath = "plugins/claude-overnight/.claude-plugin/plugin.json";
 const plugin = JSON.parse(readFileSync(pluginPath, "utf-8"));
 
 if (plugin.version !== pkgVersion) {
