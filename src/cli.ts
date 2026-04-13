@@ -155,12 +155,14 @@ export function ask(question: string): Promise<string> {
 
   return new Promise((resolve) => {
     const segs: InputSegment[] = [];
-    const lastLine = question.split("\n").pop() ?? "";
 
+    // DEC save/restore cursor + clear-to-end-of-screen so redraws don't pile
+    // up when the input wraps past the terminal width onto additional rows.
     const redraw = () => {
-      stdout.write("\r\x1B[K" + lastLine + renderSegments(segs));
+      stdout.write("\x1B8\x1B[J" + question + renderSegments(segs));
     };
 
+    stdout.write("\x1B7");
     stdout.write(question);
     stdout.write("\x1B[?2004h");
     try { stdin.setRawMode!(true); } catch {}
