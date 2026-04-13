@@ -2,6 +2,15 @@ import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
 import type { RateLimitWindow, WaveSummary } from "./types.js";
 import { renderFrame, renderSteeringFrame } from "./render.js";
+import {
+  type InputSegment,
+  splitPaste,
+  segmentsToString,
+  renderSegments,
+  appendCharToSegments,
+  appendPasteToSegments,
+  backspaceSegments,
+} from "./cli.js";
 
 /** Short-lived context the steering view renders around its live log. */
 export interface SteeringContext {
@@ -61,7 +70,7 @@ export class RunDisplay {
   private interval?: ReturnType<typeof setInterval>;
   private keyHandler?: (buf: Buffer) => void;
   private inputMode: "none" | "budget" | "threshold" | "steer" | "ask" = "none";
-  private inputBuf = "";
+  private inputSegs: InputSegment[] = [];
   private started = false;
   private readonly isTTY: boolean;
   private lastSeq = 0;
@@ -140,6 +149,7 @@ export class RunDisplay {
     if (this.keyHandler) {
       process.stdin.removeListener("data", this.keyHandler);
       this.keyHandler = undefined;
+      try { process.stdout.write("\x1B[?2004l"); } catch {}
       try { process.stdin.setRawMode!(false); process.stdin.pause(); } catch {}
     }
     try { process.stdout.write("\x1B[?25h"); } catch {}
@@ -187,17 +197,18 @@ export class RunDisplay {
 
   private renderInputPrompt(): string {
     if (this.inputMode === "none") return "";
+    const rendered = renderSegments(this.inputSegs);
     if (this.inputMode === "budget") {
-      return `\n  ${chalk.cyan(">")} New budget (remaining sessions): ${this.inputBuf}\u2588`;
+      return `\n  ${chalk.cyan(">")} New budget (remaining sessions): ${rendered}\u2588`;
     }
     if (this.inputMode === "threshold") {
-      return `\n  ${chalk.cyan(">")} New usage cap (0-100%): ${this.inputBuf}\u2588`;
+      return `\n  ${chalk.cyan(">")} New usage cap (0-100%): ${rendered}\u2588`;
     }
     if (this.inputMode === "steer") {
-      return `\n  ${chalk.cyan(">")} ${chalk.bold("Steer next wave")} ${chalk.dim("(Enter to queue, Esc to cancel)")}\n  ${this.inputBuf}\u2588`;
+      return `\n  ${chalk.cyan(">")} ${chalk.bold("Steer next wave")} ${chalk.dim("(Enter to queue, Esc to cancel)")}\n  ${rendered}\u2588`;
     }
     if (this.inputMode === "ask") {
-      return `\n  ${chalk.cyan(">")} ${chalk.bold("Ask the planner")} ${chalk.dim("(Enter to send, Esc to cancel)")}\n  ${this.inputBuf}\u2588`;
+      return `\n  ${chalk.cyan(">")} ${chalk.bold("Ask the planner")} ${chalk.dim("(Enter to send, Esc to cancel)")}\n  ${rendered}\u2588`;
     }
     return "";
   }
@@ -226,13 +237,46 @@ export class RunDisplay {
   private setupHotkeys(): void {
     if (!this.liveConfig || !process.stdin.isTTY) return;
     try { process.stdin.setRawMode!(true); process.stdin.resume(); } catch { return; }
+    try { process.stdout.write("\x1B[?2004h"); } catch {}
 
-    const lc = this.liveConfig;
     this.keyHandler = (buf: Buffer) => {
-      const s = buf.toString();
-      if (this.inputMode === "budget" || this.inputMode === "threshold") {
-        if (s === "\r" || s === "\n") {
-          const val = parseFloat(this.inputBuf);
+      const chunk = buf.toString();
+      let dirty = false;
+      for (const seg of splitPaste(chunk)) {
+        if (seg.type === "paste") {
+          if (this.handlePaste(seg.text)) dirty = true;
+        } else {
+          if (this.handleTyped(seg.text)) dirty = true;
+        }
+      }
+      if (dirty) this.flush();
+    };
+    process.stdin.on("data", this.keyHandler);
+  }
+
+  /** Handle a pasted block. Returns true if the frame needs a redraw. */
+  private handlePaste(text: string): boolean {
+    if (this.inputMode === "budget" || this.inputMode === "threshold") {
+      const clean = text.replace(/[^0-9.]/g, "");
+      if (clean) appendCharToSegments(this.inputSegs, clean);
+      return !!clean;
+    }
+    if (this.inputMode === "steer" || this.inputMode === "ask") {
+      if (segmentsToString(this.inputSegs).length + text.length > MAX_INPUT_LEN) return false;
+      appendPasteToSegments(this.inputSegs, text);
+      return true;
+    }
+    return false;
+  }
+
+  /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw. */
+  private handleTyped(s: string): boolean {
+    const lc = this.liveConfig!;
+    if (this.inputMode === "budget" || this.inputMode === "threshold") {
+      let dirty = false;
+      for (const ch of s) {
+        if (ch === "\r" || ch === "\n") {
+          const val = parseFloat(segmentsToString(this.inputSegs));
           if (this.inputMode === "budget" && !isNaN(val) && val > 0) {
             lc.remaining = Math.round(val);
             lc.dirty = true;
@@ -245,87 +289,87 @@ export class RunDisplay {
             this.swarm?.log(-1, `Usage cap changed to ${val > 0 ? val + "%" : "unlimited"}`);
           }
           this.inputMode = "none";
-          this.inputBuf = "";
-        } else if (s === "\x1B" || s === "\x03") {
+          this.inputSegs = [];
+          return true;
+        }
+        if (ch === "\x1B" || ch === "\x03") {
           this.inputMode = "none";
-          this.inputBuf = "";
-        } else if (s === "\x7F") {
-          this.inputBuf = this.inputBuf.slice(0, -1);
-        } else if (/^[0-9.]$/.test(s)) {
-          this.inputBuf += s;
+          this.inputSegs = [];
+          return true;
         }
-        this.flush();
-        return;
+        if (ch === "\x7F") { backspaceSegments(this.inputSegs); dirty = true; continue; }
+        if (/^[0-9.]$/.test(ch)) { appendCharToSegments(this.inputSegs, ch); dirty = true; }
       }
-      if (this.inputMode === "steer" || this.inputMode === "ask") {
-        for (const ch of s) {
-          if (ch === "\r" || ch === "\n") {
-            const text = this.inputBuf.trim();
-            const wasAsk = this.inputMode === "ask";
-            this.inputMode = "none";
-            this.inputBuf = "";
-            if (text) {
-              if (wasAsk) this.onAsk?.(text);
-              else this.onSteer?.(text);
-            }
-            this.flush();
-            return;
+      return dirty;
+    }
+    if (this.inputMode === "steer" || this.inputMode === "ask") {
+      let dirty = false;
+      for (const ch of s) {
+        if (ch === "\r" || ch === "\n") {
+          const text = segmentsToString(this.inputSegs).trim();
+          const wasAsk = this.inputMode === "ask";
+          this.inputMode = "none";
+          this.inputSegs = [];
+          if (text) {
+            if (wasAsk) this.onAsk?.(text);
+            else this.onSteer?.(text);
           }
-          if (ch === "\x03") {
-            this.inputMode = "none";
-            this.inputBuf = "";
-            this.flush();
-            return;
-          }
-          // Ignore raw ESC only — let ANSI sequences (arrows etc.) fall through
-          if (ch === "\x1B" && s.length === 1) {
-            this.inputMode = "none";
-            this.inputBuf = "";
-            this.flush();
-            return;
-          }
-          if (ch === "\x7F" || ch === "\b") {
-            this.inputBuf = this.inputBuf.slice(0, -1);
-            continue;
-          }
-          const code = ch.charCodeAt(0);
-          if (code >= 0x20 && code <= 0x7E && this.inputBuf.length < MAX_INPUT_LEN) {
-            this.inputBuf += ch;
-          }
+          return true;
         }
-        this.flush();
-        return;
-      }
-      // Dismiss completed ask panel on Escape
-      if (s === "\x1B" && this.askState && !this.askState.streaming) {
-        this.askState = undefined;
-        return;
-      }
-      if (s === "b" || s === "B") { this.inputMode = "budget"; this.inputBuf = ""; }
-      else if (s === "t" || s === "T") {
-        if (this.swarm) { this.inputMode = "threshold"; this.inputBuf = ""; }
-      }
-      else if ((s === "f" || s === "F") && this.swarm && this.swarm.failed > 0 && this.swarm.active > 0) {
-        this.swarm.requeueFailed();
-      }
-      else if ((s === "s" || s === "S") && this.onSteer) {
-        this.inputMode = "steer"; this.inputBuf = "";
-      }
-      else if (s === "?" && this.onAsk && this.swarm && !this.askBusy) {
-        // If ask panel is showing a completed answer, dismiss it instead of opening new
-        if (this.askState && !this.askState.streaming) { this.askState = undefined; return; }
-        this.inputMode = "ask"; this.inputBuf = "";
-      }
-      else if (s === "q" || s === "Q" || s === "\x03") {
-        if (this.swarm) {
-          if (this.swarm.aborted) process.exit(0);
-          this.swarm.abort();
-        } else {
-          process.exit(0);
+        if (ch === "\x03") {
+          this.inputMode = "none";
+          this.inputSegs = [];
+          return true;
+        }
+        // Ignore raw ESC only — let ANSI sequences (arrows etc.) fall through
+        if (ch === "\x1B" && s.length === 1) {
+          this.inputMode = "none";
+          this.inputSegs = [];
+          return true;
+        }
+        if (ch === "\x7F" || ch === "\b") {
+          backspaceSegments(this.inputSegs);
+          dirty = true;
+          continue;
+        }
+        const code = ch.charCodeAt(0);
+        if (code >= 0x20 && code <= 0x7E && segmentsToString(this.inputSegs).length < MAX_INPUT_LEN) {
+          appendCharToSegments(this.inputSegs, ch);
+          dirty = true;
         }
       }
-    };
-    process.stdin.on("data", this.keyHandler);
+      return dirty;
+    }
+    // Hotkey mode
+    if (s === "\x1B" && this.askState && !this.askState.streaming) {
+      this.askState = undefined;
+      return false;
+    }
+    if (s === "b" || s === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
+    if (s === "t" || s === "T") {
+      if (this.swarm) { this.inputMode = "threshold"; this.inputSegs = []; return true; }
+      return false;
+    }
+    if ((s === "f" || s === "F") && this.swarm && this.swarm.failed > 0 && this.swarm.active > 0) {
+      this.swarm.requeueFailed();
+      return false;
+    }
+    if ((s === "s" || s === "S") && this.onSteer) {
+      this.inputMode = "steer"; this.inputSegs = []; return true;
+    }
+    if (s === "?" && this.onAsk && this.swarm && !this.askBusy) {
+      if (this.askState && !this.askState.streaming) { this.askState = undefined; return false; }
+      this.inputMode = "ask"; this.inputSegs = []; return true;
+    }
+    if (s === "q" || s === "Q" || s === "\x03") {
+      if (this.swarm) {
+        if (this.swarm.aborted) process.exit(0);
+        this.swarm.abort();
+      } else {
+        process.exit(0);
+      }
+    }
+    return false;
   }
 
   private plainTick(): void {

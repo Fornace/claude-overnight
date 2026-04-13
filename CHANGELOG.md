@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.11.11
+
+### Pasting multi-line text no longer submits on the first newline
+
+Every text-input prompt in the CLI — startup objective, budget/concurrency/model, "What should change?" feedback during review, "Ask about the plan", and the in-run steer/ask modes — now uses bracketed paste mode (`\x1B[?2004h`). Pasted content is wrapped by the terminal in `\x1B[200~…\x1B[201~` so pasted newlines can be distinguished from typed Enter. Before this fix, pasting any multi-line text would fire submit on the first `\n` and the remaining lines would leak into the terminal as stray commands.
+
+While editing, large or multi-line pastes render as a dim `[Pasted +N lines]` placeholder (matching Claude Code's behavior), keeping the prompt readable; the full text is substituted back in on submit. Backspace removes a paste block atomically instead of one char at a time.
+
+Implemented in `cli.ts` (`splitPaste`, segment helpers, and a new raw-mode `ask()`) and wired through the `RunDisplay` key handler in `ui.ts` so `budget`/`threshold`/`steer`/`ask` modes all share the same segment buffer. Numeric modes sanitize pasted content to `[0-9.]` so stray paste markers can't corrupt the value.
+
 ## 1.11.10
 
 ### Agent self-commits no longer orphan branches
