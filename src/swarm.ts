@@ -250,6 +250,8 @@ export class Swarm {
     if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree) {
       const branch = `swarm/task-${id}`;
       const dir = join(this.worktreeBase, `agent-${id}`);
+      let baseRef: string | undefined;
+      try { baseRef = gitExec("git rev-parse HEAD", this.config.cwd).trim(); } catch {}
       let worktreeOk = false;
       for (let wt = 0; wt < 2 && !worktreeOk; wt++) {
         try {
@@ -267,6 +269,7 @@ export class Swarm {
       if (worktreeOk) {
         agentCwd = dir;
         agent.branch = branch;
+        agent.baseRef = baseRef;
         this.log(id, `Worktree: ${branch}`);
       } else {
         this.log(id, `Worktree failed after retry — running without isolation`);
@@ -392,7 +395,7 @@ export class Swarm {
     }
 
     if (this.config.useWorktrees && agent.branch) {
-      agent.filesChanged = autoCommit(agent.id, agent.task.prompt, agentCwd, (id, text) => this.log(id, text));
+      agent.filesChanged = autoCommit(agent.id, agent.task.prompt, agentCwd, agent.baseRef, (id, text) => this.log(id, text));
     }
   }
 

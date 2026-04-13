@@ -63,6 +63,8 @@ export interface AgentState {
   costUsd?: number;
   /** Git branch name when using worktree isolation. */
   branch?: string;
+  /** Commit the worktree branch was created from — the baseline for measuring filesChanged. */
+  baseRef?: string;
   /** Number of files changed by the agent (from git diff). */
   filesChanged?: number;
 }

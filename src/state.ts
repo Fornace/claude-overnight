@@ -410,7 +410,10 @@ export function recordBranches(
 }
 
 export function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: (msg: string) => void): void {
-  const unmerged = branches.filter(b => b.status === "unmerged" && b.filesChanged > 0);
+  // Do NOT gate on filesChanged — pre-1.11.10 runs can record filesChanged=0
+  // for branches that actually contain real commits (agent self-committed).
+  // Feed every unmerged branch to git; it will no-op harmlessly if truly empty.
+  const unmerged = branches.filter(b => b.status === "unmerged");
   if (unmerged.length === 0) return;
   onLog(`Merging ${unmerged.length} unmerged branches...`);
   for (const br of unmerged) {

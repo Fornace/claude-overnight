@@ -17,26 +17,40 @@ export interface MergeResult {
 }
 
 export function autoCommit(
-  agentId: number, taskPrompt: string, worktreeCwd: string,
+  agentId: number, taskPrompt: string, worktreeCwd: string, baseRef: string | undefined,
   log: (id: number, msg: string) => void,
 ): number {
   if (!existsSync(worktreeCwd)) { log(agentId, "Worktree directory gone, skipping commit"); return 0; }
+  // Step 1: commit any uncommitted changes. Agents *may* commit their own work;
+  // we pick up whatever is still dirty.
   let status: string;
   try { status = gitExec("git status --porcelain", worktreeCwd); }
   catch (err: any) { log(agentId, `git status failed: ${String(err.message || err).slice(0, 120)}`); return 0; }
-  if (!status.trim()) return 0;
-  const lines = status.trim().split("\n").length;
-  try { gitExec("git add -A", worktreeCwd); }
-  catch (err: any) { log(agentId, `git add failed: ${String(err.message || err).slice(0, 120)}`); return lines; }
-  try {
-    const msg = taskPrompt.slice(0, 72).replace(/'/g, "'\\''");
-    gitExec(`git commit -m 'swarm: ${msg}'`, worktreeCwd);
-    log(agentId, `Committed ${lines} file(s)`);
-  } catch (err: any) {
-    const msg = String(err.message || err);
-    if (!msg.includes("nothing to commit")) log(agentId, `git commit failed: ${msg.slice(0, 120)}`);
+  if (status.trim()) {
+    try { gitExec("git add -A", worktreeCwd); }
+    catch (err: any) { log(agentId, `git add failed: ${String(err.message || err).slice(0, 120)}`); }
+    try {
+      const msg = taskPrompt.slice(0, 72).replace(/'/g, "'\\''");
+      gitExec(`git commit -m 'swarm: ${msg}'`, worktreeCwd);
+    } catch (err: any) {
+      const m = String(err.message || err);
+      if (!m.includes("nothing to commit")) log(agentId, `git commit failed: ${m.slice(0, 120)}`);
+    }
   }
-  return lines;
+  // Step 2: measure against the worktree's origin commit — true regardless of
+  // who made the commits (agent or autoCommit). Pre-1.11.10 this counted
+  // `git status --porcelain` lines, which was zero whenever the agent committed
+  // its own work → filesChanged=0 → branch skipped by the merge gate → orphaned.
+  if (!baseRef) return 0;
+  try {
+    const diff = gitExec(`git diff --name-only ${baseRef}..HEAD`, worktreeCwd);
+    const count = diff.trim().split("\n").filter(Boolean).length;
+    if (count > 0) log(agentId, `${count} file(s) changed`);
+    return count;
+  } catch (err: any) {
+    log(agentId, `diff vs base failed: ${String(err.message || err).slice(0, 120)}`);
+    return 0;
+  }
 }
 
 export interface MergeAllResult {
@@ -168,8 +182,17 @@ export function cleanStaleWorktrees(cwd: string, log: (id: number, msg: string) 
       .split("\n")
       .map(b => b.trim().replace(/^\* /, ""))
       .filter(b => b.startsWith("swarm/task-") && !worktreeBranches.has(b));
-    for (const b of branches) { try { gitExec(`git branch -D "${b}"`, cwd); } catch {} }
-    if (branches.length > 0) log(-1, `Cleaned ${branches.length} stale swarm branch(es)`);
+    // Use -d (safe delete) rather than -D: branches whose commits aren't in
+    // HEAD are orphaned work from a prior failed/unmerged run and must survive
+    // so the user can recover them. Only already-merged (ff) branches are
+    // actually deleted here.
+    let cleaned = 0;
+    for (const b of branches) {
+      try { gitExec(`git branch -d "${b}"`, cwd); cleaned++; } catch {}
+    }
+    if (cleaned > 0) log(-1, `Cleaned ${cleaned} stale swarm branch(es)`);
+    const orphaned = branches.length - cleaned;
+    if (orphaned > 0) log(-1, `Kept ${orphaned} orphaned swarm branch(es) with unmerged commits — resume to recover`);
   } catch {}
 }
 

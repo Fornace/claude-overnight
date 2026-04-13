@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.11.10
+
+### Agent self-commits no longer orphan branches
+
+Seen live in a 53-task payme run: 15/53 branches landed with real commits on disk but `filesChanged: 0` in `run.json`, got filtered out of the merge gate, and silently orphaned. All 15 were tasks where the agent chose to `git commit` its own work (despite the preamble telling it not to — some agents prefer owning their git hygiene, and we should accommodate that).
+
+Root cause: `autoCommit()` in `merge.ts` measured work by counting `git status --porcelain` lines in the worktree. Once the agent committed its changes, the worktree was clean at measurement time → 0 lines → `filesChanged=0` → the merge gate in `swarm.ts` (`filter(a => (a.filesChanged ?? 0) > 0)`) dropped the branch → `mergeAllBranches` never saw it → branch and commits survived on disk but were neither merged nor cleaned up.
+
+The smoking gun was consistent: 15 branches with `status: "unmerged"` and `filesChanged: 0` whose `git log main..swarm/task-N` each showed exactly one real commit. The filesChanged number and the branch state disagreed — the number was always the wrong one.
+
+Fix: make filesChanged the *result* of measurement, not the *cause* of inclusion. `autoCommit` now captures `baseRef` (the commit the worktree was branched from) at worktree-add time, auto-commits any still-dirty files if present, then measures `git diff --name-only <baseRef>..HEAD` as the single source of truth. This is correct regardless of who made the commits — agent, autoCommit, or both.
+
+Secondary fixes so old orphans can still be recovered after upgrading:
+
+- `cleanStaleWorktrees` now uses `git branch -d` (safe) instead of `-D` (force). Already-merged branches still get cleaned; branches with unmerged commits survive. A separate log line reports how many orphans were kept so you know they exist.
+- `autoMergeBranches` (the resume-time recovery path in `state.ts`) no longer gates on `filesChanged > 0` — it feeds every `status: "unmerged"` branch to git and lets git decide. This catches pre-1.11.10 BranchRecords that have the wrong count baked in.
+
+Regression test in `auto-commit-self-commit.test.ts` simulates the exact scenario with a real git worktree: agent commits, worktree stays clean, autoCommit must still report the right count. Also covers the dirty-only, mixed, noop, and missing-baseRef cases.
+
 ## 1.11.9
 
 ### macOS `/private` tmpdir bug broke stale-worktree cleanup
