@@ -171,7 +171,7 @@ async function main() {
 
   if (argv.includes("-h") || argv.includes("--help")) {
     console.log(`
-  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("— fire off Claude agents, come back to shipped work")}
+  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("— background lane for your Claude Max plan")}
   ${chalk.dim("─".repeat(60))}
 
   ${chalk.cyan("Usage")}

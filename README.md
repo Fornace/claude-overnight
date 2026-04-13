@@ -1,10 +1,12 @@
 # claude-overnight
 
-**Run 10, 100, or 1000 Claude agents overnight.** A local multi-session orchestrator for the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — parallel Claude agent sessions in isolated git worktrees, spend caps, rate-limit handling, and crash-safe resume across days. Press Run and go to sleep.
+**A background lane for your Claude Max plan.** Runs a capped swarm of Claude Agent SDK sessions in isolated git worktrees — stops at a usage cap you set, so your interactive Claude Code always has headroom. Rate-limited? It waits. Crash? It resumes with full context.
 
-Local-first, git-native, budget-first. Describe what to build, set a spend cap, press Run. The tool plans with a thinking wave of architect sessions, breaks the objective into concrete tasks, launches parallel agent sessions in isolated git worktrees, iterates toward quality with a planner/executor/reflection loop, handles rate limits automatically, and resumes cleanly across crashes, rate-limit windows, and laptop sleeps. You wake up to merged commits.
+Your Max plan rate limits eat interactive coding time. One deep refactor and the 5-hour window is gone before lunch. `claude-overnight` runs background agent sessions up to the percentage cap you pick (90% is typical), leaving the rest free for your own Claude Code session. Hand it an objective and a session budget, walk away, review the diff when the run ends.
 
-Different shape from hosted single-session agent harnesses like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): instead of one agent in one cloud container, you get many parallel agent sessions running on your own machine, in your real repo, coordinated by multi-wave steering. Works with Claude Opus, Sonnet, and Haiku — or pair an Anthropic planner with a cheaper executor on Qwen, OpenRouter, or any Anthropic-compatible endpoint via the `Other…` picker.
+Isolated by default. Every agent runs in its own git worktree on its own branch, so a misbehaving agent can't trash your working tree. You choose what agents can do before the run starts — no surprise escalation mid-flight. Unmerged branches are preserved for manual review, never discarded. Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — not a Claude Code replacement, but a background lane that runs alongside it.
+
+Different shape from hosted agent harnesses like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): instead of one agent in one cloud container billed separately, you get many parallel sessions on your own machine, in your real repo, against your own Max plan (or API key). Works with Claude Opus, Sonnet, and Haiku — or pair an Anthropic planner with a cheaper executor on Qwen, OpenRouter, or any Anthropic-compatible endpoint.
 
 ## Install
 
@@ -53,27 +55,22 @@ claude-overnight
 
 ◆ Thinking: 5 agents exploring...         ← architects analyze your codebase
 ◆ Orchestrating plan...                   ← synthesizes 50 concrete tasks
-◆ Wave 1 · 50 tasks · $4.20 spent        ← fully autonomous from here
+◆ Wave 1 · 50 tasks · $4.20 spent        ← runs unattended from here
   ↑ 1.2M in  ↓ 340K out  $4.20 / $4.24 total
 ◆ Assessing... how close to amazing?
 ◆ Wave 2 · 30 tasks · $18.50 spent       ← improvements from assessment
 ◆ Reflection: 2 agents reviewing          ← deep quality audit
 ◆ Wave 3 · 20 tasks · $31.00 spent       ← fixes from review findings
-◆ Assessing... ✓ Vision met
+◆ Assessing... ✓ Done
 ```
 
-You interact once (objective, budget, model, review themes), then everything runs autonomously — thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
+You interact once (objective, budget, model, review themes), then the rest runs unattended — thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
 
-## How is this different?
+## How it differs
 
-Claude already has several ways to run agents. `claude-overnight` fills a specific niche:
-
-- **Claude Code** — interactive pair programming in your terminal. One agent, one conversation, you drive. `claude-overnight` is the inverse: many agents, no driver, you walk away and come back to merged commits.
-- **[Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview)** — a hosted single-session agent harness. One agent, one cloud container, stateful conversation. `claude-overnight` is a local multi-session *orchestrator* built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk): many parallel sessions on your machine, in your real repo, with spend caps and multi-day crash-safe resume.
-- **[Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)** — primitives for building your own agent. `claude-overnight` is one specific thing built on top of it: an overnight swarm orchestrator you didn't have to write.
-- **IDE copilots (Cursor, Copilot, Cline, etc.)** — synchronous assistants that complete while you're at the keyboard. `claude-overnight` is asynchronous: you hand off an objective and a budget, close the laptop lid, and review a branch in the morning.
-
-If you want to hand an objective and a spend cap to Claude and wake up to shipped work on your real repo, this is the shape.
+- vs **Claude Code**: many agents, no driver, capped so your Claude Code session keeps its headroom
+- vs **[Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview)**: on your machine, against your Max plan, in your real git history — not a cloud container billed separately
+- vs **Cursor / Copilot / Cline**: asynchronous, off the keyboard
 
 ## Use cases
 
@@ -86,17 +83,17 @@ If you want to hand an objective and a spend cap to Claude and wake up to shippe
 - **Quality audits** — reflection waves surface architectural issues and code smells.
 - **Long research runs** — architect sessions explore a large codebase before any code lands.
 
-Typical shape: one objective + a $20–$200 spend cap + sleep.
+Typical shape: one objective + a $20–$200 spend cap + walk away.
 
 ## How it works
 
-### 1. Thinking wave — parallel architect sessions
+### 1. Thinking phase — parallel architect sessions
 
 For budgets > 15, the tool launches **architect agents** that explore your codebase before any code is written. Each one gets a different research angle (architecture, data models, APIs, testing, etc.) and writes a structured design document. The number scales with budget: 5 for budget=50, 10 for budget=2000.
 
 ### 2. Task orchestration
 
-An orchestrator session reads all design documents and synthesizes concrete execution tasks — grounded in real files and patterns the architects found. No guesswork. The task plan is also written to a file for resilience — if orchestration is interrupted, partial results survive.
+An orchestrator session reads all design documents and synthesizes concrete execution tasks — grounded in real files and patterns the architects found. The task plan is also written to a file for resilience — if orchestration is interrupted, partial results survive.
 
 ### 3. Parallel execution waves
 
@@ -110,7 +107,7 @@ After each wave, steering assesses: "how good is this?" — not "what's missing?
 
 ### 4. Goal refinement and steering
 
-The tool starts with your broad objective but evolves its definition of "amazing" as it learns your codebase. Steering refines the goal after each wave. Late waves are informed by early discoveries.
+The tool starts with your broad objective but refines its definition of quality as it learns your codebase. Steering updates the goal after each wave. Late waves are informed by early discoveries.
 
 ### 5. Three-layer context memory
 
@@ -118,7 +115,7 @@ Long runs stay sharp because steering maintains three layers of memory:
 
 - **Status** — a living project snapshot, updated every wave. Compressed, never truncated.
 - **Milestones** — strategic snapshots archived every ~5 waves. Long-term memory.
-- **Goal** — the evolving north star. What "amazing" means for this codebase.
+- **Goal** — the evolving north star. What quality means for this codebase.
 
 ## Run history, resume, and knowledge carryforward
 
