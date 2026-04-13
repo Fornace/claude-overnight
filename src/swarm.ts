@@ -6,7 +6,7 @@ import type {
   SDKMessage, SDKResultMessage, SDKResultError, SDKAssistantMessage,
   SDKPartialAssistantMessage, SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
-import { NudgeError } from "./types.js";
+import { NudgeError, RATE_LIMIT_WINDOW_SHORT } from "./types.js";
 import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult } from "./merge.js";
@@ -36,6 +36,8 @@ export interface SwarmConfig {
   allowExtraUsage?: boolean;
   extraUsageBudget?: number;
   baseCostUsd?: number;
+  /** Per-task env overrides: given a model id, return the env to pass to `query()` (or undefined for Anthropic default). */
+  envForModel?: (model?: string) => Record<string, string> | undefined;
 }
 
 export class Swarm {
@@ -61,6 +63,8 @@ export class Swarm {
   rateLimitPaused = 0;
   isUsingOverage = false;
   overageCostUsd = 0;
+  private rateLimitExplained = false;
+  private rateLimitWakers: (() => void)[] = [];
 
   /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
   targetConcurrency: number;
@@ -135,6 +139,54 @@ export class Swarm {
     if (this.paused === b) return;
     this.paused = b;
     this.log(-1, b ? "Dispatch paused" : "Dispatch resumed");
+  }
+
+  /** Returns the rate-limit window currently holding the swarm back — rejected first, then highest utilization. */
+  mostConstrainedWindow(): RateLimitWindow | undefined {
+    const windows = Array.from(this.rateLimitWindows.values());
+    if (windows.length === 0) return undefined;
+    const rejected = windows.find(w => w.status === "rejected" && (!w.resetsAt || w.resetsAt > Date.now()));
+    if (rejected) return rejected;
+    return windows.reduce((a, b) => (a.utilization >= b.utilization ? a : b));
+  }
+
+  private windowTag(): string {
+    const w = this.mostConstrainedWindow();
+    if (!w) return "";
+    const name = RATE_LIMIT_WINDOW_SHORT[w.type] ?? w.type.replace(/_/g, " ");
+    return ` (${name} window)`;
+  }
+
+  /** Cancellable sleep used by rate-limit waits. `retryRateLimitNow()` wakes every pending sleeper. */
+  private rateLimitSleep(ms: number): Promise<void> {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const i = this.rateLimitWakers.indexOf(finish);
+        if (i >= 0) this.rateLimitWakers.splice(i, 1);
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      this.rateLimitWakers.push(finish);
+    });
+  }
+
+  /** Force-wake every rate-limit sleeper and clear the reset timestamp so the next attempt fires immediately. */
+  retryRateLimitNow(): void {
+    const n = this.rateLimitWakers.length;
+    if (n === 0) {
+      this.log(-1, "Retry-now: no workers waiting on rate limit");
+      return;
+    }
+    this.rateLimitResetsAt = undefined;
+    this.rateLimitUtilization = 0;
+    const wakers = this.rateLimitWakers.slice();
+    this.rateLimitWakers.length = 0;
+    for (const w of wakers) w();
+    this.log(-1, `Retry-now: woke ${n} worker(s) — hitting API immediately (may be rejected again)`);
   }
 
   /** Live-adjust the overage spend cap. `undefined` = unlimited. If already over the new cap, stop dispatch. */
@@ -334,10 +386,10 @@ export class Swarm {
         : fallbackMs;
       const reason = capExceeded
         ? `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap! * 100)}%)`
-        : "Rate limited";
-      this.log(-1, `${reason} — waiting ${Math.ceil(waitMs / 1000)}s then retrying`);
+        : `Rate limited${this.windowTag()}`;
+      this.log(-1, `${reason} — waiting ${Math.ceil(waitMs / 1000)}s then retrying ([r] to retry now)`);
       this.rateLimitPaused++;
-      await sleep(waitMs);
+      await this.rateLimitSleep(waitMs);
       this.rateLimitPaused--;
       this.rateLimitUtilization = 0;
       this.rateLimitResetsAt = undefined;
@@ -408,13 +460,16 @@ export class Swarm {
               ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${preamble}${task.prompt}`
               : `${preamble}${task.prompt}`;
 
+          const effectiveModel = task.model || this.config.model;
+          const envOverride = this.config.envForModel?.(effectiveModel);
           const agentQuery = query({
             prompt: agentPrompt,
             options: {
-              cwd: agentCwd, model: task.model || this.config.model, permissionMode: perm,
+              cwd: agentCwd, model: effectiveModel, permissionMode: perm,
               ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
               allowedTools: this.config.allowedTools, includePartialMessages: true, persistSession: true,
               ...(isResume && resumeSessionId && { resume: resumeSessionId }),
+              ...(envOverride && { env: envOverride }),
             },
           });
 
@@ -490,10 +545,10 @@ export class Swarm {
           // we eventually surrender instead of looping forever.
           const globallyStalled = Date.now() - this.lastProgressAt > 15 * 60_000;
           const freebie = !globallyStalled;
-          this.log(id, `Rate limited — waiting ${Math.ceil(waitMs / 1000)}s${freebie ? " (attempt not counted)" : " (counted — swarm stalled)"}`);
+          this.log(id, `Rate limited${this.windowTag()} — waiting ${Math.ceil(waitMs / 1000)}s${freebie ? " (attempt not counted)" : " (counted — swarm stalled)"} ([r] to retry now)`);
           agent.blockedAt = Date.now();
           this.rateLimitPaused++;
-          await sleep(waitMs);
+          await this.rateLimitSleep(waitMs);
           this.rateLimitPaused--;
           agent.blockedAt = undefined;
           this.isUsingOverage = false;
@@ -625,6 +680,12 @@ export class Swarm {
         if (info.status === "rejected") {
           if (!this.rateLimitResetsAt || this.rateLimitResetsAt <= Date.now()) {
             this.rateLimitResetsAt = Date.now() + 60_000;
+          }
+          if (!this.rateLimitExplained) {
+            this.rateLimitExplained = true;
+            const name = windowType ? (RATE_LIMIT_WINDOW_SHORT[windowType] ?? windowType.replace(/_/g, " ")) : "Anthropic";
+            const overageNote = this.isUsingOverage ? " even on overage" : "";
+            this.log(-1, `${name} window is full${overageNote} — plan-level Anthropic limit, not a claude-overnight cap. Press [r] to retry now, [c] to lower concurrency, or wait for reset.`);
           }
           throw new Error("rate limit rejected — retrying");
         }

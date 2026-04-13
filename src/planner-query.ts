@@ -30,6 +30,16 @@ export interface PlannerOpts {
   outputFormat?: { type: "json_schema"; schema: Record<string, unknown> };
 }
 
+// ── Shared env resolver (set once at run start, used by every planner query) ──
+//
+// Swarm and planner calls share a model→env map so a custom provider configured
+// as planner or worker routes its traffic without threading extra params
+// through every planner.ts / steering.ts function.
+let _envResolver: ((model?: string) => Record<string, string> | undefined) | undefined;
+export function setPlannerEnvResolver(fn: ((model?: string) => Record<string, string> | undefined) | undefined): void {
+  _envResolver = fn;
+}
+
 // ── Model tier detection ──
 
 export type ModelTier = "opus" | "sonnet" | "haiku" | "unknown";
@@ -124,6 +134,7 @@ async function runPlannerQueryOnce(
   let structuredOutput: unknown;
   const startedAt = Date.now();
   const isResume = !!opts.resumeSessionId;
+  const envOverride = _envResolver?.(opts.model);
   const pq = query({
     prompt,
     options: {
@@ -137,6 +148,7 @@ async function runPlannerQueryOnce(
       includePartialMessages: true,
       ...(isResume && { resume: opts.resumeSessionId }),
       ...(opts.outputFormat && { outputFormat: opts.outputFormat }),
+      ...(envOverride && { env: envOverride }),
     },
   });
 

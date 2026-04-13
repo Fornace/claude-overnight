@@ -5,7 +5,9 @@ import chalk from "chalk";
 import type { Task, PermMode, MergeStrategy, RunState, BranchRecord, WaveSummary, RunMemory } from "./types.js";
 import { Swarm } from "./swarm.js";
 import { steerWave } from "./steering.js";
-import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery } from "./planner-query.js";
+import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver } from "./planner-query.js";
+import type { ProviderConfig } from "./providers.js";
+import { buildEnvResolver } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import type { LiveConfig, RunInfo, SteeringContext } from "./ui.js";
 import type { PlannerLog } from "./planner-query.js";
@@ -25,6 +27,10 @@ export interface RunConfig {
   budget: number;
   workerModel: string;
   plannerModel: string;
+  /** Custom provider for worker tasks (optional — Anthropic default when undefined). */
+  workerProvider?: ProviderConfig;
+  /** Custom provider for planner/steering calls (optional). */
+  plannerProvider?: ProviderConfig;
   concurrency: number;
   permissionMode: PermMode;
   useWorktrees: boolean;
@@ -55,6 +61,12 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     objective, cwd, workerModel, plannerModel, concurrency, permissionMode,
     allowedTools, runDir, previousKnowledge,
   } = cfg;
+
+  const envForModel = buildEnvResolver({
+    plannerModel, plannerProvider: cfg.plannerProvider,
+    workerModel, workerProvider: cfg.workerProvider,
+  });
+  setPlannerEnvResolver(envForModel);
   let { usageCap, flex } = cfg;
   const useWorktrees = cfg.useWorktrees;
   const mergeStrategy = cfg.mergeStrategy;
@@ -326,7 +338,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
       useWorktrees, mergeStrategy: waveMerge, agentTimeoutMs: cfg.agentTimeoutMs,
       usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
-      baseCostUsd: accCost,
+      baseCostUsd: accCost, envForModel,
     });
     currentSwarm = swarm;
     display.setWave(swarm);
@@ -364,7 +376,9 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     const neverStarted = currentTasks.filter(t => !attemptedPrompts.has(t.prompt));
     saveRunState(runDir, {
       id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-      remaining, workerModel, plannerModel, concurrency, permissionMode,
+      remaining, workerModel, plannerModel,
+      workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
+      concurrency, permissionMode,
       usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
       flex, useWorktrees, mergeStrategy, waveNum, currentTasks: neverStarted,
       accCost, accCompleted, accFailed, accIn, accOut, accTools,
@@ -427,7 +441,9 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const finalPhase = trulyDone ? "done" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
   saveRunState(runDir, {
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-    remaining, workerModel, plannerModel, concurrency, permissionMode,
+    remaining, workerModel, plannerModel,
+    workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
+    concurrency, permissionMode,
     usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
     flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
     accCost, accCompleted, accFailed, accIn, accOut, accTools,

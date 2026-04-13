@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.16.0
+
+### Custom providers — route executors to Qwen, OpenRouter, or any Anthropic-compatible endpoint
+
+The planner can stay on Opus while executors run on a cheaper model. Same run, two different providers, per-call env routing — no global shell shenanigans, no proxy daemon.
+
+- **"Other…" in the model picker.** Planner (④) and executor (⑤) are now picked separately. Each picker lists Anthropic models + any saved custom providers + an `Other…` entry that walks you through adding a new one (display name, base URL, model id, API key source). Saved once, available in every repo.
+- **User-level key store.** Providers live in `~/.claude/claude-overnight/providers.json` (mode 0600). Two key sources: paste inline (stored plaintext in the 0600 file) or reference an env var (`CO_KEY_QWEN` etc. — nothing written to disk). `ANTHROPIC_API_KEY` is explicitly cleared for custom-provider subprocesses so the SDK uses `ANTHROPIC_AUTH_TOKEN` as a bearer.
+- **Per-call env routing.** Each `query()` gets its own `env` override built from `process.env` + `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`. Planner queries (planning, steering, thinking, in-run asks) hit the planner provider; executor queries hit the executor provider. One shared resolver (`buildEnvResolver`) drives both via `setPlannerEnvResolver` (module-global for `planner-query.ts`) and `SwarmConfig.envForModel` (per-task for `swarm.ts`).
+- **Pre-flight validation.** Before the swarm starts, each custom provider gets a 1-turn ping with a hard timeout and interrupt. A bad key fails fast with `✗ planner preflight failed: ...` instead of N scattered auth errors mid-run.
+- **Resume rehydration + orphan detection.** Provider ids are persisted in `run.json` (`workerProviderId`, `plannerProviderId`) and re-resolved from the user-level store on resume. If the store no longer has them, resume aborts with a clear message naming the missing id.
+- **Base URL normalization.** Trailing slashes and accidentally-included `/v1/messages` / `/messages` suffixes are stripped on entry so pasting from docs just works.
+- **`--model=<custom>` auto-resolve.** In non-interactive mode, `--model=qwen3-coder-plus` (or any saved provider's model id or short id) looks up the provider automatically and routes through it. No separate `--provider` flag needed.
+- **Fallback when the Anthropic model list is unavailable.** If `fetchModels()` times out or fails, the picker still shows saved providers, an "Other…" entry, and a synthetic `claude-sonnet-4-6` default so you're never trapped.
+
+Existing Anthropic-only runs keep working unchanged — new provider fields on `RunState` are optional, and the default resolver is a no-op when nothing custom is configured.
+
+## 1.15.0
+
+### Rate-limit transparency + `[r]` retry-now
+
+You shouldn't have to ask why the swarm is cooling down — the UI now says it out loud, and you can unblock it from the keyboard.
+
+- **Named window in the usage bar.** "Cooling down — 1 worker(s) waiting" is gone. The bar now reads e.g. `Anthropic 5h limit hit — resets in 34m 12s (1 waiting)`, pulled from the most-constraining `rateLimitWindow` (rejected first, else highest utilization). No more guessing which window is blocking you.
+- **First-hit explanation.** The first time Anthropic rejects a request, one system event prints: `5h window is full — plan-level Anthropic limit, not a claude-overnight cap. Press [r] to retry now, [c] to lower concurrency, or wait for reset.` So you know the difference between *our* soft cap and *their* hard wall.
+- **Window tags in every rate-limit log line.** Both the pre-task throttle and the per-agent 429-retry paths now tag logs like `Rate limited (5h window) — waiting 60s ([r] to retry now)`.
+- **`[r] retry-now` hotkey.** When workers are sleeping on a rate limit, the hotkey row shows `[r] retry-now`. Pressing it clears `rateLimitResetsAt` and wakes every pending sleeper via a new cancellable `rateLimitSleep()`. The API may reject again, but you get to decide *when* instead of staring at a timer — useful when the server-side reset already happened but our cached timestamp is stale.
+
 ## 1.14.1
 
 ### Instant startup splash — no more black terminal

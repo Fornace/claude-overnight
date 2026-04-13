@@ -6,7 +6,9 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
-import { detectModelTier } from "./planner-query.js";
+import { detectModelTier, setPlannerEnvResolver } from "./planner-query.js";
+import { pickModel, loadProviders, preflightProvider, buildEnvResolver } from "./providers.js";
+import type { ProviderConfig } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
 import { executeRun } from "./run.js";
@@ -104,17 +106,13 @@ async function promptResumeOverrides(
   }, 120);
   let models: Awaited<ReturnType<typeof fetchModels>>;
   try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
-  if (models.length > 0) {
-    const currentIdx = Math.max(0, models.findIndex(m => m.value === state.workerModel));
-    state.workerModel = await select(
-      `${chalk.cyan("①")} Worker model:`,
-      models.map(m => ({ name: m.displayName, value: m.value, hint: m.description })),
-      currentIdx,
-    );
-  } else {
-    const ans = await ask(`\n  ${chalk.cyan("①")} Worker model ${chalk.dim(`[${state.workerModel}]:`)} `);
-    if (ans.trim()) state.workerModel = ans.trim();
-  }
+  const pick = await pickModel(
+    `${chalk.cyan("①")} Worker model:`,
+    models,
+    state.workerProviderId ?? state.workerModel,
+  );
+  state.workerModel = pick.model;
+  state.workerProviderId = pick.providerId;
 
   const remAns = await ask(`\n  ${chalk.cyan("②")} Remaining sessions ${chalk.dim(`[${state.remaining}]:`)} `);
   const parsedRem = parseInt(remAns);
@@ -187,7 +185,7 @@ async function main() {
     --dry-run              Show planned tasks without running them
     --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
-    --model=NAME           Worker model override ${chalk.dim("(planner always uses best available)")}
+    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + executor separately — supports 'Other…' for Qwen / OpenRouter / etc.)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
     --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
@@ -413,6 +411,8 @@ async function main() {
   // ── Config resolution ──
   let workerModel: string;
   let plannerModel: string;
+  let workerProvider: ProviderConfig | undefined;
+  let plannerProvider: ProviderConfig | undefined;
   let budget: number | undefined;
   let concurrency: number;
   let objective: string | undefined = fileCfg?.objective;
@@ -425,6 +425,23 @@ async function main() {
 
   if (resuming) {
     workerModel = resumeState!.workerModel; plannerModel = resumeState!.plannerModel;
+    const saved = loadProviders();
+    if (resumeState!.workerProviderId) {
+      workerProvider = saved.find(p => p.id === resumeState!.workerProviderId);
+      if (!workerProvider) {
+        console.error(chalk.red(`\n  Resume aborted: worker provider "${resumeState!.workerProviderId}" is no longer in ~/.claude/claude-overnight/providers.json`));
+        console.error(chalk.dim(`  Re-add it via a fresh run's "Other…" flow, or start Fresh instead.\n`));
+        process.exit(1);
+      }
+    }
+    if (resumeState!.plannerProviderId) {
+      plannerProvider = saved.find(p => p.id === resumeState!.plannerProviderId);
+      if (!plannerProvider) {
+        console.error(chalk.red(`\n  Resume aborted: planner provider "${resumeState!.plannerProviderId}" is no longer in ~/.claude/claude-overnight/providers.json`));
+        console.error(chalk.dim(`  Re-add it via a fresh run's "Other…" flow, or start Fresh instead.\n`));
+        process.exit(1);
+      }
+    }
     budget = resumeState!.budget; concurrency = resumeState!.concurrency;
     objective = resumeState!.objective; usageCap = resumeState!.usageCap;
     allowExtraUsage = resumeState!.allowExtraUsage ?? false;
@@ -460,20 +477,17 @@ async function main() {
     }, 120);
     let models: Awaited<ReturnType<typeof fetchModels>>;
     try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
-    plannerModel = models[0]?.value || "claude-sonnet-4-6";
-    if (models.length > 0) {
-      workerModel = await select(`${chalk.cyan("④")} Worker model:`, models.map(m => ({ name: m.displayName, value: m.value, hint: m.description })));
-    } else {
-      const ans = await ask(`  ${chalk.cyan("④")} ${chalk.dim("Worker model [claude-sonnet-4-6]:")} `);
-      workerModel = ans || "claude-sonnet-4-6";
-    }
-    usageCap = await select(`${chalk.cyan("⑤")} Usage cap:`, [
+    const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering — use your strongest)")}:`, models);
+    plannerModel = plannerPick.model; plannerProvider = plannerPick.provider;
+    const workerPick = await pickModel(`${chalk.cyan("⑤")} Executor model ${chalk.dim("(what runs the tasks — Qwen/OpenRouter/etc via Other…)")}:`, models);
+    workerModel = workerPick.model; workerProvider = workerPick.provider;
+    usageCap = await select(`${chalk.cyan("⑥")} Usage cap:`, [
       { name: "Unlimited", value: undefined as any, hint: "full capacity, wait through rate limits" },
       { name: "90%", value: 0.9, hint: "leave 10% for other work" },
       { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
       { name: "50%", value: 0.5, hint: "use half, keep the rest" },
     ]);
-    const extraChoice = await select(`${chalk.cyan("⑥")} Allow extra usage ${chalk.dim("(billed separately)")}:`, [
+    const extraChoice = await select(`${chalk.cyan("⑦")} Allow extra usage ${chalk.dim("(billed separately)")}:`, [
       { name: "No", value: "no", hint: "stop when plan limits are reached" },
       { name: "Yes, with $ limit", value: "budget", hint: "set a spending cap" },
       { name: "Yes, unlimited", value: "unlimited", hint: "keep going no matter what" },
@@ -485,21 +499,21 @@ async function main() {
       allowExtraUsage = true;
     } else if (extraChoice === "unlimited") allowExtraUsage = true;
 
-    // ⑦ Permission mode (skip if --yolo or --perm set)
+    // ⑧ Permission mode (skip if --yolo or --perm set)
     const cliYolo = argv.includes("--yolo");
     if (cliFlags.perm) {
       permissionMode = cliFlags.perm as PermMode;
     } else if (cliYolo) {
       permissionMode = "bypassPermissions";
     } else {
-      permissionMode = await select(`${chalk.cyan("⑦")} Permissions:`, [
+      permissionMode = await select(`${chalk.cyan("⑧")} Permissions:`, [
         { name: "Auto", value: "auto" as PermMode, hint: "accept low-risk, reject high-risk" },
         { name: "Bypass all", value: "bypassPermissions" as PermMode, hint: "agents can run anything (yolo)" },
         { name: "Prompt each", value: "default" as PermMode, hint: "ask for every dangerous op" },
       ]);
     }
 
-    // ⑧ Worktrees + merge (skip if --yolo, --worktrees, --no-worktrees, or --merge set)
+    // ⑨ Worktrees + merge (skip if --yolo, --worktrees, --no-worktrees, or --merge set)
     const gitRepo = isGitRepo(cwd);
     if (cliYolo || argv.includes("--no-worktrees")) {
       useWorktrees = false;
@@ -508,7 +522,7 @@ async function main() {
       useWorktrees = true;
       mergeStrategy = (cliFlags.merge as MergeStrategy) || "yolo";
     } else if (gitRepo) {
-      const wtChoice = await select(`${chalk.cyan("⑧")} Git isolation:`, [
+      const wtChoice = await select(`${chalk.cyan("⑨")} Git isolation:`, [
         { name: "Worktrees + yolo merge", value: "wt-yolo", hint: "isolate agents, merge into current branch" },
         { name: "Worktrees + new branch", value: "wt-branch", hint: "isolate agents, merge into a new branch" },
         { name: "No worktrees", value: "no-wt", hint: "all agents share the working directory" },
@@ -541,6 +555,11 @@ async function main() {
     if (!cliFlags.model && !fileCfg?.model) models = await fetchModels(5_000);
     workerModel = cliFlags.model ?? fileCfg?.model ?? (models[0]?.value || "claude-sonnet-4-6");
     plannerModel = models[0]?.value || workerModel;
+    // Auto-resolve a saved custom provider if --model matches its id or model id.
+    // Lets `claude-overnight --model=qwen3-coder-plus` route correctly without a separate flag.
+    const savedForCli = loadProviders();
+    const matched = savedForCli.find(p => p.id === workerModel || p.model === workerModel);
+    if (matched) { workerProvider = matched; workerModel = matched.model; }
     concurrency = cliFlags.concurrency ? parseInt(cliFlags.concurrency) : (fileCfg?.concurrency ?? 5);
     budget = cliFlags.budget ? parseInt(cliFlags.budget) : undefined;
     if (budget != null && (isNaN(budget) || budget < 1)) { console.error(chalk.red(`  --budget must be a positive integer`)); process.exit(1); }
@@ -582,6 +601,29 @@ async function main() {
   }
   if (useWorktrees) validateGitRepo(cwd);
 
+  // Custom-provider routing: build a model→env resolver so planner and worker
+  // queries hit the right endpoint without touching process.env globally.
+  const envForModel = buildEnvResolver({ plannerModel, plannerProvider, workerModel, workerProvider });
+  setPlannerEnvResolver(envForModel);
+
+  // Fail fast if a custom provider is misconfigured — one bad key would
+  // otherwise surface as N agent failures scattered across the run.
+  if (plannerProvider || workerProvider) {
+    const pending: Array<[string, ProviderConfig]> = [];
+    if (plannerProvider) pending.push(["planner", plannerProvider]);
+    if (workerProvider && workerProvider.id !== plannerProvider?.id) pending.push(["executor", workerProvider]);
+    for (const [role, p] of pending) {
+      process.stdout.write(`  ${chalk.dim(`◆ Pinging ${role} (${p.displayName})...`)}`);
+      const r = await preflightProvider(p, cwd);
+      if (!r.ok) {
+        process.stdout.write(`\x1B[2K\r  ${chalk.red(`✗ ${role} preflight failed:`)} ${chalk.dim(r.error)}\n`);
+        console.error(chalk.red(`\n  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.\n`));
+        process.exit(1);
+      }
+      process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${role} ready`)} ${chalk.dim(`· ${p.displayName} · ${p.model}`)}\n`);
+    }
+  }
+
   if (nonInteractive) {
     const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
     const extraStr = allowExtraUsage ? (extraUsageBudget ? `  extra=$${extraUsageBudget}` : "  extra=∞") : "  extra=off";
@@ -611,7 +653,9 @@ async function main() {
       saveRunState(runDir, {
         id: runDir.split(/[/\\]/).pop() ?? "",
         objective, budget: budget ?? 10, remaining: budget ?? 10,
-        workerModel, plannerModel, concurrency, permissionMode,
+        workerModel, plannerModel,
+        workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
+        concurrency, permissionMode,
         usageCap, allowExtraUsage, extraUsageBudget,
         flex, useWorktrees, mergeStrategy,
         waveNum: 0, currentTasks: [],
@@ -656,9 +700,10 @@ async function main() {
             process.stdout.write("\x1B[?25l");
             try {
               let answer = "";
+              const plannerEnv = envForModel(plannerModel);
               for await (const msg of query({
                 prompt: `You're planning work for: "${objective}"\n\nThemes identified:\n${themes.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n\nUser question: ${question}`,
-                options: { cwd, model: plannerModel, permissionMode, persistSession: false },
+                options: { cwd, model: plannerModel, permissionMode, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
               })) { if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || ""; }
               planRestore();
               if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
@@ -682,6 +727,7 @@ async function main() {
           const thinkingSwarm = new Swarm({
             tasks: thinkingTasks, concurrency, cwd, model: plannerModel, permissionMode,
             useWorktrees: false, mergeStrategy: "yolo", agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
+            envForModel,
           });
           const thinkRunInfo = { accIn: 0, accOut: 0, accCost: 0, accCompleted: 0, accFailed: 0, sessionsBudget: budget ?? 10, waveNum: -1, remaining: budget ?? 10, model: plannerModel, startedAt: Date.now() };
           const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, concurrency, paused: false, dirty: false });
@@ -699,7 +745,9 @@ async function main() {
             saveRunState(runDir, {
               id: runDir.split(/[/\\]/).pop() ?? "",
               objective: objective!, budget: budget ?? 10, remaining: (budget ?? 10) - thinkingUsed,
-              workerModel, plannerModel, concurrency, permissionMode,
+              workerModel, plannerModel,
+              workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
+              concurrency, permissionMode,
               usageCap, allowExtraUsage, extraUsageBudget,
               flex, useWorktrees, mergeStrategy,
               waveNum: 0, currentTasks: [],
@@ -760,9 +808,10 @@ async function main() {
               process.stdout.write("\x1B[?25l");
               try {
                 let answer = "";
+                const plannerEnv = envForModel(plannerModel);
                 for await (const msg of query({
                   prompt: `You planned these tasks for the objective "${objective}":\n${tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n")}\n\nUser question: ${question}`,
-                  options: { cwd, model: plannerModel, permissionMode, persistSession: false },
+                  options: { cwd, model: plannerModel, permissionMode, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
                 })) { if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || ""; }
                 planRestore();
                 if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
@@ -787,7 +836,8 @@ async function main() {
 
   // ── Execute ──
   await executeRun({
-    tasks, objective, budget: budget ?? tasks.length, workerModel, plannerModel, concurrency,
+    tasks, objective, budget: budget ?? tasks.length, workerModel, plannerModel,
+    workerProvider, plannerProvider, concurrency,
     permissionMode, useWorktrees, mergeStrategy, usageCap, allowExtraUsage, extraUsageBudget,
     flex, agentTimeoutMs, cwd, allowedTools, runDir, previousKnowledge,
     resuming, resumeState: resumeState ?? undefined,

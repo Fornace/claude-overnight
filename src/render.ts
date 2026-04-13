@@ -1,13 +1,10 @@
 import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
+import { RATE_LIMIT_WINDOW_SHORT } from "./types.js";
 import type { AgentState, RateLimitWindow, WaveSummary } from "./types.js";
 import type { RunInfo, SteeringContext, SteeringEvent } from "./ui.js";
 
 const SPINNER = ["|", "/", "-", "\\"] as const;
-const WINDOW_SHORT_NAMES: Record<string, string> = {
-  five_hour: "5h", seven_day: "7d", seven_day_opus: "7d op",
-  seven_day_sonnet: "7d sn", overage: "extra",
-};
 
 // ── Shared helpers ──
 
@@ -107,12 +104,22 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
       label = swarm.extraUsageBudget != null
         ? chalk.red(`Budget $${swarm.extraUsageBudget} exhausted \u2014 finishing active`)
         : chalk.yellow(`Capped at ${capFrac != null ? Math.round(capFrac * 100) : 100}% \u2014 finishing active`);
-    } else if (swarm.rateLimitPaused > 0) {
-      label = chalk.yellow(`Cooling down \u2014 ${swarm.rateLimitPaused} worker(s) waiting`);
-    } else if (swarm.rateLimitResetsAt && swarm.rateLimitResetsAt > Date.now()) {
-      const waitSec = Math.ceil((swarm.rateLimitResetsAt - Date.now()) / 1000);
-      const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
-      label = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
+    } else if (swarm.rateLimitPaused > 0 || (swarm.rateLimitResetsAt && swarm.rateLimitResetsAt > Date.now())) {
+      const mcw = swarm.mostConstrainedWindow();
+      const when = (mcw?.resetsAt && mcw.resetsAt > Date.now()) ? mcw.resetsAt
+        : (swarm.rateLimitResetsAt && swarm.rateLimitResetsAt > Date.now()) ? swarm.rateLimitResetsAt
+        : undefined;
+      const winName = mcw ? (RATE_LIMIT_WINDOW_SHORT[mcw.type] ?? mcw.type.replace(/_/g, " ")) : undefined;
+      let txt = winName
+        ? `Anthropic ${winName} limit hit`
+        : `Rate limited`;
+      if (when) {
+        const waitSec = Math.ceil((when - Date.now()) / 1000);
+        const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
+        txt += ` \u2014 resets in ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`;
+      }
+      if (swarm.rateLimitPaused > 0) txt += ` (${swarm.rateLimitPaused} waiting)`;
+      label = chalk.yellow(txt);
     }
     if (swarm.isUsingOverage && !swarm.cappedOut) label += chalk.red(" [OVERAGE]");
     const prefix = windowLabel ? chalk.dim(windowLabel.padEnd(6)) : chalk.dim("Usage ");
@@ -122,7 +129,7 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
   if (windows.length > 1) {
     const cycleIdx = Math.floor(Date.now() / 3000) % windows.length;
     const win = windows[cycleIdx];
-    const shortName = WINDOW_SHORT_NAMES[win.type] ?? win.type.replace(/_/g, " ");
+    const shortName = RATE_LIMIT_WINDOW_SHORT[win.type] ?? win.type.replace(/_/g, " ");
     renderBar(win.utilization, shortName);
     const dots = windows.map((_, i) => i === cycleIdx ? "\u25CF" : "\u25CB").join("");
     out[out.length - 1] += chalk.dim(`  ${dots}`);
@@ -220,10 +227,11 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     const pending = runInfo?.pendingSteer ?? 0;
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
     const fixChip = swarm.failed > 0 && swarm.active > 0 ? chalk.yellow("  [f] fix") : "";
+    const retryChip = swarm.rateLimitPaused > 0 ? chalk.yellow("  [r] retry-now") : "";
     const pauseLabel = swarm.paused ? "[p] resume" : "[p] pause";
-    out.push(chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + chip);
+    out.push(chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip);
     if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
-      out.push(chalk.yellow(`  all workers rate-limited — press [c] to reduce concurrency, [p] to pause, [q] to quit`));
+      out.push(chalk.yellow(`  all workers rate-limited — [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
     }
   }
   out.push("");

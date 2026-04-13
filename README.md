@@ -4,7 +4,7 @@ Run 10, 100, or 1000 Claude agents overnight. Come back to shipped work.
 
 Describe what to build. Set a budget. The tool plans, explores your codebase, breaks the objective into tasks, launches parallel agents in isolated git worktrees, iterates toward quality, and handles rate limits automatically. You press Run once, then go to sleep.
 
-Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Works with Claude Opus, Sonnet, and Haiku.
+Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Works with Claude Opus, Sonnet, and Haiku — or route executors to Qwen / OpenRouter / any Anthropic-compatible endpoint via the `Other…` picker.
 
 ## Install
 
@@ -38,14 +38,19 @@ claude-overnight
 
 ② Budget [10]: 200
 
-③ Worker model:
+④ Planner model (thinking, steering — use your strongest):
+  ● Opus — Opus 4.6 · Most capable
+  ○ Sonnet — Sonnet 4.6 · Best for everyday tasks
+
+⑤ Executor model (what runs the tasks — Qwen/OpenRouter/etc via Other…):
   ● Sonnet — Sonnet 4.6 · Best for everyday tasks
   ○ Opus — Opus 4.6 · Most capable
+  ○ Other… · custom OpenAI/Anthropic-compatible endpoint
 
-④ Usage cap:
+⑥ Usage cap:
   ● 90% · leave 10% for other work
 
-⑤ Allow extra usage (billed separately):
+⑦ Allow extra usage (billed separately):
   ● No · stop when plan limits are reached
 
 ╭──────────────────────────────────────────────────╮
@@ -188,7 +193,7 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 |---|---|---|
 | `--budget=N` | `10` | Total agent sessions |
 | `--concurrency=N` | `5` | Parallel agents |
-| `--model=NAME` | prompted | Worker model (planner uses best available) |
+| `--model=NAME` | prompted | Worker model — interactive picks planner + executor separately; `Other…` adds Qwen / OpenRouter / any Anthropic-compat endpoint. In non-interactive mode, a saved provider's model id is auto-resolved to the provider. |
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
 | `--allow-extra-usage` | off | Allow extra/overage usage (billed separately) |
 | `--extra-usage-budget=N` | — | Max $ for extra usage (implies --allow-extra-usage) |
@@ -209,6 +214,36 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 | `permissionMode` | `"auto" \| "bypassPermissions" \| "default"` | `"auto"` | Permission handling |
 | `mergeStrategy` | `"yolo" \| "branch"` | `"yolo"` | Merge into HEAD or new branch |
 | `usageCap` | `number (0-100)` | unlimited | Stop at N% utilization |
+
+## Custom providers (Qwen, OpenRouter, anything Anthropic-compatible)
+
+Planner and executor are picked separately — pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of execution.
+
+From the interactive picker, choose `Other…` on the planner or executor step:
+
+```
+⑤ Executor model (what runs the tasks — Qwen/OpenRouter/etc via Other…):
+  ○ Sonnet
+  ○ Opus
+  ● Other…
+
+  Name: Qwen Coder
+  Base URL: https://dashscope-intl.aliyuncs.com/api/v2/apps/claude-code-proxy
+  Model id: qwen3-coder-plus
+  API key source:
+    ● Paste key now        · stored plaintext in ~/.claude/claude-overnight/providers.json (0600)
+    ○ Read from env var    · nothing written to disk
+```
+
+Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (mode 0600) and show up automatically in every repo. No per-project config.
+
+**How routing works.** Each `query()` gets its own env override (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`) — planner queries use the planner provider, executor queries use the executor provider. No global shell env, no proxy daemon, no `process.env` pollution between calls.
+
+**Pre-flight.** Before the swarm starts, each custom provider is pinged with a 1-turn auth check. Bad keys fail fast with `✗ executor preflight failed: ...` instead of N scattered mid-run errors.
+
+**Resume.** Provider ids are persisted in `run.json` and rehydrated on resume. If you deleted a provider between runs, resume refuses to start and tells you exactly which id is missing.
+
+**Non-interactive / CI.** `claude-overnight --model=qwen3-coder-plus` auto-resolves the model id to a saved provider — no separate `--provider` flag.
 
 ## Usage controls
 

@@ -122,6 +122,11 @@ export interface RateLimitWindow {
   resetsAt?: number;
 }
 
+export const RATE_LIMIT_WINDOW_SHORT: Record<string, string> = {
+  five_hour: "5h", seven_day: "7d", seven_day_opus: "7d opus",
+  seven_day_sonnet: "7d sonnet", overage: "extra",
+};
+
 /** Thrown when a query goes silent — carries session ID for interrupt+resume. */
 export class NudgeError extends Error {
   constructor(public sessionId: string | undefined, silentMs: number) {
@@ -167,6 +172,10 @@ export interface RunState {
   remaining: number;
   workerModel: string;
   plannerModel: string;
+  /** Optional id of a custom provider (from ~/.claude/claude-overnight/providers.json) used for worker tasks. */
+  workerProviderId?: string;
+  /** Optional id of a custom provider used for planner/steering calls. */
+  plannerProviderId?: string;
   concurrency: number;
   permissionMode: PermMode;
   usageCap?: number;

@@ -391,6 +391,10 @@ export class RunDisplay {
       this.swarm.requeueFailed();
       return false;
     }
+    if ((s === "r" || s === "R") && this.swarm && this.swarm.rateLimitPaused > 0) {
+      this.swarm.retryRateLimitNow();
+      return true;
+    }
     if ((s === "s" || s === "S") && this.onSteer) {
       this.inputMode = "steer"; this.inputSegs = []; return true;
     }
