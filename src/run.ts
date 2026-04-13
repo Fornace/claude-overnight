@@ -344,11 +344,16 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     lastCapped = swarm.cappedOut; lastAborted = swarm.aborted;
     recordBranches(swarm.agents, swarm.mergeResults, branches);
     saveWaveSession(runDir, waveNum, swarm.agents, swarm.totalCostUsd);
+    // Tasks that never made it into the swarm (queue cleared on abort/cap)
+    // are preserved as currentTasks so resume picks them up. Budget for these
+    // wasn't decremented (only attempted agents were), so no refund needed.
+    const attemptedPrompts = new Set(swarm.agents.map(a => a.task.prompt));
+    const neverStarted = currentTasks.filter(t => !attemptedPrompts.has(t.prompt));
     saveRunState(runDir, {
       id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
       remaining, workerModel, plannerModel, concurrency, permissionMode,
       usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
-      flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
+      flex, useWorktrees, mergeStrategy, waveNum, currentTasks: neverStarted,
       accCost, accCompleted, accFailed, accIn, accOut, accTools,
       branches, phase: "steering", startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
     });

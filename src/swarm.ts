@@ -342,6 +342,7 @@ export class Swarm {
             clearTimeout(timer!);
             this.activeQueries.delete(agentQuery);
             if (sessionId) resumeSessionId = sessionId;
+            try { agentQuery.close(); } catch {}
           }
         };
 
@@ -362,7 +363,7 @@ export class Swarm {
           agent.finishedAt = Date.now();
           const duration = agent.finishedAt - (agent.startedAt || agent.finishedAt);
           if (agent.toolCalls === 0 && (agent.costUsd ?? 0) < 0.001 && duration < 15_000) {
-            agent.status = "error"; agent.error = "Agent did no work (likely rate-limited before starting)"; this.failed++;
+            agent.status = "error"; agent.error = "Agent did no work — exited without tool use"; this.failed++;
           } else {
             agent.status = "done"; this.completed++;
           }
@@ -403,7 +404,8 @@ export class Swarm {
     const dur = (agent.finishedAt ?? Date.now()) - (agent.startedAt ?? Date.now());
     const m = Math.floor(dur / 60000);
     const s = Math.round((dur % 60000) / 1000);
-    return `Agent ${agent.id} done: ${m}m ${s}s, ${agent.toolCalls} tools, ${agent.filesChanged ?? 0} files changed`;
+    const verb = agent.status === "error" ? "errored" : "done";
+    return `Agent ${agent.id} ${verb}: ${m}m ${s}s, ${agent.toolCalls} tools, ${agent.filesChanged ?? 0} files changed`;
   }
 
   // ── Message handler ──
@@ -470,6 +472,12 @@ export class Swarm {
         const pct = info.utilization != null ? `${Math.round(info.utilization * 100)}%` : "";
         const overageTag = this.isUsingOverage ? " [EXTRA]" : "";
         this.log(agent.id, `Rate: ${info.status} ${pct}${overageTag}${windowType ? ` (${windowType})` : ""}`);
+        if (info.status === "rejected") {
+          if (!this.rateLimitResetsAt || this.rateLimitResetsAt <= Date.now()) {
+            this.rateLimitResetsAt = Date.now() + 60_000;
+          }
+          throw new Error("rate limit rejected — retrying");
+        }
         break;
       }
     }

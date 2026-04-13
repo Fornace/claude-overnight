@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.11.12
+
+### Rate-limit rejections now retry instead of silently no-op'ing
+
+Symptom from a live `analisi-conti` run: agents 39/40/41 finishing in 7–9s with `Rate: rejected`, `0 tools`, `0 files changed`, then logged as "Agent N done" while internally being marked as failed and having their budget burned. The 1.11.3-5 rate-limit fixes only handled the case where the SDK *throws* a 429 — but the SDK's preferred path is to send a `rate_limit_event` message with `status: "rejected"` and then close the stream cleanly. No exception → the retry branch never ran → agents counted as failed, prompts lost, budget gone.
+
+Three coordinated fixes in `swarm.ts`:
+
+- **Rejection events now throw** from inside `handleMsg`. When `rate_limit_event` arrives with `status: "rejected"`, we set `rateLimitResetsAt` to a 60s fallback if the SDK didn't provide one (it usually doesn't on rejection), then throw `Error("rate limit rejected — retrying")`. The throw bubbles through the `for await` → caught by the existing rate-limit retry branch in `runAgent` → waits and retries without burning the attempt budget. The throttle gate also re-arms so subsequent dispatches in the same wave don't pile-on.
+- **`agentQuery.close()` runs in the finally** block of `runOnce`, not just on natural exit. Previously, throwing out of the for-await left the underlying claude process orphaned.
+- **`agentSummary` no longer hardcodes "done"** in the log string. Errored agents now log `Agent N errored: …` so the visible state matches the internal state.
+
+Plus one fix in `run.ts`:
+
+- **Never-started tasks survive abort/cap**. When a wave is interrupted (Ctrl+C, overage cap, crash), the queue is cleared and any unprocessed tasks were silently lost — `saveRunState` always wrote `currentTasks: []`. Now we compute `neverStarted = currentTasks - swarm.agents.attempted` and persist that. On resume, the wave loop picks them up and runs them as the next wave instead of relying on steering to re-derive them from history. Budget arithmetic stays correct because never-started tasks were never decremented from `remaining` in the first place.
+
+Regression tests in `rate-limit-rejection.test.ts` cover the throw, the fallback `resetsAt`, the SDK-provided `resetsAt` passthrough, the non-rejected status passthrough, and the `agentSummary` verb. Existing 93 tests still green.
+
 ## 1.11.11
 
 ### Pasting multi-line text no longer submits on the first newline

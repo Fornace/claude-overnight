@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.11.11",
+  "version": "1.11.12",
   "description": "Claude Code skill for understanding, installing, and inspecting claude-overnight runs — parallel Claude agents in git worktrees with thinking waves, multi-wave steering, and crash-safe resume.",
   "author": {
     "name": "Francesco Fornace"
