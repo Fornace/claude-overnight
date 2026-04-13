@@ -143,11 +143,16 @@ export function cleanStaleWorktrees(cwd: string, log: (id: number, msg: string) 
   try {
     const list = gitExec("git worktree list --porcelain", cwd);
     const stale: string[] = [];
-    const tmp = tmpdir();
+    // Match any worktree whose path contains our mkdtemp prefix. We used to
+    // gate on `startsWith(tmpdir())` too, but on macOS `os.tmpdir()` returns
+    // `/var/folders/...` while git reports worktrees as `/private/var/...`
+    // (realpath-resolved), so the prefix never matched and stale worktrees
+    // silently accumulated. The `claude-overnight-` substring is unambiguous
+    // enough on its own — nothing else in the repo uses that prefix.
     for (const line of list.split("\n")) {
       if (line.startsWith("worktree ")) {
         const wpath = line.slice("worktree ".length);
-        if (wpath.startsWith(tmp) && wpath.includes("claude-overnight-")) stale.push(wpath);
+        if (wpath.includes("/claude-overnight-")) stale.push(wpath);
       }
     }
     if (stale.length > 0) {

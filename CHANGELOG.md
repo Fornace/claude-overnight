@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.11.9
+
+### macOS `/private` tmpdir bug broke stale-worktree cleanup
+
+Seen live resuming a 54-task plan: the first wave's attempt to create `swarm/task-0` failed with `branch already checked out` because a worktree from a prior dead attempt was still registered in git. `cleanStaleWorktrees()` in `merge.ts` was supposed to clean that up on every run start, but its matcher was broken on macOS — it gated stale detection on `wpath.startsWith(os.tmpdir())`, and `os.tmpdir()` returns `/var/folders/…` while `git worktree list --porcelain` returns `/private/var/folders/…` (the realpath-resolved path). The `startsWith` check never matched, stale worktrees accumulated forever, and the first retry of any task branch would always fail.
+
+Fix: drop the `startsWith(tmp)` gate. The `/claude-overnight-` substring is unambiguous enough on its own — nothing else in a repo uses that prefix. Now matches both `/var/folders/...` and `/private/var/folders/...` paths, plus Linux `/tmp/...`.
+
+### Resume now loads `tasks.json` whenever `currentTasks` is empty
+
+Planning-phase resume in 1.11.7 only fired if `phase === "planning"`. But `saveRunState` always writes `currentTasks: []` — so a `stopped` or `capped` run being resumed would have executed a zero-task wave and done nothing. Now the resume path in `index.ts` falls back to `salvageFromFile()` whenever `currentTasks` is empty on resume, regardless of phase, and reports `Resuming <phase> run · N tasks loaded from tasks.json` when it does.
+
 ## 1.11.8
 
 ### Pre-1.11.7 orphaned plans are now auto-recovered at startup

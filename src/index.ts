@@ -227,17 +227,22 @@ async function main() {
       }
     }
     if (resuming && resumeState && resumeRunDir) {
-      // Planning-phase resume: the prior run died before executeRun ran any
-      // wave, but the orchestrate agent wrote tasks.json to disk. Load those
-      // tasks into currentTasks so executeRun can pick them up as wave 0.
-      if (resumeState.phase === "planning") {
+      // If currentTasks is empty but tasks.json exists on disk, reload it.
+      // Covers two cases:
+      //   1. Planning-phase resumes (the prior run died before executeRun).
+      //   2. Stopped/capped runs whose state was saved with currentTasks: []
+      //      (saveRunState always stores [] — the plan is on disk in tasks.json).
+      if (resumeState.currentTasks.length === 0) {
         const loaded = salvageFromFile(join(resumeRunDir, "tasks.json"), resumeState.budget, () => {}, "resume");
-        if (!loaded) {
+        if (!loaded && resumeState.phase === "planning") {
           console.error(chalk.red(`\n  Planning-phase run has no usable tasks.json — start Fresh instead.\n`));
           process.exit(1);
         }
-        resumeState.currentTasks = loaded;
-        console.log(chalk.green(`\n  ✓ Resuming plan · ${loaded.length} tasks loaded from tasks.json`));
+        if (loaded) {
+          resumeState.currentTasks = loaded;
+          const label = resumeState.phase === "planning" ? "Resuming plan" : `Resuming ${resumeState.phase} run`;
+          console.log(chalk.green(`\n  ✓ ${label} · ${loaded.length} tasks loaded from tasks.json`));
+        }
       }
       const unmerged = resumeState.branches.filter(b => b.status === "unmerged").length;
       if (unmerged > 0) {
