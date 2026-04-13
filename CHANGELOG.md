@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.14.0
+
+### Resume with new settings — review and edit before the run starts
+
+Until now, resume was all-or-nothing: whatever model, concurrency, usage cap, and overage budget the run was saved with, that's what came back. No way to drop a `sonnet[1m]` run to regular `sonnet` after hitting the 7-day window, no way to halve concurrency, no way to tighten the extra-usage cap — you had to quit, edit `run.json` by hand, or restart from scratch.
+
+Picking `[R]esume` from the unfinished-run picker now shows a settings box and a short menu:
+
+```
+  Resume settings
+  ────────────────────────────────────────
+  model      sonnet[1m] (sonnet)
+  remaining  133 sessions
+  concur     10
+  usage cap  unlimited
+  extra      unlimited
+
+  R esume  │  E dit  │  Q uit
+```
+
+Hitting `E` walks a 5-step wizard (model picker · remaining sessions · concurrency · usage cap % · extra usage). Every field defaults to the saved value — empty-enter keeps it. The new settings are persisted to `run.json` before the run starts, so a crash during the first wave doesn't throw them away.
+
+CLI flags are also honored on resume: `claude-overnight --model=claude-sonnet-4-6 --usage-cap=75 --extra-usage-budget=30` pre-fills those fields before the review prompt. Previously these flags were silently dropped on resume.
+
+Supported overrides: `--model`, `--concurrency`, `--budget` (treated as new remaining count), `--usage-cap`, `--extra-usage-budget`, `--allow-extra-usage`, `--perm`. Structural fields (worktrees, merge strategy) stay frozen — changing them mid-run would conflict with existing worktree state.
+
+### `[e]` extra usage cap — live at runtime
+
+New hotkey next to `[b] budget`, `[t] cap`, `[c] conc`:
+
+```
+[b] budget  [t] cap  [c] conc  [e] extra  [p] pause  [s] steer  [?] ask  [q] stop
+```
+
+Press `[e]`, type a new `$` cap, hit enter. The change takes effect immediately on the running wave and persists across wave boundaries via `liveConfig`. If the new cap is already below current overage spend, the swarm caps out cleanly instead of continuing.
+
+`0` means "stop on the first overage dollar" — useful for "burn through plan quota but don't pay a cent extra". A positive number sets a dollar cap. There's no runtime path to "unlimited" from this hotkey — use the resume override for that (or just ignore `[e]`).
+
+The `[t] threshold` label is now `[t] cap` to fit the extra column without wrapping narrow terminals.
+
 ## 1.13.0
 
 ### Budget exhausted? Just hit enter to keep going

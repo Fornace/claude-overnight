@@ -221,7 +221,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
     const fixChip = swarm.failed > 0 && swarm.active > 0 ? chalk.yellow("  [f] fix") : "";
     const pauseLabel = swarm.paused ? "[p] resume" : "[p] pause";
-    out.push(chalk.dim(`  [b] budget  [t] threshold  [c] conc  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + chip);
+    out.push(chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + chip);
     if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
       out.push(chalk.yellow(`  all workers rate-limited — press [c] to reduce concurrency, [p] to pause, [q] to quit`));
     }

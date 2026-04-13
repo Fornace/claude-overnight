@@ -66,7 +66,10 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   let currentSwarm: Swarm | undefined;
   let remaining: number;
   let currentTasks: Task[];
-  const liveConfig: LiveConfig = { remaining: 0, usageCap, concurrency, paused: false, dirty: false };
+  const liveConfig: LiveConfig = {
+    remaining: 0, usageCap, concurrency, paused: false, dirty: false,
+    extraUsageBudget: cfg.extraUsageBudget,
+  };
   let waveNum: number;
   const waveHistory: WaveSummary[] = [];
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;
@@ -344,7 +347,12 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     const totalConsumed = accCompleted + accFailed + cfg.thinkingUsed;
     const expectedFloor = Math.max(0, cfg.budget - totalConsumed);
     if (remaining < expectedFloor) remaining = expectedFloor;
-    if (liveConfig.dirty) { remaining = liveConfig.remaining; usageCap = liveConfig.usageCap; liveConfig.dirty = false; }
+    if (liveConfig.dirty) {
+      remaining = liveConfig.remaining;
+      usageCap = liveConfig.usageCap;
+      cfg.extraUsageBudget = liveConfig.extraUsageBudget;
+      liveConfig.dirty = false;
+    }
     liveConfig.remaining = remaining;
     lastCapped = swarm.cappedOut; lastAborted = swarm.aborted;
     recordBranches(swarm.agents, swarm.mergeResults, branches);

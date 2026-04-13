@@ -31,6 +31,128 @@ function countTasksInFile(path: string): number {
   } catch { return 0; }
 }
 
+async function promptResumeOverrides(
+  state: RunState,
+  cliFlags: Record<string, string>,
+  argv: string[],
+  noTTY: boolean,
+  runDir: string,
+): Promise<void> {
+  // ── Apply CLI flag overrides first ──
+  if (cliFlags.model) state.workerModel = cliFlags.model;
+  if (cliFlags.concurrency) {
+    const n = parseInt(cliFlags.concurrency);
+    if (n >= 1) state.concurrency = n;
+  }
+  if (cliFlags.budget) {
+    const n = parseInt(cliFlags.budget);
+    if (n > 0) {
+      state.remaining = n;
+      state.budget = state.accCompleted + state.accFailed + n;
+    }
+  }
+  if (cliFlags["usage-cap"] != null) {
+    const v = parseFloat(cliFlags["usage-cap"]);
+    if (!isNaN(v) && v >= 0 && v <= 100) state.usageCap = v > 0 ? v / 100 : undefined;
+  }
+  if (cliFlags["extra-usage-budget"] != null) {
+    const v = parseFloat(cliFlags["extra-usage-budget"]);
+    if (!isNaN(v) && v > 0) { state.extraUsageBudget = v; state.allowExtraUsage = true; }
+  }
+  if (argv.includes("--allow-extra-usage")) state.allowExtraUsage = true;
+  if (cliFlags.perm) state.permissionMode = cliFlags.perm as PermMode;
+
+  if (noTTY) {
+    try { saveRunState(runDir, state); } catch {}
+    return;
+  }
+
+  // ── Interactive review ──
+  const fmtSummary = () => {
+    const tier = detectModelTier(state.workerModel);
+    const remaining = Math.max(1, state.remaining);
+    const capStr = state.usageCap != null ? `${Math.round(state.usageCap * 100)}%` : "unlimited";
+    const extraStr = state.allowExtraUsage
+      ? (state.extraUsageBudget ? `$${state.extraUsageBudget}` : "unlimited")
+      : "off";
+    console.log();
+    console.log(`  ${chalk.dim("Resume settings")}`);
+    console.log(`  ${chalk.dim("─".repeat(40))}`);
+    console.log(`  ${chalk.dim("model      ")}${chalk.white(state.workerModel)} ${chalk.dim(`(${tier})`)}`);
+    console.log(`  ${chalk.dim("remaining  ")}${chalk.white(String(remaining))} ${chalk.dim("sessions")}`);
+    console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
+    console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
+    console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
+  };
+  fmtSummary();
+
+  const action = await selectKey("", [
+    { key: "r", desc: "esume" },
+    { key: "e", desc: "dit" },
+    { key: "q", desc: "uit" },
+  ]);
+  if (action === "q") process.exit(0);
+  if (action === "r") return;
+
+  // ── Edit walk ──
+  const models = await fetchModels(5_000);
+  if (models.length > 0) {
+    const currentIdx = Math.max(0, models.findIndex(m => m.value === state.workerModel));
+    state.workerModel = await select(
+      `${chalk.cyan("①")} Worker model:`,
+      models.map(m => ({ name: m.displayName, value: m.value, hint: m.description })),
+      currentIdx,
+    );
+  } else {
+    const ans = await ask(`\n  ${chalk.cyan("①")} Worker model ${chalk.dim(`[${state.workerModel}]:`)} `);
+    if (ans.trim()) state.workerModel = ans.trim();
+  }
+
+  const remAns = await ask(`\n  ${chalk.cyan("②")} Remaining sessions ${chalk.dim(`[${state.remaining}]:`)} `);
+  const parsedRem = parseInt(remAns);
+  if (!isNaN(parsedRem) && parsedRem > 0) {
+    state.remaining = parsedRem;
+    state.budget = state.accCompleted + state.accFailed + parsedRem;
+  }
+
+  const concAns = await ask(`\n  ${chalk.cyan("③")} Concurrency ${chalk.dim(`[${state.concurrency}]:`)} `);
+  const parsedConc = parseInt(concAns);
+  if (!isNaN(parsedConc) && parsedConc >= 1) state.concurrency = parsedConc;
+
+  const currentCap = state.usageCap != null ? String(Math.round(state.usageCap * 100)) : "off";
+  const capAns = await ask(`\n  ${chalk.cyan("④")} Usage cap % ${chalk.dim(`[${currentCap}]`)} ${chalk.dim("(0 = off):")} `);
+  if (capAns.trim()) {
+    const v = parseFloat(capAns);
+    if (!isNaN(v) && v >= 0 && v <= 100) state.usageCap = v > 0 ? v / 100 : undefined;
+  }
+
+  const currentExtra = state.allowExtraUsage
+    ? (state.extraUsageBudget ? `$${state.extraUsageBudget}` : "unlimited")
+    : "off";
+  const extraChoice = await select(`${chalk.cyan("⑤")} Extra usage ${chalk.dim(`[current: ${currentExtra}]`)}:`, [
+    { name: "Keep current", value: "keep" },
+    { name: "Off", value: "off", hint: "stop at plan limit" },
+    { name: "With $ cap", value: "budget", hint: "set a spending cap" },
+    { name: "Unlimited", value: "unlimited", hint: "no cap, billed as overage" },
+  ]);
+  if (extraChoice === "off") {
+    state.allowExtraUsage = false;
+    state.extraUsageBudget = undefined;
+  } else if (extraChoice === "budget") {
+    const bAns = await ask(`  ${chalk.dim("Max extra $:")} `);
+    const bVal = parseFloat(bAns);
+    if (!isNaN(bVal) && bVal > 0) { state.extraUsageBudget = bVal; state.allowExtraUsage = true; }
+  } else if (extraChoice === "unlimited") {
+    state.allowExtraUsage = true;
+    state.extraUsageBudget = undefined;
+  }
+
+  try { saveRunState(runDir, state); } catch {}
+  console.log(chalk.green("\n  ✓ Settings updated"));
+  fmtSummary();
+  console.log();
+}
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -274,6 +396,7 @@ async function main() {
         autoMergeBranches(cwd, resumeState.branches, msg => console.log(chalk.dim(`  ${msg}`)));
         try { saveRunState(resumeRunDir, resumeState); } catch {}
       }
+      await promptResumeOverrides(resumeState, cliFlags, argv, noTTY, resumeRunDir);
     }
   }
 

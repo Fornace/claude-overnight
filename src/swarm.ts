@@ -87,7 +87,7 @@ export class Swarm {
   readonly model: string | undefined;
   usageCap: number | undefined;
   readonly allowExtraUsage: boolean;
-  readonly extraUsageBudget: number | undefined;
+  extraUsageBudget: number | undefined;
   readonly baseCostUsd: number;
   mergeBranch?: string;
 
@@ -135,6 +135,18 @@ export class Swarm {
     if (this.paused === b) return;
     this.paused = b;
     this.log(-1, b ? "Dispatch paused" : "Dispatch resumed");
+  }
+
+  /** Live-adjust the overage spend cap. `undefined` = unlimited. If already over the new cap, stop dispatch. */
+  setExtraUsageBudget(n: number | undefined): void {
+    if (this.extraUsageBudget === n) return;
+    const prev = this.extraUsageBudget;
+    this.extraUsageBudget = n;
+    const fmt = (v: number | undefined) => v != null ? `$${v}` : "unlimited";
+    this.log(-1, `Extra usage budget: ${fmt(prev)} → ${fmt(n)}`);
+    if (n != null && this.isUsingOverage && this.overageCostUsd >= n) {
+      this.capForOverage(`Extra usage budget $${n} exceeded ($${this.overageCostUsd.toFixed(2)} spent) — stopping dispatch`);
+    }
   }
 
   async run(): Promise<void> {
