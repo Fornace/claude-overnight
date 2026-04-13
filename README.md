@@ -2,9 +2,9 @@
 
 Run 10, 100, or 1000 Claude agents overnight. Come back to shipped work.
 
-Describe what to build. Set a budget. The tool plans, explores your codebase, breaks the objective into tasks, launches parallel agents in isolated git worktrees, iterates toward quality, and handles rate limits automatically. You press Run once, then go to sleep.
+Local-first, git-native, budget-first. Describe what to build, set a spend cap, press Run. The tool plans, explores your codebase, breaks the objective into tasks, launches parallel agents in isolated git worktrees, iterates toward quality, handles rate limits automatically, and resumes cleanly across crashes and laptop sleeps. You wake up to merged commits.
 
-Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Works with Claude Opus, Sonnet, and Haiku — or route executors to Qwen / OpenRouter / any Anthropic-compatible endpoint via the `Other…` picker.
+Different shape from hosted single-session runtimes like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): this runs on your machine, against your real repo, as a parallel swarm — with spend caps, git worktree choreography, and multi-day crash-safe resume. Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Works with Claude Opus, Sonnet, and Haiku — or route executors to Qwen / OpenRouter / any Anthropic-compatible endpoint via the `Other…` picker.
 
 ## Install
 
