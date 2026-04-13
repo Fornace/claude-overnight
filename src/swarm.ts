@@ -231,12 +231,6 @@ export class Swarm {
       this.rateLimitResetsAt = undefined;
       consecutiveWaits++;
     }
-
-    // Soft delay: high utilization, pace requests
-    if (this.rateLimitUtilization > 0.75) {
-      const delay = Math.floor((this.rateLimitUtilization - 0.75) * 60000);
-      if (delay > 0) await sleep(delay);
-    }
   }
 
   // ── Agent execution ──
