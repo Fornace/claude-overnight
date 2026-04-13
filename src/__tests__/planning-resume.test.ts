@@ -11,6 +11,9 @@ import type { RunState } from "../types.js";
 // run.json was only written inside executeRun — so a plan-phase failure was
 // invisible to the resume picker. 1.11.7 writes an early run.json with
 // phase: "planning" and requires tasks.json on disk for it to be surfaced.
+// 1.11.14 also accepts designs/ on disk — a thinking-wave kill used to
+// leave a run.json with phase "planning" but no tasks.json, silently hiding
+// the run and throwing away the thinking spend.
 
 const tmp = mkdtempSync(join(tmpdir(), "planning-resume-"));
 const cwd = "/fake/workspace";
@@ -53,12 +56,25 @@ describe("findIncompleteRuns — planning phase visibility", () => {
     assert.equal(found!.state.phase, "planning");
   });
 
-  it("skips planning-phase runs missing tasks.json", () => {
+  it("skips planning-phase runs with neither tasks.json nor designs", () => {
     const dir = makeRun("2026-04-10T09-00-00");
     saveRunState(dir, baseState("planning"));
-    // No tasks.json on disk — nothing to resume
+    // No tasks.json and no designs/ on disk — nothing to resume
     const runs = findIncompleteRuns(tmp, cwd);
-    assert.equal(runs.find(r => r.dir === dir), undefined, "planning run without tasks.json should be filtered");
+    assert.equal(runs.find(r => r.dir === dir), undefined, "empty planning run should be filtered");
+  });
+
+  it("surfaces a planning-phase run when only designs exist (killed thinking wave)", () => {
+    const dir = makeRun("2026-04-13T11-28-00");
+    saveRunState(dir, { ...baseState("planning"), accCost: 2.02, accCompleted: 1 });
+    // No tasks.json, but the thinking wave produced design docs before the quit
+    mkdirSync(join(dir, "designs"));
+    writeFileSync(join(dir, "designs", "focus-0.md"), "# design\nsome content\n");
+    const runs = findIncompleteRuns(tmp, cwd);
+    const found = runs.find(r => r.dir === dir);
+    assert.ok(found, "designs-only planning run should be surfaced for re-orchestration");
+    assert.equal(found!.state.phase, "planning");
+    assert.equal(found!.state.accCost, 2.02);
   });
 
   it("still surfaces steering-phase runs (existing behavior)", () => {

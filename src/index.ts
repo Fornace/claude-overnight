@@ -234,14 +234,38 @@ async function main() {
       //      (saveRunState always stores [] — the plan is on disk in tasks.json).
       if (resumeState.currentTasks.length === 0) {
         const loaded = salvageFromFile(join(resumeRunDir, "tasks.json"), resumeState.budget, () => {}, "resume");
-        if (!loaded && resumeState.phase === "planning") {
-          console.error(chalk.red(`\n  Planning-phase run has no usable tasks.json — start Fresh instead.\n`));
-          process.exit(1);
-        }
         if (loaded) {
           resumeState.currentTasks = loaded;
           const label = resumeState.phase === "planning" ? "Resuming plan" : `Resuming ${resumeState.phase} run`;
           console.log(chalk.green(`\n  ✓ ${label} · ${loaded.length} tasks loaded from tasks.json`));
+        } else if (resumeState.phase === "planning") {
+          // No tasks.json — the thinking wave got killed before orchestrate ran.
+          // If design docs survived, re-orchestrate from them (salvages the
+          // thinking spend instead of throwing it away).
+          const designs = readMdDir(join(resumeRunDir, "designs"));
+          if (!designs || !resumeState.objective) {
+            console.error(chalk.red(`\n  Planning-phase run has no usable tasks.json or designs — start Fresh instead.\n`));
+            process.exit(1);
+          }
+          const remainingBudget = Math.max(resumeState.concurrency, resumeState.budget - resumeState.accCompleted);
+          const orchBudget = Math.min(50, Math.max(resumeState.concurrency, Math.ceil(remainingBudget * 0.5)));
+          const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${remainingBudget}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
+          console.log(chalk.cyan(`\n  ◆ Re-orchestrating plan from existing designs...\n`));
+          process.stdout.write("\x1B[?25l");
+          try {
+            const orchTasks = await orchestrate(
+              resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel,
+              resumeState.permissionMode, orchBudget, resumeState.concurrency, makeProgressLog(),
+              flexNote, join(resumeRunDir, "tasks.json"),
+            );
+            resumeState.currentTasks = orchTasks;
+            process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${orchTasks.length} tasks`)}\n`);
+          } catch (err: any) {
+            process.stdout.write("\x1B[?25h");
+            console.error(chalk.red(`\n  Re-orchestration failed: ${err.message}\n  Start Fresh instead.\n`));
+            process.exit(1);
+          }
+          process.stdout.write("\x1B[?25h");
         }
       }
       const unmerged = resumeState.branches.filter(b => b.status === "unmerged").length;
@@ -535,6 +559,25 @@ async function main() {
           thinkingCost = thinkingSwarm.totalCostUsd; thinkingIn = thinkingSwarm.totalInputTokens; thinkingOut = thinkingSwarm.totalOutputTokens;
           thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
           thinkingHistory = { wave: -1, tasks: thinkingSwarm.agents.map(a => ({ prompt: a.task.prompt.slice(0, 200), status: a.status, filesChanged: a.filesChanged, error: a.error })) };
+          // Persist thinking cost/count into run.json so if the user quits
+          // between thinking and orchestrate, resume still sees the real spend
+          // and the run stays visible in the picker (designs on disk = resumable).
+          try {
+            saveRunState(runDir, {
+              id: runDir.split(/[/\\]/).pop() ?? "",
+              objective: objective!, budget: budget ?? 10, remaining: (budget ?? 10) - thinkingUsed,
+              workerModel, plannerModel, concurrency, permissionMode,
+              usageCap, allowExtraUsage, extraUsageBudget,
+              flex, useWorktrees, mergeStrategy,
+              waveNum: 0, currentTasks: [],
+              accCost: thinkingCost, accCompleted: thinkingUsed, accFailed: 0,
+              accIn: thinkingIn, accOut: thinkingOut, accTools: thinkingTools,
+              branches: [],
+              phase: "planning",
+              startedAt: new Date().toISOString(),
+              cwd,
+            });
+          } catch {}
           if (thinkingSwarm.rateLimitResetsAt) {
             const waitMs = thinkingSwarm.rateLimitResetsAt - Date.now();
             if (waitMs > 0) { console.log(chalk.dim(`  Waiting ${Math.ceil(waitMs / 1000)}s for rate limit reset...`)); await new Promise(r => setTimeout(r, waitMs + 2000)); }

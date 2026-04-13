@@ -184,9 +184,12 @@ export function findIncompleteRuns(rootDir: string, filterCwd: string): { dir: s
       const runDir = join(runsDir, d);
       const state = loadRunState(runDir);
       if (!state || state.phase === "done" || state.cwd !== filterCwd) continue;
-      // Planning-phase runs are only resumable if tasks.json was actually
-      // written — resuming without tasks is nothing to resume.
-      if (state.phase === "planning" && !existsSync(join(runDir, "tasks.json"))) continue;
+      // Planning-phase runs are resumable if either tasks.json was written
+      // (orchestrate completed) OR design docs exist on disk (thinking wave
+      // got killed mid-way — we can re-orchestrate from the designs on resume).
+      if (state.phase === "planning"
+        && !existsSync(join(runDir, "tasks.json"))
+        && !readMdDir(join(runDir, "designs"))) continue;
       results.push({ dir: runDir, state });
     }
     return results;
