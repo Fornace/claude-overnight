@@ -58,7 +58,7 @@ export async function fetchModels(timeoutMs = 10_000): Promise<ModelInfo[]> {
     clearTimeout(timer);
     q?.close();
     if (err.message === "model_fetch_timeout") {
-      console.warn(chalk.yellow("\n  Model fetch timed out — continuing with defaults"));
+      // Silent: callers fall back to a text prompt with the current value as default.
     } else if (isAuthError(err)) {
       console.error(chalk.red("\n  Authentication failed — check your API key or run: claude auth\n"));
       process.exit(1);

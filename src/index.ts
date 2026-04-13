@@ -67,6 +67,9 @@ async function promptResumeOverrides(
     return;
   }
 
+  // Kick off model fetch in the background so it's ready if the user picks Edit.
+  const modelsPromise = fetchModels(20_000).catch(() => [] as Awaited<ReturnType<typeof fetchModels>>);
+
   // ── Interactive review ──
   const fmtSummary = () => {
     const tier = detectModelTier(state.workerModel);
@@ -95,7 +98,12 @@ async function promptResumeOverrides(
   if (action === "r") return;
 
   // ── Edit walk ──
-  const models = await fetchModels(5_000);
+  let modelFrame = 0;
+  const modelSpinner = setInterval(() => {
+    process.stdout.write(`\x1B[2K\r  ${chalk.cyan(BRAILLE[modelFrame++ % BRAILLE.length])} ${chalk.dim("loading models...")}`);
+  }, 120);
+  let models: Awaited<ReturnType<typeof fetchModels>>;
+  try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
   if (models.length > 0) {
     const currentIdx = Math.max(0, models.findIndex(m => m.value === state.workerModel));
     state.workerModel = await select(
@@ -230,7 +238,9 @@ async function main() {
   }
 
   // ── Mode detection ──
-  console.log(`\n  ${chalk.bold("🌙  claude-overnight")}`);
+  // Stop the bin.ts startup splash (if any) before printing our header.
+  (globalThis as any).__coStopSplash?.();
+  console.log(`  ${chalk.bold("🌙  claude-overnight")}`);
   console.log(chalk.dim(`  ${"─".repeat(36)}`));
 
   const noTTY = !process.stdin.isTTY;

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.14.1
+
+### Instant startup splash — no more black terminal
+
+Launching `claude-overnight` used to leave the terminal black for 10+ seconds while node bootstrapped the Agent SDK module graph (worse on projects with a lot of saved runs). That dead gap is gone: a tiny bin wrapper (`dist/bin.js`) now prints a braille-spinner splash the instant node is ready, then dynamically imports the real entrypoint. The splash is stopped the moment `index.ts` is about to print its header, so there's no flicker into interactive prompts. `-h` / `-v` and non-TTY pipelines skip the splash entirely.
+
+### Resume → Edit no longer prints a timeout warning mid-flow
+
+Picking `[E]dit` on a resumed run used to call `fetchModels(5_000)` _after_ you'd already chosen Edit, and on slow networks it would dump `Model fetch timed out — continuing with defaults` into the middle of the wizard. Now the fetch is kicked off in the background as soon as the settings box renders (up to 20 s), with a `loading models...` spinner shown only if the user actually picks Edit and the request hasn't finished yet. The timeout warning is silenced — the fallback text prompt with the current value as default already handles it gracefully.
+
 ## 1.14.0
 
 ### Resume with new settings — review and edit before the run starts
