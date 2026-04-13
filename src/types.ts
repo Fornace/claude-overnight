@@ -179,7 +179,7 @@ export interface RunState {
   accOut?: number;
   accTools?: number;
   branches: BranchRecord[];
-  phase: "steering" | "capped" | "done" | "stopped";
+  phase: "planning" | "steering" | "capped" | "done" | "stopped";
   startedAt: string;
   cwd: string;
 }

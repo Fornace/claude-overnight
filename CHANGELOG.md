@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.11.7
+
+### Plan-phase resilience: salvage + visible resume
+
+Before 1.11.7 a plan-phase failure was a total loss — paid orchestration that successfully wrote `tasks.json` could die at "Planning failed" with no way to see or recover the run. Two independent fixes:
+
+**Salvage on-disk `tasks.json` when the planner query dies.** Concrete failure seen in the wild: a 160-session flex run spent ~2 hours in orchestrate on Opus, the agent successfully wrote all 54 tasks to `tasks.json` via its Write tool, then the query-level retry loop exhausted with `Planner query failed after retries` (silent-nudge/resume cycle on a deep thinking agent). `extractTaskJson` was never reached, so its file-read fallback never ran, and the run died at "Planning failed" — losing the paid orchestration that was already committed to disk.
+
+`planTasks()` and `orchestrate()` now wrap `runPlannerQuery` in a try/catch that calls a new `salvageFromFile()` helper. If the agent already wrote a valid `{tasks: [...]}` to `outFile`, those tasks are post-processed and returned instead of letting the error propagate. A `Planner errored (<reason>) — salvaged N tasks from <path>` event is logged so you can see it happened. If the file is missing, malformed, or empty, the original error still re-throws — no masking.
+
+**Plan-phase runs are now visible to the resume picker.** Previously `run.json` was only written from inside `executeRun` (after a wave completed), so a run that died during planning left no state at all and vanished from `findIncompleteRuns`. Now:
+
+- `RunState.phase` has a new `"planning"` variant.
+- An initial `run.json` with `phase: "planning"` is written right after `createRunDir()`, before the plan phase runs.
+- `findIncompleteRuns` surfaces planning-phase runs if (and only if) `tasks.json` exists on disk — i.e. orchestrate made it far enough for you to actually resume.
+- The resume picker shows them with a distinct line: `plan ready · N tasks · budget B · <ago> · not yet executing`.
+- Picking one loads the tasks via `salvageFromFile()` and jumps straight to `executeRun` at wave 0. No re-planning, no re-paying for orchestration.
+
+Together these two fixes close the loop: if orchestrate dies mid-query, salvage recovers the tasks; if the binary dies entirely, the run is still visible in the picker and one keystroke away from resumption.
+
 ## 1.11.6
 
 ### Durable run history: `claude-overnight.log.md`

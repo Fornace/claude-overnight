@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate } from "./planner.js";
+import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
 import { detectModelTier } from "./planner-query.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
@@ -23,6 +23,13 @@ import {
   createRunDir, updateLatestSymlink, readMdDir, saveRunState,
   autoMergeBranches,
 } from "./state.js";
+
+function countTasksInFile(path: string): number {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    return Array.isArray(parsed?.tasks) ? parsed.tasks.length : 0;
+  } catch { return 0; }
+}
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -155,8 +162,13 @@ async function main() {
         const ago = formatTimeAgo(prev.startedAt);
         let lastStatus = "";
         try { lastStatus = readFileSync(join(run.dir, "status.md"), "utf-8").trim().slice(0, 120); } catch {}
+        const planTaskCount = prev.phase === "planning" ? countTasksInFile(join(run.dir, "tasks.json")) : 0;
         console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
-        const boxLines = [
+        const boxLines = prev.phase === "planning" ? [
+          `${obj}${obj.length >= 50 ? "…" : ""}`,
+          `Plan ready · ${planTaskCount} tasks · budget ${prev.budget} · ${prev.concurrency}× concurrent`,
+          `Plan phase · not yet executing`,
+        ] : [
           `${obj}${obj.length >= 50 ? "…" : ""}`,
           `${prev.accCompleted}/${prev.budget} sessions · ${Math.max(1, (prev.budget ?? 0) - prev.accCompleted)} remaining · $${prev.accCost.toFixed(2)}`,
           `Wave ${prev.waveNum + 1} · ${prev.phase}`,
@@ -184,7 +196,12 @@ async function main() {
           let lastStatus = "";
           try { lastStatus = readFileSync(join(shown[i].dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}
           console.log(chalk.cyan(`  ${i + 1}`) + `  ${obj}${obj.length >= 50 ? "…" : ""}`);
-          console.log(chalk.dim(`     ${s.accCompleted}/${s.budget} · $${s.accCost.toFixed(2)} · ${ago} · ${s.phase} at wave ${s.waveNum + 1}${merged ? ` · ${merged} merged` : ""}`));
+          if (s.phase === "planning") {
+            const n = countTasksInFile(join(shown[i].dir, "tasks.json"));
+            console.log(chalk.dim(`     plan ready · ${n} tasks · budget ${s.budget} · ${ago} · not yet executing`));
+          } else {
+            console.log(chalk.dim(`     ${s.accCompleted}/${s.budget} · $${s.accCost.toFixed(2)} · ${ago} · ${s.phase} at wave ${s.waveNum + 1}${merged ? ` · ${merged} merged` : ""}`));
+          }
           if (lastStatus) console.log(chalk.dim(`     ${lastStatus}`));
           console.log("");
         }
@@ -202,6 +219,18 @@ async function main() {
       }
     }
     if (resuming && resumeState && resumeRunDir) {
+      // Planning-phase resume: the prior run died before executeRun ran any
+      // wave, but the orchestrate agent wrote tasks.json to disk. Load those
+      // tasks into currentTasks so executeRun can pick them up as wave 0.
+      if (resumeState.phase === "planning") {
+        const loaded = salvageFromFile(join(resumeRunDir, "tasks.json"), resumeState.budget, () => {}, "resume");
+        if (!loaded) {
+          console.error(chalk.red(`\n  Planning-phase run has no usable tasks.json — start Fresh instead.\n`));
+          process.exit(1);
+        }
+        resumeState.currentTasks = loaded;
+        console.log(chalk.green(`\n  ✓ Resuming plan · ${loaded.length} tasks loaded from tasks.json`));
+      }
       const unmerged = resumeState.branches.filter(b => b.status === "unmerged").length;
       if (unmerged > 0) {
         console.log("");
@@ -402,6 +431,29 @@ async function main() {
 
   const needsPlan = tasks.length === 0 && !resuming;
   const designDir = join(runDir, "designs");
+
+  // Persist an early planning-phase state so the run is visible to the resume
+  // picker even if orchestrate dies before executeRun gets a chance to run.
+  // Without this, a crashed plan phase leaves no run.json and the run vanishes
+  // from findIncompleteRuns — you pay for orchestration and can't see it.
+  if (needsPlan && objective) {
+    try {
+      saveRunState(runDir, {
+        id: runDir.split(/[/\\]/).pop() ?? "",
+        objective, budget: budget ?? 10, remaining: budget ?? 10,
+        workerModel, plannerModel, concurrency, permissionMode,
+        usageCap, allowExtraUsage, extraUsageBudget,
+        flex, useWorktrees, mergeStrategy,
+        waveNum: 0, currentTasks: [],
+        accCost: 0, accCompleted: 0, accFailed: 0,
+        accIn: 0, accOut: 0, accTools: 0,
+        branches: [],
+        phase: "planning",
+        startedAt: new Date().toISOString(),
+        cwd,
+      });
+    } catch {}
+  }
 
   if (needsPlan) {
     if (noTTY) { console.error(chalk.red("  No tasks provided and stdin is not a TTY.")); process.exit(1); }

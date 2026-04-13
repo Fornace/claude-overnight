@@ -1,5 +1,25 @@
+import { readFileSync } from "fs";
 import type { Task, PermMode } from "./types.js";
 import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess, detectModelTier, modelCapabilityBlock } from "./planner-query.js";
+
+// Resilience: if the planner query throws but the agent already wrote valid
+// tasks to `outFile` (via its Write tool), salvage them instead of discarding
+// expensive work. Returns salvaged tasks on success, null if nothing usable on
+// disk — caller should then re-throw the original error.
+export function salvageFromFile(outFile: string | undefined, budget: number | undefined, onLog: (text: string, kind?: "status" | "event") => void, why: string): Task[] | null {
+  if (!outFile) return null;
+  try {
+    const parsed = attemptJsonParse(readFileSync(outFile, "utf-8"));
+    if (!parsed?.tasks?.length) return null;
+    let tasks: Task[] = parsed.tasks.map((t: any, i: number) => ({
+      id: String(i), prompt: typeof t === "string" ? t : t.prompt,
+    }));
+    tasks = postProcess(tasks, budget, onLog);
+    if (tasks.length === 0) return null;
+    onLog(`Planner errored (${why}) — salvaged ${tasks.length} tasks from ${outFile}`, "event");
+    return tasks;
+  } catch { return null; }
+}
 
 // The core framing for all planning. Not a checklist — a way of thinking.
 export const DESIGN_THINKING = `
@@ -170,10 +190,17 @@ export async function planTasks(
   onLog("Analyzing codebase...");
   const prompt = plannerPrompt(objective, workerModel, budget, concurrency, flexNote);
   const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
-  const resultText = await runPlannerQuery(
-    prompt + fileInstruction,
-    { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog,
-  );
+  let resultText: string;
+  try {
+    resultText = await runPlannerQuery(
+      prompt + fileInstruction,
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog,
+    );
+  } catch (err: any) {
+    const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
+    if (salvaged) return salvaged;
+    throw err;
+  }
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
     return runPlannerQuery(
@@ -273,7 +300,14 @@ Respond with ONLY a JSON object (no markdown fences):
 {"tasks": [{"prompt": "..."}]}${fileInstruction}`;
 
   onLog("Synthesizing...");
-  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog);
+  let resultText: string;
+  try {
+    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog);
+  } catch (err: any) {
+    const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
+    if (salvaged) return salvaged;
+    throw err;
+  }
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
     return runPlannerQuery(

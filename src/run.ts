@@ -84,8 +84,15 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     branches.push(...rs.branches);
     flex = rs.flex;
     waveHistory.push(...loadWaveHistory(runDir));
-    console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent · ${waveHistory.length} prior waves\n`));
-    waveNum++;
+    // Planning-phase resume starts at wave 0 (nothing ran before); all other
+    // resumes bump to the next wave since rs.waveNum is the last completed one.
+    const fromPlanning = rs.phase === "planning";
+    if (fromPlanning && !existsSync(join(runDir, "goal.md")) && objective) {
+      writeFileSync(join(runDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
+    }
+    const detail = fromPlanning ? `${currentTasks.length} tasks from plan` : `${waveHistory.length} prior waves`;
+    console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent · ${detail}\n`));
+    if (!fromPlanning) waveNum++;
   } else {
     if (objective && !existsSync(join(runDir, "goal.md"))) {
       writeFileSync(join(runDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
