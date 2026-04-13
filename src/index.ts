@@ -551,7 +551,7 @@ async function main() {
             useWorktrees: false, mergeStrategy: "yolo", agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
           });
           const thinkRunInfo = { accIn: 0, accOut: 0, accCost: 0, accCompleted: 0, accFailed: 0, sessionsBudget: budget ?? 10, waveNum: -1, remaining: budget ?? 10, model: plannerModel, startedAt: Date.now() };
-          const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, dirty: false });
+          const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, concurrency, paused: false, dirty: false });
           thinkDisplay.setWave(thinkingSwarm);
           thinkDisplay.start();
           try { await thinkingSwarm.run(); } finally { thinkDisplay.pause(); console.log(renderSummary(thinkingSwarm)); thinkDisplay.stop(); }

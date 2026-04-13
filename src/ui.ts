@@ -42,6 +42,8 @@ export interface RunInfo {
 export interface LiveConfig {
   remaining: number;
   usageCap: number | undefined;
+  concurrency: number;
+  paused: boolean;
   dirty: boolean;
 }
 
@@ -69,7 +71,7 @@ export class RunDisplay {
   private rlGetter?: RLGetter;
   private interval?: ReturnType<typeof setInterval>;
   private keyHandler?: (buf: Buffer) => void;
-  private inputMode: "none" | "budget" | "threshold" | "steer" | "ask" = "none";
+  private inputMode: "none" | "budget" | "threshold" | "concurrency" | "steer" | "ask" = "none";
   private inputSegs: InputSegment[] = [];
   private started = false;
   private readonly isTTY: boolean;
@@ -204,6 +206,9 @@ export class RunDisplay {
     if (this.inputMode === "threshold") {
       return `\n  ${chalk.cyan(">")} New usage cap (0-100%): ${rendered}\u2588`;
     }
+    if (this.inputMode === "concurrency") {
+      return `\n  ${chalk.cyan(">")} New concurrency (min 1): ${rendered}\u2588`;
+    }
     if (this.inputMode === "steer") {
       return `\n  ${chalk.cyan(">")} ${chalk.bold("Steer next wave")} ${chalk.dim("(Enter to queue, Esc to cancel)")}\n  ${rendered}\u2588`;
     }
@@ -256,7 +261,7 @@ export class RunDisplay {
 
   /** Handle a pasted block. Returns true if the frame needs a redraw. */
   private handlePaste(text: string): boolean {
-    if (this.inputMode === "budget" || this.inputMode === "threshold") {
+    if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency") {
       const clean = text.replace(/[^0-9.]/g, "");
       if (clean) appendCharToSegments(this.inputSegs, clean);
       return !!clean;
@@ -272,7 +277,7 @@ export class RunDisplay {
   /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw. */
   private handleTyped(s: string): boolean {
     const lc = this.liveConfig!;
-    if (this.inputMode === "budget" || this.inputMode === "threshold") {
+    if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency") {
       let dirty = false;
       for (const ch of s) {
         if (ch === "\r" || ch === "\n") {
@@ -287,6 +292,11 @@ export class RunDisplay {
             lc.dirty = true;
             if (this.swarm) this.swarm.usageCap = lc.usageCap;
             this.swarm?.log(-1, `Usage cap changed to ${val > 0 ? val + "%" : "unlimited"}`);
+          } else if (this.inputMode === "concurrency" && !isNaN(val) && val >= 1) {
+            const n = Math.round(val);
+            lc.concurrency = n;
+            lc.dirty = true;
+            this.swarm?.setConcurrency(n);
           }
           this.inputMode = "none";
           this.inputSegs = [];
@@ -348,6 +358,20 @@ export class RunDisplay {
     if (s === "b" || s === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
     if (s === "t" || s === "T") {
       if (this.swarm) { this.inputMode = "threshold"; this.inputSegs = []; return true; }
+      return false;
+    }
+    if (s === "c" || s === "C") {
+      if (this.swarm) { this.inputMode = "concurrency"; this.inputSegs = []; return true; }
+      return false;
+    }
+    if (s === "p" || s === "P") {
+      if (this.swarm) {
+        const next = !this.swarm.paused;
+        this.swarm.setPaused(next);
+        lc.paused = next;
+        lc.dirty = true;
+        return true;
+      }
       return false;
     }
     if ((s === "f" || s === "F") && this.swarm && this.swarm.failed > 0 && this.swarm.active > 0) {

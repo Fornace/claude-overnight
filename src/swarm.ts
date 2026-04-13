@@ -3,7 +3,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  SDKMessage, SDKResultMessage, SDKAssistantMessage,
+  SDKMessage, SDKResultMessage, SDKResultError, SDKAssistantMessage,
   SDKPartialAssistantMessage, SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError } from "./types.js";
@@ -62,6 +62,21 @@ export class Swarm {
   isUsingOverage = false;
   overageCostUsd = 0;
 
+  /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
+  targetConcurrency: number;
+  /** When true, dispatch is frozen — workers wait without starting new tasks. */
+  paused = false;
+  /** Wall-clock ms of the last sign of real progress (assistant msg, tool use, result). */
+  lastProgressAt = Date.now();
+  /** 0 = normal, 1 = halved once, 2 = halved twice, 3 = long cooldown at c=1, 4 = aborted. */
+  stallLevel = 0;
+  /** Last time the watchdog took an action; used to debounce escalations. */
+  private stallActionAt = 0;
+  /** Live worker coroutine count (not agents). */
+  private workerCount = 0;
+  /** Growable list of worker promises; run() awaits until empty. */
+  private workerPromises: Promise<void>[] = [];
+
   private queue: Task[];
   private config: SwarmConfig;
   private nextId = 0;
@@ -95,10 +110,32 @@ export class Swarm {
     this.baseCostUsd = config.baseCostUsd ?? 0;
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
+    this.targetConcurrency = config.concurrency;
   }
 
   get active() { return this.agents.filter(a => a.status === "running").length; }
+  get blocked() { return this.agents.filter(a => a.status === "running" && a.blockedAt != null).length; }
   get pending() { return this.queue.length; }
+
+  /** Live-adjust concurrency. Shrinks by having excess workers exit on next task boundary; grows by spawning new workers. */
+  setConcurrency(n: number): void {
+    if (!Number.isFinite(n) || n < 1) return;
+    const prev = this.targetConcurrency;
+    if (n === prev) return;
+    this.targetConcurrency = n;
+    this.log(-1, `Concurrency changed: ${prev} → ${n}`);
+    if (n > prev && this.queue.length > 0 && !this.aborted && !this.cappedOut) {
+      const toSpawn = Math.min(n - this.workerCount, this.queue.length);
+      for (let i = 0; i < toSpawn; i++) this.workerPromises.push(this.worker());
+    }
+  }
+
+  /** Freeze/resume dispatch without killing the run. Paused workers block at the top of their loop. */
+  setPaused(b: boolean): void {
+    if (this.paused === b) return;
+    this.paused = b;
+    this.log(-1, b ? "Dispatch paused" : "Dispatch resumed");
+  }
 
   async run(): Promise<void> {
     try {
@@ -109,8 +146,14 @@ export class Swarm {
         this.log(-1, `Worktrees: ${this.worktreeBase}`);
       }
       this.phase = "running";
-      const n = Math.min(this.config.concurrency, this.queue.length);
-      await Promise.all(Array.from({ length: n }, () => this.worker()));
+      const n = Math.min(this.targetConcurrency, this.queue.length);
+      for (let i = 0; i < n; i++) this.workerPromises.push(this.worker());
+      // setConcurrency() can grow workerPromises during execution, so drain in a loop.
+      while (this.workerPromises.length > 0) {
+        const batch = this.workerPromises.slice();
+        this.workerPromises.length = 0;
+        await Promise.all(batch);
+      }
       if (this.config.useWorktrees) {
         this.phase = "merging";
         const branches = this.agents.filter(a => a.branch && a.status === "done" && (a.filesChanged ?? 0) > 0)
@@ -123,7 +166,7 @@ export class Swarm {
     } finally {
       this.cleanup();
       this.logFile = writeSwarmLog({
-        startedAt: this.startedAt, model: this.config.model, concurrency: this.config.concurrency,
+        startedAt: this.startedAt, model: this.config.model, concurrency: this.targetConcurrency,
         useWorktrees: this.config.useWorktrees, mergeStrategy: this.config.mergeStrategy,
         completed: this.completed, failed: this.failed, aborted: this.aborted,
         cost: this.totalCostUsd, inputTokens: this.totalInputTokens, outputTokens: this.totalOutputTokens,
@@ -176,17 +219,74 @@ export class Swarm {
   // ── Worker loop ──
 
   private async worker(): Promise<void> {
+    this.workerCount++;
     let tasksProcessed = 0;
-    while (this.queue.length > 0 && !this.aborted && !this.cappedOut) {
-      await this.throttle();
-      if (this.cappedOut) break;
-      const task = this.queue.shift();
-      if (!task) break;
-      try { await this.runAgent(task); }
-      catch (err: any) { this.log(-1, `Worker error: ${String(err?.message || err).slice(0, 80)}`); }
-      tasksProcessed++;
+    try {
+      while (this.queue.length > 0 && !this.aborted && !this.cappedOut) {
+        // Shrink: exit if we're above the live target.
+        if (this.workerCount > this.targetConcurrency) {
+          this.log(-1, `Worker exiting (concurrency shrunk to ${this.targetConcurrency})`);
+          return;
+        }
+        // Pause: block here without holding a task, so unpausing resumes cleanly.
+        while (this.paused && !this.aborted && !this.cappedOut) await sleep(500);
+        await this.throttle();
+        if (this.cappedOut || this.aborted) break;
+        if (this.workerCount > this.targetConcurrency) return;
+        const task = this.queue.shift();
+        if (!task) break;
+        try { await this.runAgent(task); }
+        catch (err: any) { this.log(-1, `Worker error: ${String(err?.message || err).slice(0, 80)}`); }
+        tasksProcessed++;
+      }
+      this.log(-1, `Worker finished (${tasksProcessed} tasks)`);
+    } finally {
+      this.workerCount--;
     }
-    this.log(-1, `Worker finished (${tasksProcessed} tasks)`);
+  }
+
+  /** Mark real progress — resets stall state. Called on any assistant/tool/result message. */
+  private markProgress(): void {
+    this.lastProgressAt = Date.now();
+    if (this.stallLevel > 0 && this.lastProgressAt > this.stallActionAt) this.stallLevel = 0;
+  }
+
+  /**
+   * Stall watchdog. Called each time a worker finishes a rate-limit wait. Escalates when
+   * the whole swarm has been stuck with no progress for a while:
+   *   L1 @ 5m → halve concurrency
+   *   L2 @ 10m → halve again
+   *   L3 @ 15m+ at c=1 → force a 10-minute cooldown instead of hammering every 60s
+   *   L4 @ 30m → abort the run so it can be resumed later without burning the budget
+   */
+  private checkStall(): void {
+    const stalledFor = Date.now() - this.lastProgressAt;
+    if (stalledFor < 5 * 60_000) return;
+    // Debounce so multiple workers waking at once don't double-escalate.
+    if (Date.now() - this.stallActionAt < 60_000) return;
+
+    if (stalledFor >= 30 * 60_000) {
+      this.stallLevel = 4;
+      this.stallActionAt = Date.now();
+      this.log(-1, `Stalled ${Math.round(stalledFor / 60000)}m with no progress — aborting run so you can resume later`);
+      this.abort();
+      return;
+    }
+    if (this.targetConcurrency <= 1 && stalledFor >= 15 * 60_000) {
+      this.stallLevel = 3;
+      this.stallActionAt = Date.now();
+      const until = Date.now() + 10 * 60_000;
+      this.rateLimitResetsAt = until;
+      this.log(-1, `Stalled at concurrency 1 for ${Math.round(stalledFor / 60000)}m — forcing 10m cooldown`);
+      return;
+    }
+    if (this.stallLevel < 2 && this.targetConcurrency > 1) {
+      const next = Math.max(1, Math.floor(this.targetConcurrency / 2));
+      this.stallLevel++;
+      this.stallActionAt = Date.now();
+      this.log(-1, `Auto-throttle L${this.stallLevel}: concurrency ${this.targetConcurrency} → ${next} (stalled ${Math.round(stalledFor / 60000)}m)`);
+      this.setConcurrency(next);
+    }
   }
 
   private capForOverage(reason: string): void {
@@ -230,6 +330,8 @@ export class Swarm {
       this.rateLimitUtilization = 0;
       this.rateLimitResetsAt = undefined;
       consecutiveWaits++;
+      this.checkStall();
+      if (this.aborted || this.cappedOut) return;
     }
   }
 
@@ -358,10 +460,10 @@ export class Swarm {
           const duration = agent.finishedAt - (agent.startedAt || agent.finishedAt);
           if (agent.toolCalls === 0 && (agent.costUsd ?? 0) < 0.001 && duration < 15_000) {
             agent.status = "error"; agent.error = "Agent did no work — exited without tool use"; this.failed++;
+            this.log(id, agent.error);
           } else {
             agent.status = "done"; this.completed++;
           }
-          this.log(id, this.agentSummary(agent));
         }
         break;
       } catch (err: any) {
@@ -371,14 +473,22 @@ export class Swarm {
           const waitMs = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now()
             ? Math.max(5000, this.rateLimitResetsAt - Date.now())
             : 120_000;
-          this.log(id, `Rate limited — waiting ${Math.ceil(waitMs / 1000)}s (attempt not counted)`);
+          // If the whole swarm has been making zero progress for a while, stop giving
+          // rate-limit retries a free pass — force them to count against maxRetries so
+          // we eventually surrender instead of looping forever.
+          const globallyStalled = Date.now() - this.lastProgressAt > 15 * 60_000;
+          const freebie = !globallyStalled;
+          this.log(id, `Rate limited — waiting ${Math.ceil(waitMs / 1000)}s${freebie ? " (attempt not counted)" : " (counted — swarm stalled)"}`);
+          agent.blockedAt = Date.now();
           this.rateLimitPaused++;
           await sleep(waitMs);
           this.rateLimitPaused--;
+          agent.blockedAt = undefined;
           this.isUsingOverage = false;
           this.rateLimitUtilization = 0;
           this.rateLimitResetsAt = undefined;
-          attempt--; // don't count this against retries
+          this.checkStall();
+          if (freebie) attempt--; // normal case: don't count against retries
           continue;
         }
         const canRetry = attempt < maxRetries && !this.aborted && isTransientError(err);
@@ -392,6 +502,7 @@ export class Swarm {
     if (this.config.useWorktrees && agent.branch) {
       agent.filesChanged = autoCommit(agent.id, agent.task.prompt, agentCwd, agent.baseRef, (id, text) => this.log(id, text));
     }
+    if (agent.status === "done") this.log(agent.id, this.agentSummary(agent));
   }
 
   private agentSummary(agent: AgentState): string {
@@ -399,12 +510,19 @@ export class Swarm {
     const m = Math.floor(dur / 60000);
     const s = Math.round((dur % 60000) / 1000);
     const verb = agent.status === "error" ? "errored" : "done";
-    return `Agent ${agent.id} ${verb}: ${m}m ${s}s, ${agent.toolCalls} tools, ${agent.filesChanged ?? 0} files changed`;
+    const files = agent.filesChanged != null ? `, ${agent.filesChanged} files changed` : "";
+    return `Agent ${agent.id} ${verb}: ${m}m ${s}s, ${agent.toolCalls} tools${files}`;
   }
 
   // ── Message handler ──
 
   private handleMsg(agent: AgentState, msg: SDKMessage): void {
+    // Any message that isn't a rate-limit event counts as real progress and
+    // resets the stall watchdog + clears the per-agent blocked flag.
+    if (msg.type !== "rate_limit_event") {
+      this.markProgress();
+      if (agent.blockedAt != null) agent.blockedAt = undefined;
+    }
     switch (msg.type) {
       case "assistant": {
         const m = msg as SDKAssistantMessage;
@@ -443,10 +561,36 @@ export class Swarm {
           this.totalInputTokens += safeAdd(r.usage.input_tokens);
           this.totalOutputTokens += safeAdd(r.usage.output_tokens);
         }
+
+        // Surface SDK diagnostics so silent failures stop looking like "did no work".
+        const denials = r.permission_denials ?? [];
+        if (denials.length > 0) {
+          const tools = Array.from(new Set(denials.map(d => d.tool_name))).join(", ");
+          this.log(agent.id, `${denials.length} permission denial(s): ${tools}`);
+        }
+        if (r.terminal_reason && r.terminal_reason !== "completed") {
+          this.log(agent.id, `terminal: ${r.terminal_reason}`);
+        }
+        if (r.stop_reason && r.stop_reason !== "end_turn" && r.stop_reason !== "stop_sequence") {
+          this.log(agent.id, `stop: ${r.stop_reason}`);
+        }
+        if (typeof r.num_turns === "number" && r.num_turns > 0) {
+          this.log(agent.id, `${r.num_turns} turns`);
+        }
+
         if (r.subtype === "success") {
-          agent.status = "done"; this.completed++; this.log(agent.id, this.agentSummary(agent));
+          agent.status = "done"; this.completed++;
         } else {
-          agent.status = "error"; agent.error = r.subtype; this.failed++; this.log(agent.id, r.subtype);
+          agent.status = "error";
+          const parts: string[] = [r.subtype];
+          if (r.terminal_reason && r.terminal_reason !== "completed") parts.push(r.terminal_reason);
+          const errs = (r as SDKResultError).errors;
+          if (Array.isArray(errs) && errs.length > 0) {
+            parts.push(errs[0]);
+            for (const e of errs.slice(1, 3)) this.log(agent.id, `err: ${String(e).slice(0, 160)}`);
+          }
+          agent.error = parts.join(" — ").slice(0, 180);
+          this.failed++; this.log(agent.id, agent.error);
         }
         break;
       }

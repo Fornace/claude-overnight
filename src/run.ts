@@ -66,7 +66,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   let currentSwarm: Swarm | undefined;
   let remaining: number;
   let currentTasks: Task[];
-  const liveConfig: LiveConfig = { remaining: 0, usageCap, dirty: false };
+  const liveConfig: LiveConfig = { remaining: 0, usageCap, concurrency, paused: false, dirty: false };
   let waveNum: number;
   const waveHistory: WaveSummary[] = [];
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;

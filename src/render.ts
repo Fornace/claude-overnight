@@ -43,7 +43,7 @@ function renderHeader(
   out: string[], w: number,
   p: {
     model?: string; phase: string; barPct: number; barLabel: string;
-    active: number; queued: number; startedAt: number;
+    active: number; blocked?: number; queued: number; startedAt: number;
     totalIn: number; totalOut: number; totalCost: number;
     waveNum: number; sessionsUsed: number; sessionsBudget: number; remaining: number;
   },
@@ -54,11 +54,18 @@ function renderHeader(
   const modelTag = p.model ? chalk.dim(` [${p.model}]`) : "";
   const phaseTag = p.phase ? " " + p.phase : "";
 
+  const blocked = p.blocked ?? 0;
+  const working = Math.max(0, p.active - blocked);
+  const stuck = blocked > 0 && working === 0;
+  const activeChip = p.active > 0
+    ? (stuck ? chalk.yellow(`${p.active} blocked`) : chalk.cyan(`${working} active`) + (blocked > 0 ? chalk.yellow(` (${blocked} blocked)`) : ""))
+    : "";
+
   out.push("");
   out.push(
     `  ${chalk.bold.white("CLAUDE OVERNIGHT")}${modelTag}${phaseTag}  ${bar}  ` +
       `${p.barLabel}  ` +
-      (p.active > 0 ? chalk.cyan(`${p.active} active`) + "  " : "") +
+      (activeChip ? activeChip + "  " : "") +
       (p.queued > 0 ? chalk.gray(`${p.queued} queued`) + "  " : "") +
       chalk.gray(`\u23F1 ${fmtDur(Date.now() - p.startedAt)}`),
   );
@@ -148,10 +155,12 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
   const out: string[] = [];
 
   const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
+  const pausedTag = swarm.paused ? chalk.yellow("PAUSED") : "";
+  const stallTag = swarm.stallLevel >= 3 ? chalk.red("STALL") : swarm.stallLevel > 0 ? chalk.yellow(`STALL L${swarm.stallLevel}`) : "";
   const phaseLabel = swarm.phase === "planning" ? chalk.magenta("PLANNING")
     : swarm.phase === "merging" ? chalk.yellow("MERGING")
     : swarm.rateLimitPaused > 0 ? chalk.yellow("COOLING") : "";
-  const phase = [phaseLabel, stoppingTag].filter(Boolean).join(" ");
+  const phase = [phaseLabel, pausedTag, stallTag, stoppingTag].filter(Boolean).join(" ");
 
   const waveUsed = swarm.completed + swarm.failed;
   renderHeader(out, w, {
@@ -159,7 +168,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     phase,
     barPct: swarm.total > 0 ? swarm.completed / swarm.total : 0,
     barLabel: `${swarm.completed}/${swarm.total}`,
-    active: swarm.active, queued: swarm.pending,
+    active: swarm.active, blocked: swarm.blocked, queued: swarm.pending,
     startedAt: runInfo?.startedAt ?? swarm.startedAt,
     totalIn: (runInfo?.accIn ?? 0) + swarm.totalInputTokens,
     totalOut: (runInfo?.accOut ?? 0) + swarm.totalOutputTokens,
@@ -211,7 +220,11 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     const pending = runInfo?.pendingSteer ?? 0;
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
     const fixChip = swarm.failed > 0 && swarm.active > 0 ? chalk.yellow("  [f] fix") : "";
-    out.push(chalk.dim("  [b] budget  [t] threshold  [s] steer  [?] ask  [q] stop") + fixChip + chip);
+    const pauseLabel = swarm.paused ? "[p] resume" : "[p] pause";
+    out.push(chalk.dim(`  [b] budget  [t] threshold  [c] conc  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + chip);
+    if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
+      out.push(chalk.yellow(`  all workers rate-limited — press [c] to reduce concurrency, [p] to pause, [q] to quit`));
+    }
   }
   out.push("");
   return out.join("\n");
@@ -417,13 +430,15 @@ function fmtRow(a: AgentState, w: number): string {
   const elapsed = a.status === "running" && a.startedAt ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt)) : "";
   const spin = SPINNER[Math.floor(Date.now() / 250) % SPINNER.length];
   const icon = a.status === "running"
-    ? chalk.blue(`${spin} run`) + elapsed
+    ? (a.blockedAt ? chalk.yellow("\u25CF blk") : chalk.blue(`${spin} run`)) + elapsed
     : a.status === "done" ? chalk.green("\u2713 done") : chalk.red("\u2717 err ");
   const taskW = Math.max(20, Math.min(36, w - 50));
   const task = truncate(a.task.prompt, taskW).padEnd(taskW);
 
   let action: string;
-  if (a.currentTool) {
+  if (a.blockedAt) {
+    action = chalk.yellow(`rate-limited ${fmtDur(Date.now() - a.blockedAt)}`);
+  } else if (a.currentTool) {
     action = chalk.yellow(a.currentTool);
   } else if (a.status === "running") {
     action = chalk.dim(truncate(a.lastText || "...", 24));

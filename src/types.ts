@@ -67,6 +67,8 @@ export interface AgentState {
   baseRef?: string;
   /** Number of files changed by the agent (from git diff). */
   filesChanged?: number;
+  /** Unix timestamp (ms) when this agent entered a rate-limit wait inside its retry loop. Cleared when work resumes. */
+  blockedAt?: number;
 }
 
 /** A timestamped log line from an agent's execution. */
