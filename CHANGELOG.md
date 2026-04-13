@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.13.0
+
+### Budget exhausted? Just hit enter to keep going
+
+When a run hit its session budget before finishing, the only option was to exit and restart the resume picker. Now the steering planner emits `estimatedSessionsRemaining` every wave — an honest estimate of how many more sessions it would take to reach "amazing", factoring in follow-up fixes, polish, and verification. At exhaustion, instead of finalizing, the run surfaces that estimate and prompts:
+
+```
+Budget exhausted — run not yet complete.
+Planner estimate: 12 sessions to complete (~$7.68 at $0.64/session)
+Continue with 20 more sessions (~$12.80)? Everything stays the same — just hit enter.
+Y  C  N
+```
+
+Enter accepts the suggestion (estimate × 1.3 rounded up to the nearest 5, minimum 10), `C` types a custom number, `N` finalizes. On accept, the wave loop re-enters in place with the same model, concurrency, permissions, worktrees, usage cap, and objective — no restart, no resume picker, no re-planning. If the planner didn't produce an estimate (rare), the suggestion falls back to 20% of the original budget with a minimum of 10.
+
+Skipped automatically when the stop was a cost cap (`--usage-cap` / `--extra-usage-budget`) rather than session count — extending those needs a different knob.
+
 ## 1.11.12
 
 ### Rate-limit rejections now retry instead of silently no-op'ing

@@ -11,6 +11,7 @@ const STEER_SCHEMA = {
       reasoning: { type: "string" },
       statusUpdate: { type: "string" },
       goalUpdate: { type: "string" },
+      estimatedSessionsRemaining: { type: "number" },
       tasks: {
         type: "array",
         items: {
@@ -20,7 +21,7 @@ const STEER_SCHEMA = {
         },
       },
     },
-    required: ["done", "tasks", "reasoning", "statusUpdate"],
+    required: ["done", "tasks", "reasoning", "statusUpdate", "estimatedSessionsRemaining"],
   },
 };
 
@@ -113,6 +114,7 @@ Respond with ONLY a JSON object (no markdown fences):
   "reasoning": "your assessment and why you chose this wave composition",
   "goalUpdate": "optional — refine what 'amazing' means as you learn more",
   "statusUpdate": "REQUIRED — concise project status: what's built, what works, what's rough, quality level, key gaps. This replaces the previous status.",
+  "estimatedSessionsRemaining": 15,
   "tasks": [
     {"prompt": "task instruction...", "model": "worker"},
     {"prompt": "review task...", "model": "planner"},
@@ -120,10 +122,12 @@ Respond with ONLY a JSON object (no markdown fences):
   ]
 }
 
+"estimatedSessionsRemaining" is REQUIRED. Your best honest estimate of how many MORE agent sessions (beyond the wave you just composed above) are needed to reach 'amazing' — include follow-up fixes, polish, verification, and anything else you'd want before shipping. Be realistic, not optimistic. Use 0 only if truly done.
+
 The "model" field on each task: use "worker" (${workerModel}) for implementation tasks, "planner" (${plannerModel}) for review/analysis/verification tasks. Default is "worker".
 Set "noWorktree": true for verify/user-test tasks — they need the real project directory with env files, dependencies, and local config.
 
-If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "tasks": []}`;
+If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSessionsRemaining": 0, "tasks": []}`;
 
   onLog("Assessing...", "status");
   onLog(`Reading codebase — wave ${history.length + 1}`, "event");
@@ -146,9 +150,11 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "tasks": []}`
 
   const isDone = parsed.done === true;
   const statusUpdate = parsed.statusUpdate || undefined;
+  const estRaw = parsed.estimatedSessionsRemaining;
+  const estimatedSessionsRemaining = typeof estRaw === "number" && estRaw >= 0 ? Math.round(estRaw) : undefined;
 
   if (isDone) {
-    return { done: true, tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate, statusUpdate };
+    return { done: true, tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate, statusUpdate, estimatedSessionsRemaining: estimatedSessionsRemaining ?? 0 };
   }
 
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
@@ -160,5 +166,5 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "tasks": []}`
 
   tasks = postProcess(tasks, remainingBudget, onLog);
 
-  return { done: tasks.length === 0, tasks, reasoning: parsed.reasoning || "", goalUpdate: parsed.goalUpdate, statusUpdate };
+  return { done: tasks.length === 0, tasks, reasoning: parsed.reasoning || "", goalUpdate: parsed.goalUpdate, statusUpdate, estimatedSessionsRemaining };
 }

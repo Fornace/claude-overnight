@@ -11,7 +11,7 @@ import type { LiveConfig, RunInfo, SteeringContext } from "./ui.js";
 import type { PlannerLog } from "./planner-query.js";
 import { renderSummary } from "./render.js";
 import { fmtTokens } from "./render.js";
-import { isAuthError } from "./cli.js";
+import { isAuthError, selectKey, ask } from "./cli.js";
 import {
   readRunMemory, writeStatus, writeGoalUpdate, saveRunState,
   saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone,
@@ -72,6 +72,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;
   let accIn = 0, accOut = 0;
   let lastCapped = false, lastAborted = false, objectiveComplete = false, lastHealed = false;
+  let lastEstimate: number | undefined;
   const branches: BranchRecord[] = [];
 
   if (cfg.resuming && cfg.resumeState) {
@@ -239,6 +240,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
 
         if (steer.statusUpdate) writeStatus(runDir, steer.statusUpdate);
         if (steer.goalUpdate) writeGoalUpdate(runDir, steer.goalUpdate);
+        if (typeof steer.estimatedSessionsRemaining === "number") lastEstimate = steer.estimatedSessionsRemaining;
         const steerDir = join(runDir, "steering");
         mkdirSync(steerDir, { recursive: true });
         writeFileSync(join(steerDir, `wave-${waveNum}-attempt-${steerAttempts}.json`), JSON.stringify({
@@ -305,7 +307,10 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   if (!display.runInfo.startedAt) display.runInfo.startedAt = cfg.runStartedAt;
   display.start();
 
-  // ── Main wave loop ──
+  // ── Main wave loop (wrapped so exhaustion can prompt for an extension) ──
+  let runAnotherRound = true;
+  while (runAnotherRound) {
+    runAnotherRound = false;
   while (remaining > 0 && currentTasks.length > 0 && !stopping) {
     if (!lastHealed) {
       const healTask = checkProjectHealth(cwd);
@@ -374,6 +379,39 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   }
 
   display.stop();
+
+  // ── Budget-exhausted: offer to extend with the same settings ──
+  const exhaustedByBudget =
+    !objectiveComplete && !stopping && !lastAborted && !lastCapped &&
+    remaining <= 0 && !!process.stdin.isTTY;
+  if (exhaustedByBudget) {
+    const ext = await promptBudgetExtension({
+      estimate: lastEstimate,
+      spent: accCost,
+      sessionsUsed: accCompleted + accFailed + cfg.thinkingUsed,
+      budget: cfg.budget,
+    });
+    if (ext > 0) {
+      remaining = ext;
+      cfg.budget += ext;
+      lastCapped = false;
+      lastAborted = false;
+      runInfoRef.sessionsBudget = cfg.budget;
+      runInfoRef.remaining = remaining;
+      liveConfig.remaining = remaining;
+      liveConfig.usageCap = usageCap;
+      display.setSteering(rlGetter, buildSteeringContext());
+      display.start();
+      const steered = await runSteering();
+      if (steered) {
+        waveNum++;
+        runAnotherRound = true;
+        continue;
+      }
+      display.stop();
+    }
+  }
+  } // end outer extension loop
 
   // ── Finalize ──
   const trulyDone = objectiveComplete || (!flex && remaining <= 0);
@@ -464,6 +502,40 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
 
   if (accFailed > 0) process.exit(1);
   if (lastAborted || accCompleted === 0) process.exit(2);
+}
+
+async function promptBudgetExtension(ctx: {
+  estimate: number | undefined;
+  spent: number;
+  sessionsUsed: number;
+  budget: number;
+}): Promise<number> {
+  const avg = ctx.sessionsUsed > 0 ? ctx.spent / ctx.sessionsUsed : 0;
+  const base = ctx.estimate && ctx.estimate > 0
+    ? ctx.estimate
+    : Math.max(10, Math.round(ctx.budget * 0.2));
+  // Wiggle room: 30% buffer, minimum 10, rounded up to a nearest-5.
+  const withBuffer = Math.max(10, Math.ceil(base * 1.3));
+  const suggested = Math.ceil(withBuffer / 5) * 5;
+  const estCost = avg > 0 ? ` · ~$${(suggested * avg).toFixed(2)}` : "";
+  const estLine = ctx.estimate != null
+    ? chalk.dim(`  Planner estimate: ${ctx.estimate} sessions to complete${avg > 0 ? ` (~$${(ctx.estimate * avg).toFixed(2)} at $${avg.toFixed(2)}/session)` : ""}`)
+    : chalk.dim(`  No planner estimate available — using default${avg > 0 ? ` (~$${avg.toFixed(2)}/session)` : ""}`);
+  console.log("");
+  console.log(chalk.yellow(`  Budget exhausted — run not yet complete.`));
+  console.log(estLine);
+  console.log(chalk.dim(`  Continue with ${chalk.bold.white(String(suggested))} more sessions${estCost}? Everything stays the same — just hit enter.`));
+  const action = await selectKey("", [
+    { key: "y", desc: "es (↵)" },
+    { key: "c", desc: "ustom" },
+    { key: "n", desc: "o — stop here" },
+  ]);
+  if (action === "y") return suggested;
+  if (action === "n") return 0;
+  const custom = await ask(`  How many more sessions? ${chalk.dim(`[${suggested}]: `)}`);
+  const n = parseInt(custom);
+  if (isNaN(n) || n <= 0) return suggested;
+  return n;
 }
 
 function checkProjectHealth(cwd: string): Task | undefined {

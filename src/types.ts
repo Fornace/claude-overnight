@@ -143,6 +143,7 @@ export interface SteerResult {
   reasoning: string;
   goalUpdate?: string;
   statusUpdate?: string;
+  estimatedSessionsRemaining?: number;
 }
 
 /** Accumulated run memory — designs, verifications, etc. — fed to the steerer. */
