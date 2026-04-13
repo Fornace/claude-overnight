@@ -139,6 +139,10 @@ export function backspaceSegments(segs: InputSegment[]): void {
   }
 }
 
+function stripAnsi(s: string): string {
+  return s.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 // ── Interactive primitives ──
 
 /**
@@ -155,14 +159,23 @@ export function ask(question: string): Promise<string> {
 
   return new Promise((resolve) => {
     const segs: InputSegment[] = [];
+    const tail = question.split("\n").pop() ?? "";
+    const tailVisibleLen = stripAnsi(tail).length;
+    let prevWrapRows = 0;
 
-    // DEC save/restore cursor + clear-to-end-of-screen so redraws don't pile
-    // up when the input wraps past the terminal width onto additional rows.
+    // Only rewrite the input line (and any wrapped continuation rows). The
+    // question header above is never touched, so redraws can't stack copies
+    // even if the initial write scrolled the viewport.
     const redraw = () => {
-      stdout.write("\x1B8\x1B[J" + question + renderSegments(segs));
+      const cols = stdout.columns || 80;
+      if (prevWrapRows > 0) stdout.write(`\x1B[${prevWrapRows}A`);
+      stdout.write("\r\x1B[J");
+      const rendered = renderSegments(segs);
+      stdout.write(tail + rendered);
+      const visible = tailVisibleLen + stripAnsi(rendered).length;
+      prevWrapRows = visible > 0 ? Math.floor((visible - 1) / cols) : 0;
     };
 
-    stdout.write("\x1B7");
     stdout.write(question);
     stdout.write("\x1B[?2004h");
     try { stdin.setRawMode!(true); } catch {}
