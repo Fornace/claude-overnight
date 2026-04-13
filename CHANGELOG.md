@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.16.4
+
+### Merge healing, silent-data-loss fixes, and noise reduction
+
+Three root-cause fixes for the "swarm looks busy but nothing merges" class of issues.
+
+- **Hook-rejected commits no longer destroy work.** `autoCommit` used to run `git commit` once, catch the error, log "git commit failed", and return 0. In hook-gated projects (husky, lint-staged, pre-commit) the error was almost always a hook rejection on work-in-progress code — and the uncommitted changes would then get wiped when the worktree was cleaned up. The commit path now retries with `--no-verify` if the first attempt fails for any reason other than "nothing to commit", and the bypass is logged so you see it happened. This is swarm scaffolding, not a user-authored commit — running the user's quality gates on every intermediate agent WIP is actively harmful to the swarm mechanism.
+- **Real work measurement.** `filesChanged` was computed as `git diff --name-only baseRef..HEAD` AFTER the commit — so if the commit failed (see above), the count was 0 even when the agent had modified dozens of files. The count is now taken BEFORE the commit attempt using `git diff baseRef --` + `git ls-files --others --exclude-standard`, which captures tracked + unstaged + untracked work. If the authoritative post-commit count is 0 but the pre-count was not, we now log `"N file(s) touched but did NOT land on branch — check hooks / gitignore / absolute paths"` instead of silently reporting zero.
+- **3rd-tier merge healer.** `mergeAllBranches` used to give up after `git merge` and `git merge -X theirs` both failed, leaving long lists of `✗ swarm/task-N (conflict — preserved for manual merge)` even though the branch content was perfectly landable. `-X theirs` can't resolve rename/delete, modify/delete, or rename/rename. A new `forceMergeOverlay()` walks `git diff --name-status base..branch` and applies each change directly: checkout-from-branch + add for modify/add/rename, `git rm` for deletes, then commits. Trades merge-graph fidelity for "your changes actually land" — the right call for an autonomous swarm. Wired into both `mergeAllBranches` (wave merges) and `autoMergeBranches` (resume path).
+- **Auto-`noWorktree` for verify/audit/user-test tasks.** The planner and steering prompts generate plenty of read-only tasks — "Verify SWR cache invalidation", "Audit error handling" — which were getting full worktrees and then finishing with `0 files changed`, polluting the log. `postProcess` now detects tasks whose prompt starts with a read-only verb and sets `noWorktree: true` before dispatch. They run in the real project directory (with env files and local config), don't create a branch, and don't show up as 0-file noise.
+
 ## 1.16.0
 
 ### Custom providers — route executors to Qwen, OpenRouter, or any Anthropic-compatible endpoint

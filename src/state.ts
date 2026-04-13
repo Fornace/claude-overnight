@@ -3,6 +3,7 @@ import { execSync } from "child_process";
 import { join } from "path";
 import chalk from "chalk";
 import type { Task, RunState, BranchRecord, AgentState, RunMemory, WaveSummary } from "./types.js";
+import { forceMergeOverlay } from "./merge.js";
 
 // ── File I/O helpers ──
 
@@ -432,8 +433,13 @@ export function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: 
         onLog(`  ✓ ${br.branch} (auto-resolved)`);
       } catch {
         try { execSync("git merge --abort", { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
-        br.status = "merge-failed";
-        onLog(`  ✗ ${br.branch} (conflict — preserved for manual merge)`);
+        if (forceMergeOverlay(br.branch, cwd)) {
+          br.status = "merged";
+          onLog(`  ✓ ${br.branch} (force-merged)`);
+        } else {
+          br.status = "merge-failed";
+          onLog(`  ✗ ${br.branch} (conflict — preserved for manual merge)`);
+        }
       }
     }
   }

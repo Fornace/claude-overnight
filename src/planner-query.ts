@@ -261,6 +261,19 @@ export function postProcess(raw: Task[], budget: number | undefined, onLog: (tex
   tasks = tasks.filter((t) => t.prompt && t.prompt.trim().split(/\s+/).length >= 3);
   if (tasks.length < before) onLog(`Filtered ${before - tasks.length} task(s) with fewer than 3 words`);
 
+  // Read-only tasks (verify/audit/user-test) shouldn't get a worktree: they
+  // don't change files, so they'd just create empty swarm branches that show
+  // up as "0 files changed" noise. Run them in the real project directory so
+  // env files, dependencies, and local config are available.
+  let readOnly = 0;
+  for (const t of tasks) {
+    if (!t.noWorktree && /^\s*(verify|audit|user[- ]?test)\b/i.test(t.prompt)) {
+      t.noWorktree = true;
+      readOnly++;
+    }
+  }
+  if (readOnly > 0) onLog(`${readOnly} read-only task(s) marked noWorktree`);
+
   const dominated = new Set<number>();
   for (let i = 0; i < tasks.length; i++) {
     if (dominated.has(i)) continue;

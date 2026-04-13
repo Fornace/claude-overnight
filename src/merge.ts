@@ -16,41 +16,82 @@ export interface MergeResult {
   filesChanged: number;
 }
 
+/** Total files the agent touched vs base — tracked changes + untracked. */
+function measureWork(worktreeCwd: string, baseRef: string): number {
+  const seen = new Set<string>();
+  try {
+    // Tracked: committed + staged + unstaged, all vs the worktree's base.
+    const diff = gitExec(`git diff --name-only ${baseRef} --`, worktreeCwd);
+    for (const p of diff.split("\n")) if (p) seen.add(p);
+  } catch {}
+  try {
+    // Untracked files don't show in `git diff`; count them separately.
+    const untracked = gitExec("git ls-files --others --exclude-standard", worktreeCwd);
+    for (const p of untracked.split("\n")) if (p) seen.add(p);
+  } catch {}
+  return seen.size;
+}
+
 export function autoCommit(
   agentId: number, taskPrompt: string, worktreeCwd: string, baseRef: string | undefined,
   log: (id: number, msg: string) => void,
 ): number {
   if (!existsSync(worktreeCwd)) { log(agentId, "Worktree directory gone, skipping commit"); return 0; }
-  // Step 1: commit any uncommitted changes. Agents *may* commit their own work;
-  // we pick up whatever is still dirty.
+  if (!baseRef) return 0;
+
+  // Measure actual work BEFORE committing. This captures reality even if a
+  // pre-commit hook rejects the commit: we used to silently return 0 in that
+  // case and the worktree cleanup would destroy the changes.
+  const preCount = measureWork(worktreeCwd, baseRef);
+
   let status: string;
   try { status = gitExec("git status --porcelain", worktreeCwd); }
-  catch (err: any) { log(agentId, `git status failed: ${String(err.message || err).slice(0, 120)}`); return 0; }
+  catch (err: any) { log(agentId, `git status failed: ${String(err.message || err).slice(0, 120)}`); return preCount; }
+
   if (status.trim()) {
     try { gitExec("git add -A", worktreeCwd); }
     catch (err: any) { log(agentId, `git add failed: ${String(err.message || err).slice(0, 120)}`); }
+    const msg = taskPrompt.slice(0, 72).replace(/'/g, "'\\''");
     try {
-      const msg = taskPrompt.slice(0, 72).replace(/'/g, "'\\''");
       gitExec(`git commit -m 'swarm: ${msg}'`, worktreeCwd);
     } catch (err: any) {
       const m = String(err.message || err);
-      if (!m.includes("nothing to commit")) log(agentId, `git commit failed: ${m.slice(0, 120)}`);
+      if (!m.includes("nothing to commit")) {
+        // Hook-gated project: the user's pre-commit hooks rejected a
+        // potentially work-in-progress commit (lint errors, type errors,
+        // whatever). Retry bypassing hooks — this is swarm scaffolding,
+        // not a user-facing commit. Without this the branch stays empty,
+        // the merge gate drops it, and the work is destroyed when the
+        // worktree is cleaned up.
+        try {
+          gitExec(`git commit --no-verify -m 'swarm: ${msg}'`, worktreeCwd);
+          log(agentId, `Commit hooks bypassed (rejected swarm WIP commit)`);
+        } catch (err2: any) {
+          log(agentId, `git commit failed even with --no-verify: ${String(err2.message || err2).slice(0, 120)}`);
+        }
+      }
     }
   }
-  // Step 2: measure against the worktree's origin commit — true regardless of
-  // who made the commits (agent or autoCommit). Pre-1.11.10 this counted
-  // `git status --porcelain` lines, which was zero whenever the agent committed
-  // its own work → filesChanged=0 → branch skipped by the merge gate → orphaned.
-  if (!baseRef) return 0;
+
+  // Authoritative post-commit count: this is what `mergeAllBranches` will
+  // actually see on the branch.
+  let landed = 0;
   try {
     const diff = gitExec(`git diff --name-only ${baseRef}..HEAD`, worktreeCwd);
-    const count = diff.trim().split("\n").filter(Boolean).length;
-    if (count > 0) log(agentId, `${count} file(s) changed`);
-    return count;
+    landed = diff.trim().split("\n").filter(Boolean).length;
   } catch (err: any) {
     log(agentId, `diff vs base failed: ${String(err.message || err).slice(0, 120)}`);
-    return 0;
   }
+
+  // Red-flag: work existed before the commit attempt but didn't land on the
+  // branch. Surfaces silent data loss (stuck hooks, writes outside the
+  // worktree, gitignored targets) that used to look like "agent did 0 work".
+  if (landed === 0 && preCount > 0) {
+    log(agentId, `${preCount} file(s) touched but did NOT land on branch — check hooks / gitignore / absolute paths`);
+    return preCount;
+  }
+  if (landed > 0) log(agentId, `${landed} file(s) changed`);
+  return landed;
 }
 
 export interface MergeAllResult {
@@ -113,8 +154,16 @@ export function mergeAllBranches(
           log(agent.id, `Auto-resolved conflict: ${agent.branch}`);
         } catch {
           try { gitExec("git merge --abort", cwd); } catch {}
-          result.error = e.message?.slice(0, 80);
-          log(agent.id, `Merge conflict: ${agent.branch}`);
+          // 3rd tier: brute-force overlay. Handles rename/rename, rename/delete
+          // and other tree-level conflicts that `-X theirs` can't resolve.
+          if (forceMergeOverlay(agent.branch, cwd)) {
+            result.ok = true;
+            result.autoResolved = true;
+            log(agent.id, `Force-merged ${agent.branch} (overlay)`);
+          } else {
+            result.error = e.message?.slice(0, 80);
+            log(agent.id, `Merge conflict: ${agent.branch}`);
+          }
         }
       }
       mergeResults.push(result);
@@ -144,6 +193,43 @@ export function mergeAllBranches(
   }
 
   return { mergeResults, mergeBranch };
+}
+
+/**
+ * Last-resort merge: overlay the branch's file state onto HEAD without a real
+ * 3-way merge. Walks `git diff --name-status base..branch` and for each entry
+ * either checks out the branch's version (add/modify/rename) or removes the
+ * file (delete). Always succeeds unless the branch itself is broken. Trades
+ * merge-graph fidelity for "your changes actually land" — the right call for
+ * an autonomous swarm.
+ */
+export function forceMergeOverlay(branch: string, cwd: string): boolean {
+  try {
+    const base = gitExec(`git merge-base HEAD "${branch}"`, cwd).trim();
+    const diff = gitExec(`git diff --name-status ${base} "${branch}"`, cwd);
+    for (const line of diff.split("\n")) {
+      if (!line) continue;
+      const fields = line.split("\t");
+      const status = fields[0];
+      if (status.startsWith("R") || status.startsWith("C")) {
+        const from = fields[1]; const to = fields[2];
+        if (status.startsWith("R")) { try { gitExec(`git rm -f -- "${from}"`, cwd); } catch {} }
+        try { gitExec(`git checkout "${branch}" -- "${to}"`, cwd); gitExec(`git add -- "${to}"`, cwd); } catch {}
+      } else if (status.startsWith("D")) {
+        try { gitExec(`git rm -f -- "${fields[1]}"`, cwd); } catch {}
+      } else {
+        try { gitExec(`git checkout "${branch}" -- "${fields[1]}"`, cwd); gitExec(`git add -- "${fields[1]}"`, cwd); } catch {}
+      }
+    }
+    const dirty = gitExec("git status --porcelain", cwd).trim();
+    if (!dirty) return true;
+    gitExec(`git commit -m 'swarm: force-merge ${branch}'`, cwd);
+    return true;
+  } catch {
+    try { gitExec("git merge --abort", cwd); } catch {}
+    try { gitExec("git reset --hard HEAD", cwd); } catch {}
+    return false;
+  }
 }
 
 export function warnDirtyTree(cwd: string, log: (id: number, msg: string) => void): void {
