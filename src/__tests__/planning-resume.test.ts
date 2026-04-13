@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findIncompleteRuns, saveRunState } from "../state.js";
+import { findIncompleteRuns, saveRunState, backfillOrphanedPlans, loadRunState } from "../state.js";
 import type { RunState } from "../types.js";
 
 // Regression test for resume visibility of plan-phase runs.
@@ -83,5 +83,78 @@ describe("findIncompleteRuns — planning phase visibility", () => {
     saveRunState(dir, { ...baseState("done") });
     const runs = findIncompleteRuns(tmp, cwd);
     assert.equal(runs.find(r => r.dir === dir), undefined, "done runs should not appear");
+  });
+});
+
+describe("backfillOrphanedPlans — pre-1.11.7 recovery", () => {
+  const btmp = mkdtempSync(join(tmpdir(), "backfill-"));
+  after(() => { try { rmSync(btmp, { recursive: true, force: true }); } catch {} });
+
+  function makeOrphan(id: string, taskPrompts: string[]): string {
+    const dir = join(btmp, "runs", id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "tasks.json"), JSON.stringify({
+      tasks: taskPrompts.map(p => ({ prompt: p })),
+    }));
+    return dir;
+  }
+
+  it("backfills a pre-1.11.7 orphan (tasks.json but no run.json)", () => {
+    const dir = makeOrphan("2026-04-12T13-03-57", [
+      "First substantial task written by orchestrate agent",
+      "Second substantial task written by orchestrate agent",
+      "Third substantial task written by orchestrate agent",
+    ]);
+    const count = backfillOrphanedPlans(btmp, cwd);
+    assert.ok(count >= 1, "should backfill at least one");
+    const state = loadRunState(dir);
+    assert.ok(state, "run.json should now exist");
+    assert.equal(state!.phase, "planning");
+    assert.equal(state!.budget, 3);
+    assert.equal(state!.cwd, cwd);
+    assert.match(state!.objective, /recovered/);
+    // Timestamp parsed from dir name
+    assert.equal(state!.startedAt, "2026-04-12T13:03:57.000Z");
+  });
+
+  it("is idempotent — does not re-write existing run.json", () => {
+    // The previous test already backfilled 2026-04-12T13-03-57
+    const dir = join(btmp, "runs", "2026-04-12T13-03-57");
+    const before = loadRunState(dir);
+    assert.ok(before);
+    // Mutate state so we can detect if it's overwritten
+    before!.accCompleted = 999;
+    saveRunState(dir, before!);
+
+    const count = backfillOrphanedPlans(btmp, cwd);
+    assert.equal(count, 0, "should not backfill already-populated runs");
+
+    const after2 = loadRunState(dir);
+    assert.equal(after2!.accCompleted, 999, "existing state should be preserved");
+  });
+
+  it("skips runs without tasks.json", () => {
+    const dir = join(btmp, "runs", "2026-04-09T08-00-00");
+    mkdirSync(dir, { recursive: true });
+    // designs only, no tasks.json
+    mkdirSync(join(dir, "designs"));
+    writeFileSync(join(dir, "designs", "focus-0.md"), "# design doc");
+    const count = backfillOrphanedPlans(btmp, cwd);
+    assert.equal(count, 0);
+    assert.equal(loadRunState(dir), null, "no run.json should be written");
+  });
+
+  it("skips runs with empty tasks array", () => {
+    makeOrphan("2026-04-08T10-00-00", []);
+    const count = backfillOrphanedPlans(btmp, cwd);
+    assert.equal(count, 0);
+  });
+
+  it("the backfilled run is then visible to findIncompleteRuns", () => {
+    // 2026-04-12T13-03-57 was backfilled in the first test
+    const runs = findIncompleteRuns(btmp, cwd);
+    const found = runs.find(r => r.dir.endsWith("2026-04-12T13-03-57"));
+    assert.ok(found, "backfilled run should be surfaced by findIncompleteRuns");
+    assert.equal(found!.state.phase, "planning");
   });
 });

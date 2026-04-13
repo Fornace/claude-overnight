@@ -18,7 +18,7 @@ import {
 } from "./cli.js";
 import type { FileArgs } from "./cli.js";
 import {
-  loadRunState, findIncompleteRuns, findOrphanedDesigns,
+  loadRunState, findIncompleteRuns, findOrphanedDesigns, backfillOrphanedPlans,
   formatTimeAgo, showRunHistory, readPreviousRunKnowledge,
   createRunDir, updateLatestSymlink, readMdDir, saveRunState,
   autoMergeBranches,
@@ -121,6 +121,14 @@ async function main() {
   // ── Run history ──
   const rootDir = join(cwd, ".claude-overnight");
   const runsDir = join(rootDir, "runs");
+
+  // Backfill run.json for pre-1.11.7 orphaned plans so they become visible
+  // to the resume picker. One-shot, idempotent, silent if there's nothing.
+  const backfilled = backfillOrphanedPlans(rootDir, cwd);
+  if (backfilled > 0 && !noTTY) {
+    console.log(chalk.dim(`\n  ↻ Recovered ${backfilled} orphaned plan${backfilled > 1 ? "s" : ""} from disk`));
+  }
+
   const allRuns: { dir: string; state: RunState }[] = [];
   try {
     for (const d of readdirSync(runsDir).sort().reverse()) {

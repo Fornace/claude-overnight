@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.11.8
+
+### Pre-1.11.7 orphaned plans are now auto-recovered at startup
+
+1.11.7 made future plan-phase runs resumable by saving an early `run.json`. But runs that died *before* the upgrade still had no `run.json` on disk, so `findIncompleteRuns` couldn't see them — they remained stuck even after upgrading.
+
+1.11.8 adds `backfillOrphanedPlans()` in `state.ts`. On every startup, it scans `.claude-overnight/runs/` for directories that have `tasks.json` but no `run.json`, parses the dir name for the original timestamp, counts tasks for budget, and writes a synthetic `run.json` with `phase: "planning"` using conservative defaults (opus, bypassPermissions, worktrees+yolo, `flex: false`, concurrency 5). The original objective is lost to time, so it's recorded as `(recovered pre-1.11.7 plan · N tasks)`.
+
+After backfill, the run appears in the normal resume picker and can be resumed with one keystroke — it jumps straight to `executeRun` at wave 0 using the tasks that were already on disk. Idempotent: runs with existing `run.json` are skipped. Logged as `↻ Recovered N orphaned plan(s) from disk` when something was actually backfilled.
+
+Closes the loop for anyone upgrading mid-incident with stuck plans.
+
 ## 1.11.7
 
 ### Plan-phase resilience: salvage + visible resume

@@ -207,6 +207,64 @@ export function findOrphanedDesigns(rootDir: string): string | null {
   return null;
 }
 
+/**
+ * Backfill run.json for pre-1.11.7 orphaned plans: runs where orchestrate's
+ * agent wrote tasks.json via its Write tool but the process died before
+ * executeRun ever got to saveRunState. Without this, those runs are invisible
+ * to findIncompleteRuns forever.
+ *
+ * Idempotent: runs with an existing run.json are skipped. Synthesizes a
+ * minimal "planning" state from what can be read off disk — dir name for
+ * timestamp, task count for budget, sane defaults for everything else.
+ * The cwd field is set to filterCwd so findIncompleteRuns picks it up on the
+ * current project (which is safe — rootDir is already scoped to `cwd`).
+ */
+export function backfillOrphanedPlans(rootDir: string, filterCwd: string): number {
+  const runsDir = join(rootDir, "runs");
+  let count = 0;
+  try {
+    const dirs = readdirSync(runsDir);
+    for (const d of dirs) {
+      const runDir = join(runsDir, d);
+      if (existsSync(join(runDir, "run.json"))) continue;
+      const tasksFile = join(runDir, "tasks.json");
+      if (!existsSync(tasksFile)) continue;
+      let taskCount = 0;
+      try {
+        const parsed = JSON.parse(readFileSync(tasksFile, "utf-8"));
+        if (!Array.isArray(parsed?.tasks)) continue;
+        taskCount = parsed.tasks.length;
+      } catch { continue; }
+      if (taskCount === 0) continue;
+
+      // Dir name format: 2026-04-12T13-03-57 (UTC). Convert to ISO.
+      const m = d.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/);
+      const startedAt = m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}.000Z` : new Date(0).toISOString();
+
+      try {
+        saveRunState(runDir, {
+          id: d,
+          objective: `(recovered pre-1.11.7 plan · ${taskCount} tasks)`,
+          budget: taskCount, remaining: taskCount,
+          workerModel: "claude-opus-4-6", plannerModel: "claude-opus-4-6",
+          concurrency: 5, permissionMode: "bypassPermissions",
+          flex: false, useWorktrees: true, mergeStrategy: "yolo",
+          allowExtraUsage: false,
+          waveNum: 0, currentTasks: [],
+          accCost: 0, accCompleted: 0, accFailed: 0,
+          accIn: 0, accOut: 0, accTools: 0,
+          branches: [],
+          phase: "planning",
+          startedAt,
+          cwd: filterCwd,
+        });
+        count++;
+      } catch {}
+    }
+  } catch {}
+  return count;
+}
+
 // ── History display ──
 
 export function formatTimeAgo(isoStr: string): string {
