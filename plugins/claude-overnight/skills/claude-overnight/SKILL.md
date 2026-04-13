@@ -11,7 +11,7 @@ description: >
 
 # What it is
 
-`claude-overnight` is a CLI (npm: `claude-overnight`, bin: `claude-overnight`) that takes an objective + budget and runs many Claude agents in parallel, each in an isolated git worktree. It plans with a "thinking wave" of architect agents, orchestrates concrete tasks, executes waves, and uses steering to decide between more execution, reflection, or declaring done. Rate limits, crashes, and usage caps are all resumable — nothing is lost.
+`claude-overnight` is a CLI (npm: `claude-overnight`, bin: `claude-overnight`) that takes an objective + budget and launches many Claude agent sessions in parallel, each in an isolated git worktree. It's a local multi-session orchestrator built on top of the Claude Agent SDK — not itself an agent harness, but a layer that plans, dispatches, and steers many sessions that run on the SDK's harness. A "thinking wave" of architect sessions explores the codebase, an orchestrator synthesizes concrete tasks, executor waves run them in parallel, and steering decides between more execution, reflection, or declaring done. Rate limits, crashes, and usage caps are all resumable — nothing is lost.
 
 Repo: https://github.com/Fornace/claude-overnight
 

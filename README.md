@@ -1,10 +1,10 @@
 # claude-overnight
 
-Run 10, 100, or 1000 Claude agents overnight. Come back to shipped work.
+**Run 10, 100, or 1000 Claude agents overnight.** A local multi-session orchestrator for the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — parallel Claude agent sessions in isolated git worktrees, spend caps, rate-limit handling, and crash-safe resume across days. Press Run and go to sleep.
 
-Local-first, git-native, budget-first. Describe what to build, set a spend cap, press Run. The tool plans, explores your codebase, breaks the objective into tasks, launches parallel agents in isolated git worktrees, iterates toward quality, handles rate limits automatically, and resumes cleanly across crashes and laptop sleeps. You wake up to merged commits.
+Local-first, git-native, budget-first. Describe what to build, set a spend cap, press Run. The tool plans with a thinking wave of architect sessions, breaks the objective into concrete tasks, launches parallel agent sessions in isolated git worktrees, iterates toward quality with a planner/executor/reflection loop, handles rate limits automatically, and resumes cleanly across crashes, rate-limit windows, and laptop sleeps. You wake up to merged commits.
 
-Different shape from hosted single-session runtimes like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): this runs on your machine, against your real repo, as a parallel swarm — with spend caps, git worktree choreography, and multi-day crash-safe resume. Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Works with Claude Opus, Sonnet, and Haiku — or route executors to Qwen / OpenRouter / any Anthropic-compatible endpoint via the `Other…` picker.
+Different shape from hosted single-session agent harnesses like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): instead of one agent in one cloud container, you get many parallel agent sessions running on your own machine, in your real repo, coordinated by multi-wave steering. Works with Claude Opus, Sonnet, and Haiku — or pair an Anthropic planner with a cheaper executor on Qwen, OpenRouter, or any Anthropic-compatible endpoint via the `Other…` picker.
 
 ## Install
 
@@ -12,16 +12,7 @@ Different shape from hosted single-session runtimes like [Claude Managed Agents]
 npm install -g claude-overnight
 ```
 
-Requires Node.js >= 20 and Claude authentication (`claude auth login`, or set `ANTHROPIC_API_KEY`).
-
-### Claude Code plugin
-
-This repo also ships a Claude Code plugin so any Claude instance (inside this repo or any other) knows how to use, inspect, and resume `claude-overnight` runs:
-
-```
-/plugin marketplace add Fornace/claude-overnight
-/plugin install claude-overnight
-```
+Requires Node.js ≥ 20 and Claude authentication (`claude auth login` or `ANTHROPIC_API_KEY`).
 
 ## Quick start
 
@@ -73,31 +64,55 @@ claude-overnight
 
 You interact once (objective, budget, model, review themes), then everything runs autonomously — thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
 
+## How is this different?
+
+Claude already has several ways to run agents. `claude-overnight` fills a specific niche:
+
+- **Claude Code** — interactive pair programming in your terminal. One agent, one conversation, you drive. `claude-overnight` is the inverse: many agents, no driver, you walk away and come back to merged commits.
+- **[Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview)** — a hosted single-session agent harness. One agent, one cloud container, stateful conversation. `claude-overnight` is a local multi-session *orchestrator* built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk): many parallel sessions on your machine, in your real repo, with spend caps and multi-day crash-safe resume.
+- **[Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)** — primitives for building your own agent. `claude-overnight` is one specific thing built on top of it: an overnight swarm orchestrator you didn't have to write.
+- **IDE copilots (Cursor, Copilot, Cline, etc.)** — synchronous assistants that complete while you're at the keyboard. `claude-overnight` is asynchronous: you hand off an objective and a budget, close the laptop lid, and review a branch in the morning.
+
+If you want to hand an objective and a spend cap to Claude and wake up to shipped work on your real repo, this is the shape.
+
+## Use cases
+
+- **Overnight refactors** — "Modernize the auth system" at budget 200.
+- **Batch feature implementation** — dozens of features from a task file, parallelized.
+- **Codebase-wide cleanups** — deduplicate, simplify, rename, normalize.
+- **Test generation at scale** — integration tests for every route or module.
+- **Documentation sprints** — API docs, READMEs, inline comments, changelogs.
+- **Framework migrations** — version upgrades, type annotations, config format swaps.
+- **Quality audits** — reflection waves surface architectural issues and code smells.
+- **Long research runs** — architect sessions explore a large codebase before any code lands.
+
+Typical shape: one objective + a $20–$200 spend cap + sleep.
+
 ## How it works
 
-### 1. Thinking wave
+### 1. Thinking wave — parallel architect sessions
 
 For budgets > 15, the tool launches **architect agents** that explore your codebase before any code is written. Each one gets a different research angle (architecture, data models, APIs, testing, etc.) and writes a structured design document. The number scales with budget: 5 for budget=50, 10 for budget=2000.
 
-### 2. Orchestration
+### 2. Task orchestration
 
-An orchestrator agent reads all design documents and synthesizes concrete execution tasks — grounded in real files and patterns the architects found. No guesswork. The task plan is also written to a file for resilience — if orchestration is interrupted, partial results survive.
+An orchestrator session reads all design documents and synthesizes concrete execution tasks — grounded in real files and patterns the architects found. No guesswork. The task plan is also written to a file for resilience — if orchestration is interrupted, partial results survive.
 
-### 3. Iterative execution
+### 3. Parallel execution waves
 
-Tasks run in parallel (each agent in its own git worktree). After completing its task, each agent automatically runs a **simplify pass** — reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits.
+Tasks run in parallel agent sessions (each in its own git worktree). After completing its task, each session automatically runs a **simplify pass** — reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits.
 
 After each wave, steering assesses: "how good is this?" — not "what's missing?" It can:
 
 - **Execute** more tasks to build features, fix bugs, polish UX
-- **Reflect** by spinning up 1-2 review agents for deep quality/architecture audits
+- **Reflect** by spinning up 1-2 review sessions for deep quality/architecture audits
 - **Declare done** when the vision is met at high quality
 
-### 4. Goal refinement
+### 4. Goal refinement and steering
 
 The tool starts with your broad objective but evolves its definition of "amazing" as it learns your codebase. Steering refines the goal after each wave. Late waves are informed by early discoveries.
 
-### 5. Three-layer context
+### 5. Three-layer context memory
 
 Long runs stay sharp because steering maintains three layers of memory:
 
@@ -105,7 +120,7 @@ Long runs stay sharp because steering maintains three layers of memory:
 - **Milestones** — strategic snapshots archived every ~5 waves. Long-term memory.
 - **Goal** — the evolving north star. What "amazing" means for this codebase.
 
-## Run history and resume
+## Run history, resume, and knowledge carryforward
 
 Every run gets its own folder in `.claude-overnight/runs/`. Nothing is ever overwritten.
 
@@ -133,7 +148,7 @@ Any run that stops before the steering system declares the objective complete �
 
 On resume: unmerged branches auto-merge, the wave loop continues, all context is preserved. Designs and reflections stay on disk until the objective is truly complete.
 
-If the thinking phase succeeds but orchestration crashes, the next run detects the orphaned design docs and reuses them — no re-running $9 worth of architect agents:
+If the thinking phase succeeds but orchestration crashes, the next run detects the orphaned design docs and reuses them — no re-running $9 worth of architect sessions:
 
 ```
   ✓ Reusing 5 design docs (from prior attempt)
@@ -143,15 +158,13 @@ If the thinking phase succeeds but orchestration crashes, the next run detects t
     ...
 ```
 
-**Knowledge carries forward** — new runs inherit knowledge from completed previous runs. Thinking agents and steering see what past runs built. Run 2 knows run 1 already built the auth system.
+**Knowledge carries forward** — new runs inherit knowledge from completed previous runs. Thinking sessions and steering see what past runs built. Run 2 knows run 1 already built the auth system.
 
 Add `.claude-overnight/` to your `.gitignore` (with the trailing slash — see below).
 
 A separate, tiny `claude-overnight.log.md` is also written at the repo root on every run. It's human-readable, append-only, one block per run (objective, start/finish, cost, outcome, branch), and is designed to be **committed** — so even after `.claude-overnight/` is cleaned up you can still recover which prompt produced which commits. Use `.claude-overnight/` (with trailing slash) in your gitignore so this file isn't matched by accident.
 
-## Other usage modes
-
-### Task file
+## Task file and inline modes
 
 ```bash
 claude-overnight tasks.json
@@ -181,7 +194,7 @@ For multi-wave runs, add `objective` and `flexiblePlan`:
 }
 ```
 
-### Inline
+Inline:
 
 ```bash
 claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
@@ -215,7 +228,7 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 | `mergeStrategy` | `"yolo" \| "branch"` | `"yolo"` | Merge into HEAD or new branch |
 | `usageCap` | `number (0-100)` | unlimited | Stop at N% utilization |
 
-## Custom providers (Qwen, OpenRouter, anything Anthropic-compatible)
+## Custom providers (Qwen, OpenRouter, any Anthropic-compatible endpoint)
 
 Planner and executor are picked separately — pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of execution.
 
@@ -245,7 +258,7 @@ Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (
 
 **Non-interactive / CI.** `claude-overnight --model=qwen3-coder-plus` auto-resolves the model id to a saved provider — no separate `--provider` flag.
 
-## Usage controls
+## Spend caps and usage controls
 
 ### Extra usage protection
 
@@ -272,7 +285,7 @@ The usage bar cycles through all rate limit windows (5h, 7d, etc.) every 3 secon
 
 When using extra usage with a budget, a dedicated progress bar shows spend vs limit with color-coded fill (magenta → yellow → red).
 
-## Rate limits
+## Rate-limit handling and crash-safe recovery
 
 Built for unattended runs lasting hours or days.
 
@@ -286,14 +299,23 @@ Built for unattended runs lasting hours or days.
 - **Usage cap**: set a ceiling, active agents finish, no new ones start — run is resumable
 - **Planner retries**: steering and orchestration retry on rate limits (30s/60s/120s backoff) with full context
 
-## Worktrees and merging
+## Git worktrees and branch merging
 
-Each agent gets an isolated git worktree (`swarm/task-N` branch). Changes auto-commit. After all agents complete, branches merge back.
+Each agent session gets an isolated git worktree (`swarm/task-N` branch). Changes auto-commit. After all sessions complete, branches merge back.
 
 - `"yolo"` (default): merges into your current branch
 - `"branch"`: creates a new `swarm/run-{timestamp}` branch
 
 Conflicts retry with `-X theirs`. Unresolved branches are preserved for manual merge.
+
+## Claude Code plugin
+
+This repo also ships a Claude Code plugin so any Claude instance (inside this repo or any other) knows how to use, inspect, and resume `claude-overnight` runs:
+
+```
+/plugin marketplace add Fornace/claude-overnight
+/plugin install claude-overnight
+```
 
 ## Exit codes
 
