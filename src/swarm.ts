@@ -607,7 +607,12 @@ export class Swarm {
         const ev = s.event;
         if (ev.type === "content_block_start") {
           const cb = (ev as any).content_block;
-          if (cb?.type === "tool_use") { agent.currentTool = cb.name; agent.toolCalls++; this.log(agent.id, cb.name); }
+          if (cb?.type === "tool_use") {
+            agent.currentTool = cb.name; agent.toolCalls++;
+            const input = cb.input as Record<string, unknown> | undefined;
+            const target = input?.path ?? input?.file_path ?? (typeof input?.command === "string" ? input.command.split(" ").slice(0, 3).join(" ") : "");
+            this.log(agent.id, target ? `${cb.name} \u2192 ${target}` : cb.name);
+          }
         } else if (ev.type === "content_block_delta") {
           const delta = (ev as any).delta;
           if (delta?.type === "text_delta" && delta.text) {

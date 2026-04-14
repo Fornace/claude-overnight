@@ -157,7 +157,7 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
 
 type RLGetter = () => { utilization: number; isUsingOverage: boolean; windows: Map<string, RateLimitWindow>; resetsAt?: number };
 
-export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo): string {
+export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number): string {
   const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
   const out: string[] = [];
 
@@ -198,8 +198,30 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
   if (show.length > 0) {
     out.push(chalk.gray("  #   Status   Task" + " ".repeat(Math.max(1, w - 56)) + "Action"));
     out.push(chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, 100))));
-    for (const a of show) out.push(fmtRow(a, w));
+    for (const a of show) out.push(fmtRow(a, w, a.id === (selectedAgentId ?? -1)));
     if (swarm.pending > 0) out.push(chalk.gray(`  ... + ${swarm.pending} queued`));
+  }
+
+  // ── Agent detail (progressive discovery) ──
+  const detailAgent = selectedAgentId != null
+    ? swarm.agents.find(a => a.id === selectedAgentId)
+    : undefined;
+  if (detailAgent) {
+    out.push("");
+    section(out, w, `Agent ${detailAgent.id} detail \u00b7 [d] next \u00b7 [Esc] close`);
+    const taskLines = detailAgent.task.prompt.split("\n");
+    const maxTaskLines = Math.min(6, taskLines.length);
+    for (let i = 0; i < maxTaskLines; i++) {
+      out.push(`  ${chalk.dim(truncate(taskLines[i].trim(), w - 6))}`);
+    }
+    if (taskLines.length > maxTaskLines) out.push(chalk.dim(`  \u2026 + ${taskLines.length - maxTaskLines} more lines`));
+    const meta: string[] = [];
+    if (detailAgent.currentTool) meta.push(chalk.yellow(`tool: ${detailAgent.currentTool}`));
+    if (detailAgent.lastText) meta.push(chalk.dim(truncate(detailAgent.lastText, 60)));
+    if (detailAgent.filesChanged != null) meta.push(chalk.dim(`${detailAgent.filesChanged} files`));
+    if (detailAgent.costUsd != null) meta.push(chalk.yellow(`$${detailAgent.costUsd.toFixed(3)}`));
+    if (detailAgent.toolCalls > 0) meta.push(chalk.dim(`${detailAgent.toolCalls} tools`));
+    if (meta.length > 0) out.push(`  ${meta.join(chalk.dim("  \u00b7 "))}`);
   }
 
   // Merge results
@@ -216,11 +238,20 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
   // Event log
   out.push("");
   out.push(chalk.gray("  \u2500\u2500\u2500 Events " + "\u2500".repeat(Math.min(w - 16, 90))));
-  const logN = Math.min(10, swarm.logs.length);
+  const logN = Math.min(12, swarm.logs.length);
   for (const entry of swarm.logs.slice(-logN)) {
     const t = new Date(entry.time).toLocaleTimeString("en", { hour12: false });
     const tag = entry.agentId < 0 ? chalk.magenta("[sys]") : chalk.cyan(`[${entry.agentId}]`);
-    out.push(chalk.gray(`  ${t} `) + tag + ` ${colorEvent(truncate(entry.text, w - 22))}`);
+    // Tool-use events with target get a secondary detail line
+    const arrowIdx = entry.text.indexOf(" \u2192 ");
+    if (arrowIdx > 0 && arrowIdx < 20) {
+      const toolName = entry.text.slice(0, arrowIdx);
+      const target = entry.text.slice(arrowIdx + 3);
+      out.push(chalk.gray(`  ${t} `) + tag + ` ${chalk.yellow(toolName)}`);
+      out.push(chalk.dim(`      ${truncate(target, w - 10)}`));
+    } else {
+      out.push(chalk.gray(`  ${t} `) + tag + ` ${colorEvent(truncate(entry.text, w - 22))}`);
+    }
   }
 
   if (showHotkeys) {
@@ -229,7 +260,9 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     const fixChip = swarm.failed > 0 && swarm.active > 0 ? chalk.yellow("  [f] fix") : "";
     const retryChip = swarm.rateLimitPaused > 0 ? chalk.yellow("  [r] retry-now") : "";
     const pauseLabel = swarm.paused ? "[p] resume" : "[p] pause";
-    out.push(chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip);
+    const detailChip = swarm.active > 0 ? chalk.dim("  [d] detail") : "";
+    const selectChip = swarm.active > 0 && running.length <= 10 ? chalk.dim("  [0-9] select") : "";
+    out.push(chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip);
     if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
       out.push(chalk.yellow(`  all workers rate-limited — [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
     }
@@ -357,13 +390,22 @@ export function renderSteeringFrame(
   }
 
   section(out, w, "Planner activity");
-  const events = data.events.slice(-10);
+  const events = data.events.slice(-15);
   if (events.length === 0) {
     out.push(chalk.dim("  (waiting for planner\u2026)"));
   } else {
     for (const e of events) {
       const t = new Date(e.time).toLocaleTimeString("en", { hour12: false });
-      out.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + colorEvent(truncate(e.text, w - 22)));
+      // Tool-use events with target get a secondary detail line
+      const arrowIdx = e.text.indexOf(" \u2192 ");
+      if (arrowIdx > 0 && arrowIdx < 30) {
+        const toolName = e.text.slice(0, arrowIdx);
+        const target = e.text.slice(arrowIdx + 3);
+        out.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + chalk.yellow(toolName));
+        out.push(chalk.dim(`      ${truncate(target, w - 10)}`));
+      } else {
+        out.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + colorEvent(truncate(e.text, w - 22)));
+      }
     }
   }
   out.push("");
@@ -433,8 +475,8 @@ export function renderSummary(swarm: Swarm): string {
 
 // ── Row formatting ──
 
-function fmtRow(a: AgentState, w: number): string {
-  const id = String(a.id).padStart(3);
+function fmtRow(a: AgentState, w: number, selected = false): string {
+  const id = selected ? chalk.cyan.bold(String(a.id).padStart(3)) : String(a.id).padStart(3);
   const elapsed = a.status === "running" && a.startedAt ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt)) : "";
   const spin = SPINNER[Math.floor(Date.now() / 250) % SPINNER.length];
   const icon = a.status === "running"

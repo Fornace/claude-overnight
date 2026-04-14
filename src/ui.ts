@@ -81,6 +81,8 @@ export class RunDisplay {
   private lastCompleted = -1;
   private askState?: AskState;
   private askBusy = false;
+  /** ID of the agent whose detail panel is open; undefined = no detail shown. */
+  private selectedAgentId?: number;
   private onSteer?: (text: string) => void;
   private onAsk?: (text: string) => void;
 
@@ -101,6 +103,29 @@ export class RunDisplay {
 
   /** Signal to the UI whether an ask is in progress (prevents duplicate firings). */
   setAskBusy(busy: boolean): void { this.askBusy = busy; }
+
+  /** Cycle the selected agent detail to the next running agent (or first running if none selected). */
+  cycleSelectedAgent(): void {
+    if (!this.swarm) return;
+    const running = this.swarm.agents.filter(a => a.status === "running");
+    if (running.length === 0) { this.selectedAgentId = undefined; return; }
+    if (this.selectedAgentId == null) { this.selectedAgentId = running[0].id; return; }
+    const idx = running.findIndex(a => a.id === this.selectedAgentId);
+    this.selectedAgentId = running[(idx + 1) % running.length].id;
+  }
+
+  /** Select a specific agent by ID for the detail panel. */
+  selectAgent(id: number): void {
+    if (!this.swarm) return;
+    const agent = this.swarm.agents.find(a => a.id === id);
+    if (agent && agent.status === "running") this.selectedAgentId = id;
+  }
+
+  /** Clear the agent detail panel. */
+  clearSelectedAgent(): void { this.selectedAgentId = undefined; }
+
+  /** Get the currently selected agent's ID for rendering. */
+  getSelectedAgentId(): number | undefined { return this.selectedAgentId; }
 
   start(): void {
     if (this.started) return;
@@ -184,7 +209,7 @@ export class RunDisplay {
   private render(): string {
     let frame = "";
     if (this.swarm) {
-      frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo);
+      frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo, this.selectedAgentId);
     } else if (this.steeringActive) {
       frame = renderSteeringFrame(this.runInfo, {
         statusLine: this.steeringStatusLine,
@@ -233,9 +258,14 @@ export class RunDisplay {
     } else if (a.streaming) {
       out.push(`  ${chalk.dim("A: " + (a.answer || "thinking..."))}`);
     } else {
-      const lines = a.answer.split("\n").slice(0, 20);
-      out.push(`  ${chalk.bold.green("A:")} ${lines[0] || ""}`);
-      for (const ln of lines.slice(1)) out.push(`     ${ln}`);
+      const allLines = a.answer.split("\n");
+      const maxLines = 40;
+      const showLines = allLines.slice(0, maxLines);
+      out.push(`  ${chalk.bold.green("A:")} ${showLines[0] || ""}`);
+      for (const ln of showLines.slice(1)) out.push(`     ${ln}`);
+      if (allLines.length > maxLines) {
+        out.push(chalk.dim(`     \u2026 + ${allLines.length - maxLines} more lines (open log for full answer)`));
+      }
     }
     return "\n" + out.join("\n");
   }
@@ -423,6 +453,23 @@ export class RunDisplay {
     if (key === "?" && this.onAsk && this.swarm && !this.askBusy) {
       if (this.askState && !this.askState.streaming) { this.askState = undefined; return false; }
       this.inputMode = "ask"; this.inputSegs = []; return true;
+    }
+    // [d] cycle agent detail panel
+    if ((key === "d" || key === "D") && this.swarm && this.swarm.active > 0) {
+      if (this.selectedAgentId != null) this.cycleSelectedAgent();
+      else this.cycleSelectedAgent();
+      return true;
+    }
+    // ESC closes detail panel
+    if (key === "\x1B" && this.selectedAgentId != null) {
+      this.clearSelectedAgent();
+      return true;
+    }
+    // Number keys 0-9 select a specific agent by row index in the visible table
+    if (/^[0-9]$/.test(key) && this.swarm) {
+      const n = parseInt(key);
+      const running = this.swarm.agents.filter(a => a.status === "running");
+      if (n < running.length) { this.selectAgent(running[n].id); return true; }
     }
     if (key === "q" || key === "Q" || key === "\x03") {
       if (this.swarm) {

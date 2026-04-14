@@ -200,8 +200,14 @@ async function runPlannerQueryOnce(
         const ev = (msg as any).event;
         if (ev?.type === "content_block_start" && ev.content_block?.type === "tool_use") {
           toolCount++;
-          lastLogText = ev.content_block.name;
-          onLog(ev.content_block.name, "event");
+          const toolName = ev.content_block.name;
+          const input = ev.content_block.input as Record<string, unknown> | undefined;
+          // Enrich event with target file/path for readability
+          const target = input?.path ?? input?.file_path ?? input?.command
+            ? (typeof input?.command === "string" ? input.command.split(" ").slice(0, 3).join(" ") : "")
+            : "";
+          lastLogText = target ? `${toolName} ${target}` : toolName;
+          onLog(target ? `${toolName} → ${target}` : toolName, "event");
         }
         if (ev?.type === "content_block_delta") {
           const delta = (ev as any).delta;

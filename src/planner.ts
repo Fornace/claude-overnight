@@ -237,7 +237,9 @@ export function buildThinkingTasks(
   const prevBlock = previousKnowledge ? `\nKNOWLEDGE FROM PREVIOUS RUNS:\n${previousKnowledge}\n\nBuild on this — don't re-discover what's already known.\n` : "";
   return themes.map((theme, i) => ({
     id: `think-${i}`,
-    prompt: `You are a senior architect exploring a codebase to design a solution.
+    prompt: `## Research: ${theme}
+
+You are a senior architect exploring a codebase to design a solution.
 
 OVERALL OBJECTIVE: ${objective}
 ${prevBlock}
