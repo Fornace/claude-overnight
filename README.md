@@ -8,13 +8,38 @@ Isolated by default. Every agent runs in its own git worktree on its own branch,
 
 Different shape from hosted agent harnesses like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): instead of one agent in one cloud container billed separately, you get many parallel sessions on your own machine, in your real repo, against your own Max plan (or API key). Works with Claude Opus, Sonnet, and Haiku — or pair an Anthropic planner with a cheaper executor on Qwen, OpenRouter, or any Anthropic-compatible endpoint.
 
+## Run on Qwen 3.6 Plus
+
+Hit your Claude Max plan limits? Running on a tight budget? Qwen 3.6 Plus via Alibaba Cloud's DashScope gateway is a drop-in executor that speaks the Anthropic Messages API — same client, same flow, pennies per run.
+
+1. **Get an API key.** Sign up at [Alibaba Cloud](https://account.alibabacloud.com/login/login.htm?oauth_callback=https%3A%2F%2Fmodelstudio.console.alibabacloud.com%2Fap-southeast-1%3Ftab%3Ddashboard%23%2Fapi-key&clearRedirectCookie=1) — the link takes you straight to the API key dashboard.
+2. **Configure the provider.** Run `claude-overnight`, choose `Other…` on the executor step, and fill in:
+
+   | Field | Value |
+   |---|---|
+   | Name | `Qwen 3.6 Plus` |
+   | Base URL | `https://dashscope-intl.aliyuncs.com/apps/anthropic` |
+   | Model id | `qwen3.6-plus` |
+   | API key | your DashScope key |
+
+3. That's it. Planner runs on Sonnet (or Opus), executor runs on Qwen.
+
+Or set it via env directly:
+
+```bash
+export ANTHROPIC_BASE_URL="https://dashscope-intl.aliyuncs.com/apps/anthropic"
+export ANTHROPIC_API_KEY="sk-..."
+export ANTHROPIC_MODEL="qwen3.6-plus"
+claude-overnight
+```
+
 ## Install
 
 ```bash
 npm install -g claude-overnight
 ```
 
-Requires Node.js ≥ 20 and Claude authentication (`claude auth login` or `ANTHROPIC_API_KEY`).
+Requires Node.js ≥ 20 and Claude authentication (`claude auth login` or `ANTHROPIC_API_KEY`). No Anthropic plan or key? See **Run on Qwen 3.6 Plus** above — a cheap, drop-in alternative.
 
 ## Quick start
 
@@ -35,7 +60,7 @@ claude-overnight
   ● Opus — Opus 4.6 · Most capable
   ○ Sonnet — Sonnet 4.6 · Best for everyday tasks
 
-⑤ Executor model (what runs the tasks — Qwen/OpenRouter/etc via Other…):
+⑤ Executor model (what runs the tasks — Qwen 3.6 Plus / OpenRouter / etc via Other…):
   ● Sonnet — Sonnet 4.6 · Best for everyday tasks
   ○ Opus — Opus 4.6 · Most capable
   ○ Other… · custom OpenAI/Anthropic-compatible endpoint
@@ -232,14 +257,14 @@ Planner and executor are picked separately — pair Opus-on-Anthropic for the pl
 From the interactive picker, choose `Other…` on the planner or executor step:
 
 ```
-⑤ Executor model (what runs the tasks — Qwen/OpenRouter/etc via Other…):
+⑤ Executor model (what runs the tasks — Qwen 3.6 Plus / OpenRouter / etc via Other…):
   ○ Sonnet
   ○ Opus
   ● Other…
 
-  Name: Qwen Coder
-  Base URL: https://dashscope-intl.aliyuncs.com/api/v2/apps/claude-code-proxy
-  Model id: qwen3-coder-plus
+  Name: Qwen 3.6 Plus
+  Base URL: https://dashscope-intl.aliyuncs.com/apps/anthropic
+  Model id: qwen3.6-plus
   API key source:
     ● Paste key now        · stored plaintext in ~/.claude/claude-overnight/providers.json (0600)
     ○ Read from env var    · nothing written to disk
@@ -253,7 +278,7 @@ Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (
 
 **Resume.** Provider ids are persisted in `run.json` and rehydrated on resume. If you deleted a provider between runs, resume refuses to start and tells you exactly which id is missing.
 
-**Non-interactive / CI.** `claude-overnight --model=qwen3-coder-plus` auto-resolves the model id to a saved provider — no separate `--provider` flag.
+**Non-interactive / CI.** `claude-overnight --model=qwen3.6-plus` auto-resolves the model id to a saved provider — no separate `--provider` flag.
 
 ## Spend caps and usage controls
 

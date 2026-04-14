@@ -482,7 +482,7 @@ async function main() {
     try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
     const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering — use your strongest)")}:`, models);
     plannerModel = plannerPick.model; plannerProvider = plannerPick.provider;
-    const workerPick = await pickModel(`${chalk.cyan("⑤")} Executor model ${chalk.dim("(what runs the tasks — Qwen/OpenRouter/etc via Other…)")}:`, models);
+    const workerPick = await pickModel(`${chalk.cyan("⑤")} Executor model ${chalk.dim("(what runs the tasks — Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models);
     workerModel = workerPick.model; workerProvider = workerPick.provider;
     usageCap = await select(`${chalk.cyan("⑥")} Usage cap:`, [
       { name: "Unlimited", value: undefined as any, hint: "full capacity, wait through rate limits" },

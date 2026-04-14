@@ -18,7 +18,7 @@ Repo: https://github.com/Fornace/claude-overnight
 # Install / run
 
 ```bash
-npm install -g claude-overnight      # Node >= 20; needs Claude auth or ANTHROPIC_API_KEY
+npm install -g claude-overnight      # Node >= 20; needs Claude auth or ANTHROPIC_API_KEY (or Qwen 3.6 Plus — see repo README)
 claude-overnight                      # interactive in cwd
 claude-overnight tasks.json           # task file mode
 claude-overnight "task a" "task b"    # inline

@@ -124,7 +124,7 @@ export async function pickModel(
       const keySrc = p.keyEnv ? `env ${p.keyEnv}` : "stored key";
       items.push({ name: `${p.displayName}`, value: { kind: "provider", provider: p }, hint: `${p.model} · ${keySrc}` });
     }
-    items.push({ name: chalk.cyan("Other…"), value: { kind: "other" }, hint: "custom OpenAI/Anthropic-compatible endpoint" });
+    items.push({ name: chalk.cyan("Other…"), value: { kind: "other" }, hint: "Qwen 3.6 Plus, OpenRouter, or any Anthropic-compatible endpoint" });
 
     let defaultIdx = 0;
     if (currentModelId) {
@@ -158,11 +158,11 @@ async function promptNewProvider(): Promise<ProviderConfig | null> {
   if (!displayName) return null;
   const id = slugify(displayName);
 
-  const baseURLRaw = await ask(`\n  ${chalk.cyan("Base URL")} ${chalk.dim("(e.g. https://dashscope-intl.aliyuncs.com/api/v2/apps/claude-code-proxy):")} `);
+  const baseURLRaw = await ask(`\n  ${chalk.cyan("Base URL")} ${chalk.dim("(e.g. https://dashscope-intl.aliyuncs.com/apps/anthropic for Qwen 3.6 Plus):")} `);
   if (!baseURLRaw) return null;
   const baseURL = normalizeBaseURL(baseURLRaw);
 
-  const model = await ask(`\n  ${chalk.cyan("Model id")} ${chalk.dim("(e.g. qwen3-coder-plus):")} `);
+  const model = await ask(`\n  ${chalk.cyan("Model id")} ${chalk.dim("(e.g. qwen3.6-plus):")} `);
   if (!model) return null;
 
   const keyMode = await select(`  ${chalk.cyan("API key source")}:`, [
