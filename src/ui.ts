@@ -311,7 +311,13 @@ export class RunDisplay {
           this.inputSegs = [];
           return true;
         }
-        if (ch === "\x1B" || ch === "\x03") {
+        if (ch === "\x03") {
+          this.inputMode = "none";
+          this.inputSegs = [];
+          return true;
+        }
+        // ESC cancels input mode
+        if (ch === "\x1B") {
           this.inputMode = "none";
           this.inputSegs = [];
           return true;
@@ -323,7 +329,8 @@ export class RunDisplay {
     }
     if (this.inputMode === "steer" || this.inputMode === "ask") {
       let dirty = false;
-      for (const ch of s) {
+      for (let ci = 0; ci < s.length; ci++) {
+        const ch = s[ci];
         if (ch === "\r" || ch === "\n") {
           const text = segmentsToString(this.inputSegs).trim();
           const wasAsk = this.inputMode === "ask";
@@ -340,10 +347,17 @@ export class RunDisplay {
           this.inputSegs = [];
           return true;
         }
-        // Ignore raw ESC only — let ANSI sequences (arrows etc.) fall through
-        if (ch === "\x1B" && s.length === 1) {
+        // ESC cancels — consume this byte and any following ANSI sequence bytes
+        if (ch === "\x1B") {
           this.inputMode = "none";
           this.inputSegs = [];
+          // Skip any remaining ANSI sequence bytes (e.g. [A for arrow keys)
+          while (ci + 1 < s.length) {
+            const next = s[ci + 1];
+            const nc = next.charCodeAt(0);
+            ci++;
+            if ((nc >= 0x40 && nc <= 0x7E) || nc === 0x7F) break; // final byte
+          }
           return true;
         }
         if (ch === "\x7F" || ch === "\b") {
@@ -352,6 +366,8 @@ export class RunDisplay {
           continue;
         }
         const code = ch.charCodeAt(0);
+        if (code < 0x20) continue; // control chars
+        if (code >= 0x7F && code < 0xA0) continue; // DEL + C1 controls
         if (code >= 0x20 && code <= 0x7E && segmentsToString(this.inputSegs).length < MAX_INPUT_LEN) {
           appendCharToSegments(this.inputSegs, ch);
           dirty = true;
@@ -359,25 +375,31 @@ export class RunDisplay {
       }
       return dirty;
     }
-    // Hotkey mode
-    if (s === "\x1B" && this.askState && !this.askState.streaming) {
+    // Hotkey mode — only accept single printable ASCII characters
+    // Skip ESC and ANSI sequences entirely
+    if (s.length > 1 && (s[0] === "\x1B" || s.charCodeAt(0) < 0x20)) return false;
+    if (s.length !== 1) return false;
+    const key = s[0];
+    const code = key.charCodeAt(0);
+    if (code < 0x20 || code > 0x7E) return false;
+    if (key === "\x1B" && this.askState && !this.askState.streaming) {
       this.askState = undefined;
       return false;
     }
-    if (s === "b" || s === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
-    if (s === "t" || s === "T") {
+    if (key === "b" || key === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
+    if (key === "t" || key === "T") {
       if (this.swarm) { this.inputMode = "threshold"; this.inputSegs = []; return true; }
       return false;
     }
-    if (s === "c" || s === "C") {
+    if (key === "c" || key === "C") {
       if (this.swarm) { this.inputMode = "concurrency"; this.inputSegs = []; return true; }
       return false;
     }
-    if (s === "e" || s === "E") {
+    if (key === "e" || key === "E") {
       if (this.swarm) { this.inputMode = "extra"; this.inputSegs = []; return true; }
       return false;
     }
-    if (s === "p" || s === "P") {
+    if (key === "p" || key === "P") {
       if (this.swarm) {
         const next = !this.swarm.paused;
         this.swarm.setPaused(next);
@@ -387,22 +409,22 @@ export class RunDisplay {
       }
       return false;
     }
-    if ((s === "f" || s === "F") && this.swarm && this.swarm.failed > 0 && this.swarm.active > 0) {
+    if ((key === "f" || key === "F") && this.swarm && this.swarm.failed > 0 && this.swarm.active > 0) {
       this.swarm.requeueFailed();
       return false;
     }
-    if ((s === "r" || s === "R") && this.swarm && this.swarm.rateLimitPaused > 0) {
+    if ((key === "r" || key === "R") && this.swarm && this.swarm.rateLimitPaused > 0) {
       this.swarm.retryRateLimitNow();
       return true;
     }
-    if ((s === "s" || s === "S") && this.onSteer) {
+    if ((key === "s" || key === "S") && this.onSteer) {
       this.inputMode = "steer"; this.inputSegs = []; return true;
     }
-    if (s === "?" && this.onAsk && this.swarm && !this.askBusy) {
+    if (key === "?" && this.onAsk && this.swarm && !this.askBusy) {
       if (this.askState && !this.askState.streaming) { this.askState = undefined; return false; }
       this.inputMode = "ask"; this.inputSegs = []; return true;
     }
-    if (s === "q" || s === "Q" || s === "\x03") {
+    if (key === "q" || key === "Q" || key === "\x03") {
       if (this.swarm) {
         if (this.swarm.aborted) process.exit(0);
         this.swarm.abort();

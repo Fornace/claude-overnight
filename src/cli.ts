@@ -196,7 +196,8 @@ export function ask(question: string): Promise<string> {
           redraw();
           continue;
         }
-        for (const ch of seg.text) {
+        for (let ci = 0; ci < seg.text.length; ci++) {
+          const ch = seg.text[ci];
           if (ch === "\r" || ch === "\n") {
             stdout.write("\n");
             cleanup();
@@ -208,9 +209,14 @@ export function ask(question: string): Promise<string> {
             stdout.write("\n");
             process.exit(130);
           }
-          if (ch === "\x7F" || ch === "\b") { backspaceSegments(segs); continue; }
+          if (ch === "\x7F" || ch === "\b") { backspaceSegments(segs); redraw(); continue; }
+          // Skip ESC and any bytes that are part of an ANSI escape sequence
+          // (arrow keys, function keys, etc. arrive as \x1B [ ... letter)
+          if (ch === "\x1B") { continue; }
           const code = ch.charCodeAt(0);
-          if (ch !== "\x1B" && code >= 0x20) appendCharToSegments(segs, ch);
+          if (code < 0x20) continue; // control chars
+          if (code >= 0x7F && code < 0xA0) continue; // DEL + C1 controls
+          appendCharToSegments(segs, ch);
         }
         redraw();
       }
@@ -249,9 +255,9 @@ export async function select<T>(label: string, items: { name: string; value: T; 
     };
     const handler = (buf: Buffer) => {
       const s = buf.toString();
-      if (s === "\x1B[A") { idx = (idx - 1 + items.length) % items.length; draw(); }
-      else if (s === "\x1B[B") { idx = (idx + 1) % items.length; draw(); }
-      else if (s === "\r") done(items[idx].value);
+      // Ignore ANSI escape sequences (arrow keys etc.)
+      if (s[0] === "\x1B") return;
+      if (s === "\r") done(items[idx].value);
       else if (s === "\x03") { stdin.setRawMode!(false); process.exit(0); }
       else if (/^[1-9]$/.test(s)) {
         const n = parseInt(s) - 1;
@@ -273,9 +279,11 @@ export async function selectKey(label: string, options: { key: string; desc: str
     stdin.resume();
     const handler = (buf: Buffer) => {
       const s = buf.toString().toLowerCase();
+      // Ignore ANSI escape sequences
+      if (s[0] === "\x1B") return;
       if (s === "\x03") { stdin.setRawMode!(false); process.exit(0); }
       if (s === "\r") { stdin.setRawMode!(false); stdin.removeListener("data", handler); stdin.pause(); resolve(keys[0]); return; }
-      if (keys.includes(s)) { stdin.setRawMode!(false); stdin.removeListener("data", handler); stdin.pause(); resolve(s); }
+      if (s.length === 1 && keys.includes(s)) { stdin.setRawMode!(false); stdin.removeListener("data", handler); stdin.pause(); resolve(s); }
     };
     stdin.on("data", handler);
   });
