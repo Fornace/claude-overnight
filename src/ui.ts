@@ -61,6 +61,13 @@ export interface AskState {
   error?: string;
 }
 
+/** Navigation state for arrow-key traversal within the TUI content area. */
+interface NavState {
+  focusSection: number;
+  focusRow: number;
+  scrollOffset: number;
+}
+
 type RLGetter = () => { utilization: number; isUsingOverage: boolean; windows: Map<string, RateLimitWindow>; resetsAt?: number };
 
 const MAX_STEERING_EVENTS = 60;
@@ -90,6 +97,7 @@ export class RunDisplay {
   private askTempFile?: string;
   /** ID of the agent whose detail panel is open; undefined = no detail shown. */
   private selectedAgentId?: number;
+  private navState: NavState = { focusSection: 0, focusRow: 0, scrollOffset: 0 };
   private onSteer?: (text: string) => void;
   private onAsk?: (text: string) => void;
 
@@ -145,6 +153,166 @@ export class RunDisplay {
 
   /** Clear the agent detail panel. */
   clearSelectedAgent(): void { this.selectedAgentId = undefined; }
+
+  /** Arrow-key navigation dispatched by the demux in handleTyped(). */
+  navigate(direction: "up" | "down" | "left" | "right" | "enter"): boolean {
+    const sections = this.getSections();
+    const nav = this.navState;
+    const section = sections[Math.min(nav.focusSection, sections.length - 1)];
+    let changed = false;
+
+    switch (direction) {
+      case "up":
+        if (nav.focusRow > 0) {
+          nav.focusRow--;
+          nav.scrollOffset = Math.max(0, nav.scrollOffset - 1);
+          changed = true;
+        } else if (nav.focusSection > 0) {
+          nav.focusSection--;
+          const prevSection = sections[nav.focusSection];
+          nav.focusRow = Math.max(0, prevSection.rowCount - 1);
+          changed = true;
+        }
+        break;
+      case "down":
+        if (nav.focusRow < section.rowCount - 1) {
+          nav.focusRow++;
+          changed = true;
+        } else if (nav.focusSection < sections.length - 1) {
+          nav.focusSection++;
+          nav.focusRow = 0;
+          changed = true;
+        }
+        break;
+      case "left":
+        if (this.selectedAgentId != null) {
+          this.clearSelectedAgent();
+          changed = true;
+        } else if (nav.focusSection > 0) {
+          nav.focusSection--;
+          nav.focusRow = 0;
+          changed = true;
+        }
+        break;
+      case "right":
+        if (this.swarm && this.selectedAgentId == null) {
+          const agents = this.getVisibleAgents();
+          const agent = agents[nav.focusRow];
+          if (agent && agent.status === "running") {
+            this.selectAgent(agent.id);
+            changed = true;
+          }
+        } else if (nav.focusSection < sections.length - 1) {
+          nav.focusSection++;
+          nav.focusRow = 0;
+          changed = true;
+        }
+        break;
+      case "enter":
+        if (this.swarm) {
+          const agents = this.getVisibleAgents();
+          const agent = agents[nav.focusRow];
+          if (agent) {
+            if (this.selectedAgentId === agent.id) {
+              this.clearSelectedAgent();
+            } else {
+              this.selectAgent(agent.id);
+            }
+            changed = true;
+          }
+        }
+        break;
+    }
+
+    this.clampNavState(sections);
+    return changed;
+  }
+
+  /** Get the agents visible in the table (running + last N finished). */
+  private getVisibleAgents(): import("./types.js").AgentState[] {
+    if (!this.swarm) return [];
+    const running = this.swarm.agents.filter(a => a.status === "running");
+    const finished = this.swarm.agents.filter(a => a.status !== "running");
+    const showFinished = finished.slice(-Math.max(2, 12 - running.length));
+    return [...running, ...showFinished];
+  }
+
+  /** Discover sections from the current render state for navigation boundaries. */
+  private getSections(): { title: string; rowCount: number; highlightKeyForRow: (row: number) => string | undefined }[] {
+    const sections: { title: string; rowCount: number; highlightKeyForRow: (row: number) => string | undefined }[] = [];
+
+    if (this.swarm) {
+      // Agent table section
+      const show = this.getVisibleAgents();
+      sections.push({
+        title: "Agents",
+        rowCount: show.length,
+        highlightKeyForRow: (row: number) => show[row]?.id != null ? `agent-${show[row].id}` : undefined,
+      });
+
+      // Agent detail section
+      if (this.selectedAgentId != null) {
+        sections.push({
+          title: "Detail",
+          rowCount: 1,
+          highlightKeyForRow: () => "detail",
+        });
+      }
+
+      // Merge results section
+      if (this.swarm.mergeResults.length > 0) {
+        sections.push({
+          title: "Merges",
+          rowCount: this.swarm.mergeResults.length,
+          highlightKeyForRow: (row: number) => `merge-${row}`,
+        });
+      }
+
+      // Event log section
+      sections.push({
+        title: "Events",
+        rowCount: Math.min(12, this.swarm.logs.length),
+        highlightKeyForRow: (row: number) => `event-${row}`,
+      });
+    } else if (this.steeringActive) {
+      // Steering mode sections
+      if (this.steeringContext?.objective) {
+        sections.push({ title: "Objective", rowCount: 1, highlightKeyForRow: () => "objective" });
+      }
+      if (this.steeringContext?.status) {
+        sections.push({ title: "Status", rowCount: 1, highlightKeyForRow: () => "status" });
+      }
+      if (this.steeringContext?.lastWave) {
+        sections.push({ title: "LastWave", rowCount: Math.min(6, this.steeringContext.lastWave.tasks.length + 1), highlightKeyForRow: (row: number) => `wave-task-${row}` });
+      }
+      sections.push({ title: "PlannerActivity", rowCount: Math.min(15, this.steeringEvents.length), highlightKeyForRow: (row: number) => `steer-event-${row}` });
+      sections.push({ title: "StatusLine", rowCount: 1, highlightKeyForRow: () => "status-line" });
+    }
+
+    // Ensure at least one section
+    if (sections.length === 0) {
+      sections.push({ title: "Content", rowCount: 1, highlightKeyForRow: () => "content" });
+    }
+
+    return sections;
+  }
+
+  private clampNavState(sections: ReturnType<RunDisplay["getSections"]>): void {
+    const nav = this.navState;
+    nav.focusSection = Math.min(Math.max(0, nav.focusSection), sections.length - 1);
+    const s = sections[nav.focusSection];
+    if (s) {
+      nav.focusRow = Math.min(Math.max(0, nav.focusRow), Math.max(0, s.rowCount - 1));
+    }
+  }
+
+  /** Returns the unique highlight key for the currently focused row, used by renderer. */
+  getHighlightKey(): string | undefined {
+    const sections = this.getSections();
+    const nav = this.navState;
+    const section = sections[Math.min(nav.focusSection, sections.length - 1)];
+    return section?.highlightKeyForRow?.(nav.focusRow);
+  }
 
   private clearAskTempFile(): void {
     if (this.askTempFile) {
@@ -345,9 +513,53 @@ export class RunDisplay {
     return false;
   }
 
-  /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw. */
+  /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw.
+   *
+   * Demux pipeline — routes arrow keys and ESC BEFORE hotkey matching:
+   *   Raw stdin chunk → splitPaste
+   *     ├─ paste → handlePaste (existing, fine)
+   *     └─ typed → demux
+   *          ├─ ESC + [A/B/C/D  → this.navigate("up"/"down"/"right"/"left")
+   *          ├─ ESC             → cancel input / close detail / dismiss panel
+   *          ├─ Enter           → submit / reveal / select
+   *          ├─ Ctrl+C          → abort
+   *          ├─ Backspace       → delete
+   *          └─ printable       → hotkey matching (b, t, c, e, p, s, q, ?, d, 0-9)
+   */
   private handleTyped(s: string): boolean {
     const lc = this.liveConfig!;
+
+    // ── 1. Arrow keys: \x1B[A = up, \x1B[B = down, \x1B[C = right, \x1B[D = left ──
+    if (s.startsWith("\x1B[")) {
+      const dir = s[2];
+      if (dir === "A") { this.navigate("up"); return true; }
+      if (dir === "B") { this.navigate("down"); return true; }
+      if (dir === "C") { this.navigate("right"); return true; }
+      if (dir === "D") { this.navigate("left"); return true; }
+      // Other ANSI sequences — swallow silently
+      return true;
+    }
+
+    // ── 2. Standalone ESC ──
+    if (s === "\x1B") {
+      if (this.inputMode !== "none") {
+        this.inputMode = "none";
+        this.inputSegs = [];
+        return true;
+      }
+      if (this.selectedAgentId != null) {
+        this.clearSelectedAgent();
+        return true;
+      }
+      if (this.askState && !this.askState.streaming) {
+        this.askState = undefined;
+        this.clearAskTempFile();
+        return true;
+      }
+      return false;
+    }
+
+    // ── 3. Input mode: budget / threshold / concurrency / extra ──
     if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency" || this.inputMode === "extra") {
       let dirty = false;
       for (const ch of s) {
@@ -382,17 +594,13 @@ export class RunDisplay {
           this.inputSegs = [];
           return true;
         }
-        // ESC cancels input mode
-        if (ch === "\x1B") {
-          this.inputMode = "none";
-          this.inputSegs = [];
-          return true;
-        }
         if (ch === "\x7F") { backspaceSegments(this.inputSegs); dirty = true; continue; }
         if (/^[0-9.]$/.test(ch)) { appendCharToSegments(this.inputSegs, ch); dirty = true; }
       }
       return dirty;
     }
+
+    // ── 4. Input mode: steer / ask ──
     if (this.inputMode === "steer" || this.inputMode === "ask") {
       let dirty = false;
       for (let ci = 0; ci < s.length; ci++) {
@@ -413,17 +621,11 @@ export class RunDisplay {
           this.inputSegs = [];
           return true;
         }
-        // ESC cancels — consume this byte and any following ANSI sequence bytes
+        // ESC cancels input mode (no ANSI-byte consumption loop — arrows arrive
+        // as "\x1B[A" in a single call and are caught by step 1 above)
         if (ch === "\x1B") {
           this.inputMode = "none";
           this.inputSegs = [];
-          // Skip any remaining ANSI sequence bytes (e.g. [A for arrow keys)
-          while (ci + 1 < s.length) {
-            const next = s[ci + 1];
-            const nc = next.charCodeAt(0);
-            ci++;
-            if ((nc >= 0x40 && nc <= 0x7E) || nc === 0x7F) break; // final byte
-          }
           return true;
         }
         if (ch === "\x7F" || ch === "\b") {
@@ -432,8 +634,8 @@ export class RunDisplay {
           continue;
         }
         const code = ch.charCodeAt(0);
-        if (code < 0x20) continue; // control chars
-        if (code >= 0x7F && code < 0xA0) continue; // DEL + C1 controls
+        if (code < 0x20) continue;
+        if (code >= 0x7F && code < 0xA0) continue;
         if (code >= 0x20 && code <= 0x7E && segmentsToString(this.inputSegs).length < MAX_INPUT_LEN) {
           appendCharToSegments(this.inputSegs, ch);
           dirty = true;
@@ -441,26 +643,30 @@ export class RunDisplay {
       }
       return dirty;
     }
-    // Hotkey mode — only accept single printable ASCII characters
-    // Skip ESC and ANSI sequences entirely
-    if (s.length > 1 && (s[0] === "\x1B" || s.charCodeAt(0) < 0x20)) return false;
-    if (s.length !== 1) return false;
-    const key = s[0];
-    const code = key.charCodeAt(0);
-    // Allow \r / \n through for Enter-to-reveal
-    if (code === 0x0D || code === 0x0A) {
+
+    // ── 5. Hotkey mode ──
+
+    // Enter
+    if (s === "\r" || s === "\n") {
       if (this.askTempFile) {
         try { execSync(`open -R ${JSON.stringify(this.askTempFile)}`); } catch {}
       }
       return true;
     }
-    // ESC clears ask answer panel when in hotkey mode (check before the control-char filter below)
-    if (key === "\x1B" && this.askState && !this.askState.streaming) {
-      this.askState = undefined;
-      this.clearAskTempFile();
-      return false;
+
+    // Ctrl+C
+    if (s === "\x03") {
+      if (this.swarm && !this.swarm.aborted) { this.swarm.abort(); }
+      else { process.exit(0); }
+      return true;
     }
+
+    // Only single printable ASCII characters reach hotkey matching
+    if (s.length !== 1) return false;
+    const key = s[0];
+    const code = key.charCodeAt(0);
     if (code < 0x20 || code > 0x7E) return false;
+
     if (key === "b" || key === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
     if (key === "t" || key === "T") {
       if (this.swarm) { this.inputMode = "threshold"; this.inputSegs = []; return true; }
@@ -501,13 +707,7 @@ export class RunDisplay {
     }
     // [d] cycle agent detail panel
     if ((key === "d" || key === "D") && this.swarm && this.swarm.active > 0) {
-      if (this.selectedAgentId != null) this.cycleSelectedAgent();
-      else this.cycleSelectedAgent();
-      return true;
-    }
-    // ESC closes detail panel
-    if (key === "\x1B" && this.selectedAgentId != null) {
-      this.clearSelectedAgent();
+      this.cycleSelectedAgent();
       return true;
     }
     // Number keys 0-9 select a specific agent by row index in the visible table
@@ -516,7 +716,7 @@ export class RunDisplay {
       const running = this.swarm.agents.filter(a => a.status === "running");
       if (n < running.length) { this.selectAgent(running[n].id); return true; }
     }
-    if (key === "q" || key === "Q" || key === "\x03") {
+    if (key === "q" || key === "Q") {
       if (this.swarm) {
         if (this.swarm.aborted) process.exit(0);
         this.swarm.abort();

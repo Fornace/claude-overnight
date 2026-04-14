@@ -4,6 +4,20 @@ import { RATE_LIMIT_WINDOW_SHORT } from "./types.js";
 import type { AgentState, RateLimitWindow, WaveSummary } from "./types.js";
 import type { RunInfo, SteeringContext, SteeringEvent } from "./ui.js";
 
+// ── Unified layout types ──
+
+export interface Section {
+  title: string;
+  rows: string[];
+  scrollable?: boolean;
+  highlightKey?: string;
+}
+
+export interface ContentRenderer {
+  /** Returns an array of sections to render in the content area */
+  sections(): Section[];
+}
+
 const SPINNER = ["|", "/", "-", "\\"] as const;
 
 // ── Shared helpers ──
@@ -153,14 +167,95 @@ function renderUsageBars(out: string[], w: number, swarm: Swarm): void {
   }
 }
 
+// ── Unified frame renderer ──
+
+export function renderUnifiedFrame(
+  params: {
+    // Header params
+    model?: string;
+    phase: string;
+    barPct: number;
+    barLabel: string;
+    active?: number;
+    blocked?: number;
+    queued?: number;
+    startedAt: number;
+    totalIn: number;
+    totalOut: number;
+    totalCost: number;
+    waveNum: number;
+    sessionsUsed: number;
+    sessionsBudget: number;
+    remaining: number;
+    // Usage bar params (optional)
+    usageBarRender?: (out: string[], w: number) => void;
+    // Content
+    content: ContentRenderer;
+    // Footer
+    hotkeyRow?: string;
+    extraFooterRows?: string[];
+  },
+): string {
+  const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
+  const out: string[] = [];
+
+  // Header
+  renderHeader(out, w, {
+    model: params.model,
+    phase: params.phase,
+    barPct: params.barPct,
+    barLabel: params.barLabel,
+    active: params.active ?? 0,
+    blocked: params.blocked,
+    queued: params.queued ?? 0,
+    startedAt: params.startedAt,
+    totalIn: params.totalIn,
+    totalOut: params.totalOut,
+    totalCost: params.totalCost,
+    waveNum: params.waveNum,
+    sessionsUsed: params.sessionsUsed,
+    sessionsBudget: params.sessionsBudget,
+    remaining: params.remaining,
+  });
+
+  // Usage bar
+  if (params.usageBarRender) {
+    params.usageBarRender(out, w);
+  }
+
+  out.push("");
+
+  // Content sections
+  const sections = params.content.sections();
+  for (const sec of sections) {
+    if (sec.title) {
+      section(out, w, sec.title);
+    }
+    for (const row of sec.rows) {
+      out.push(row);
+    }
+  }
+
+  // Footer
+  out.push("");
+  if (params.hotkeyRow) {
+    out.push(params.hotkeyRow);
+  }
+  if (params.extraFooterRows) {
+    for (const row of params.extraFooterRows) {
+      out.push(row);
+    }
+  }
+  out.push("");
+
+  return out.join("\n");
+}
+
 // ── Frame renderers ──
 
 type RLGetter = () => { utilization: number; isUsingOverage: boolean; windows: Map<string, RateLimitWindow>; resetsAt?: number };
 
 export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number): string {
-  const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
-  const out: string[] = [];
-
   const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
   const pausedTag = swarm.paused ? chalk.yellow("PAUSED") : "";
   const stallTag = swarm.stallLevel >= 3 ? chalk.red("STALL") : swarm.stallLevel > 0 ? chalk.yellow(`STALL L${swarm.stallLevel}`) : "";
@@ -170,90 +265,89 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
   const phase = [phaseLabel, pausedTag, stallTag, stoppingTag].filter(Boolean).join(" ");
 
   const waveUsed = swarm.completed + swarm.failed;
-  renderHeader(out, w, {
-    model: runInfo?.model ?? swarm.model,
-    phase,
-    barPct: swarm.total > 0 ? swarm.completed / swarm.total : 0,
-    barLabel: `${swarm.completed}/${swarm.total}`,
-    active: swarm.active, blocked: swarm.blocked, queued: swarm.pending,
-    startedAt: runInfo?.startedAt ?? swarm.startedAt,
-    totalIn: (runInfo?.accIn ?? 0) + swarm.totalInputTokens,
-    totalOut: (runInfo?.accOut ?? 0) + swarm.totalOutputTokens,
-    totalCost: (runInfo?.accCost ?? swarm.baseCostUsd) + swarm.totalCostUsd,
-    waveNum: runInfo?.waveNum ?? -1,
-    sessionsUsed: (runInfo ? runInfo.accCompleted + runInfo.accFailed : 0) + waveUsed,
-    sessionsBudget: runInfo?.sessionsBudget ?? swarm.total,
-    remaining: Math.max(0, (runInfo?.remaining ?? swarm.total) - waveUsed),
-  });
 
-  renderUsageBars(out, w, swarm);
-  out.push("");
-
-  // Agent table
   const running = swarm.agents.filter(a => a.status === "running");
   const finished = swarm.agents.filter(a => a.status !== "running");
   const showFinished = finished.slice(-Math.max(2, 12 - running.length));
   const show = [...running, ...showFinished];
 
-  if (show.length > 0) {
-    out.push(chalk.gray("  #   Status   Task" + " ".repeat(Math.max(1, w - 56)) + "Action"));
-    out.push(chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, 100))));
-    for (const a of show) out.push(fmtRow(a, w, a.id === (selectedAgentId ?? -1)));
-    if (swarm.pending > 0) out.push(chalk.gray(`  ... + ${swarm.pending} queued`));
-  }
-
-  // ── Agent detail (progressive discovery) ──
   const detailAgent = selectedAgentId != null
     ? swarm.agents.find(a => a.id === selectedAgentId)
     : undefined;
-  if (detailAgent) {
-    out.push("");
-    section(out, w, `Agent ${detailAgent.id} detail \u00b7 [d] next \u00b7 [Esc] close`);
-    const taskLines = detailAgent.task.prompt.split("\n");
-    const maxTaskLines = Math.min(6, taskLines.length);
-    for (let i = 0; i < maxTaskLines; i++) {
-      out.push(`  ${chalk.dim(truncate(taskLines[i].trim(), w - 6))}`);
-    }
-    if (taskLines.length > maxTaskLines) out.push(chalk.dim(`  \u2026 + ${taskLines.length - maxTaskLines} more lines`));
-    const meta: string[] = [];
-    if (detailAgent.currentTool) meta.push(chalk.yellow(`tool: ${detailAgent.currentTool}`));
-    if (detailAgent.lastText) meta.push(chalk.dim(truncate(detailAgent.lastText, 60)));
-    if (detailAgent.filesChanged != null) meta.push(chalk.dim(`${detailAgent.filesChanged} files`));
-    if (detailAgent.costUsd != null) meta.push(chalk.yellow(`$${detailAgent.costUsd.toFixed(3)}`));
-    if (detailAgent.toolCalls > 0) meta.push(chalk.dim(`${detailAgent.toolCalls} tools`));
-    if (meta.length > 0) out.push(`  ${meta.join(chalk.dim("  \u00b7 "))}`);
-  }
 
-  // Merge results
-  if (swarm.mergeResults.length > 0) {
-    out.push("");
-    out.push(chalk.gray("  \u2500\u2500\u2500 Merges " + "\u2500".repeat(Math.min(w - 16, 90))));
-    for (const mr of swarm.mergeResults) {
-      const icon = mr.ok ? chalk.green("\u2713") : chalk.red("\u2717");
-      const info = mr.ok ? chalk.dim(`${mr.filesChanged} file(s)`) : chalk.red(truncate(mr.error || "conflict", 40));
-      out.push(`  ${icon} ${mr.branch}  ${info}`);
-    }
-  }
+  const content: ContentRenderer = {
+    sections(): Section[] {
+      const secs: Section[] = [];
 
-  // Event log
-  out.push("");
-  out.push(chalk.gray("  \u2500\u2500\u2500 Events " + "\u2500".repeat(Math.min(w - 16, 90))));
-  const logN = Math.min(12, swarm.logs.length);
-  for (const entry of swarm.logs.slice(-logN)) {
-    const t = new Date(entry.time).toLocaleTimeString("en", { hour12: false });
-    const tag = entry.agentId < 0 ? chalk.magenta("[sys]") : chalk.cyan(`[${entry.agentId}]`);
-    // Tool-use events with target get a secondary detail line
-    const arrowIdx = entry.text.indexOf(" \u2192 ");
-    if (arrowIdx > 0 && arrowIdx < 20) {
-      const toolName = entry.text.slice(0, arrowIdx);
-      const target = entry.text.slice(arrowIdx + 3);
-      out.push(chalk.gray(`  ${t} `) + tag + ` ${chalk.yellow(toolName)}`);
-      out.push(chalk.dim(`      ${truncate(target, w - 10)}`));
-    } else {
-      out.push(chalk.gray(`  ${t} `) + tag + ` ${colorEvent(truncate(entry.text, w - 22))}`);
-    }
-  }
+      // Agent table (undecorated — raw header + rows)
+      if (show.length > 0) {
+        const rows: string[] = [
+          chalk.gray("  #   Status   Task" + " ".repeat(Math.max(1, (process.stdout.columns ?? 80) || 80, 60) - 56)) + "Action",
+          chalk.gray("  " + "\u2500".repeat(Math.min(Math.max((process.stdout.columns ?? 80) || 80, 60) - 4, 100))),
+        ];
+        for (const a of show) rows.push(fmtRow(a, (process.stdout.columns ?? 80) || 80, a.id === (selectedAgentId ?? -1)));
+        if (swarm.pending > 0) rows.push(chalk.gray(`  ... + ${swarm.pending} queued`));
+        secs.push({ title: "", rows });
+      }
 
+      // Agent detail (decorated)
+      if (detailAgent) {
+        const rows: string[] = [];
+        const taskLines = detailAgent.task.prompt.split("\n");
+        const maxTaskLines = Math.min(6, taskLines.length);
+        const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
+        for (let i = 0; i < maxTaskLines; i++) {
+          rows.push(`  ${chalk.dim(truncate(taskLines[i].trim(), ww - 6))}`);
+        }
+        if (taskLines.length > maxTaskLines) rows.push(chalk.dim(`  \u2026 + ${taskLines.length - maxTaskLines} more lines`));
+        const meta: string[] = [];
+        if (detailAgent.currentTool) meta.push(chalk.yellow(`tool: ${detailAgent.currentTool}`));
+        if (detailAgent.lastText) meta.push(chalk.dim(truncate(detailAgent.lastText, 60)));
+        if (detailAgent.filesChanged != null) meta.push(chalk.dim(`${detailAgent.filesChanged} files`));
+        if (detailAgent.costUsd != null) meta.push(chalk.yellow(`$${detailAgent.costUsd.toFixed(3)}`));
+        if (detailAgent.toolCalls > 0) meta.push(chalk.dim(`${detailAgent.toolCalls} tools`));
+        if (meta.length > 0) rows.push(`  ${meta.join(chalk.dim("  \u00b7 "))}`);
+        secs.push({ title: `Agent ${detailAgent.id} detail \u00b7 [d] next \u00b7 [Esc] close`, rows });
+      }
+
+      // Merge results (undecorated)
+      if (swarm.mergeResults.length > 0) {
+        const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
+        const rows: string[] = [chalk.gray("  \u2500\u2500\u2500 Merges " + "\u2500".repeat(Math.min(ww - 16, 90)))];
+        for (const mr of swarm.mergeResults) {
+          const icon = mr.ok ? chalk.green("\u2713") : chalk.red("\u2717");
+          const info = mr.ok ? chalk.dim(`${mr.filesChanged} file(s)`) : chalk.red(truncate(mr.error || "conflict", 40));
+          rows.push(`  ${icon} ${mr.branch}  ${info}`);
+        }
+        secs.push({ title: "", rows });
+      }
+
+      // Event log (undecorated)
+      const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
+      const eventRows: string[] = [chalk.gray("  \u2500\u2500\u2500 Events " + "\u2500".repeat(Math.min(ww - 16, 90)))];
+      const logN = Math.min(12, swarm.logs.length);
+      for (const entry of swarm.logs.slice(-logN)) {
+        const t = new Date(entry.time).toLocaleTimeString("en", { hour12: false });
+        const tag = entry.agentId < 0 ? chalk.magenta("[sys]") : chalk.cyan(`[${entry.agentId}]`);
+        const arrowIdx = entry.text.indexOf(" \u2192 ");
+        if (arrowIdx > 0 && arrowIdx < 20) {
+          const toolName = entry.text.slice(0, arrowIdx);
+          const target = entry.text.slice(arrowIdx + 3);
+          eventRows.push(chalk.gray(`  ${t} `) + tag + ` ${chalk.yellow(toolName)}`);
+          eventRows.push(chalk.dim(`      ${truncate(target, ww - 10)}`));
+        } else {
+          eventRows.push(chalk.gray(`  ${t} `) + tag + ` ${colorEvent(truncate(entry.text, ww - 22))}`);
+        }
+      }
+      secs.push({ title: "", rows: eventRows });
+
+      return secs;
+    },
+  };
+
+  // Build footer
+  let hotkeyRow: string | undefined;
+  const extraFooterRows: string[] = [];
   if (showHotkeys) {
     const pending = runInfo?.pendingSteer ?? 0;
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
@@ -262,13 +356,33 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     const pauseLabel = swarm.paused ? "[p] resume" : "[p] pause";
     const detailChip = swarm.active > 0 ? chalk.dim("  [d] detail") : "";
     const selectChip = swarm.active > 0 && running.length <= 10 ? chalk.dim("  [0-9] select") : "";
-    out.push(chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip);
+    hotkeyRow = chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip;
     if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
-      out.push(chalk.yellow(`  all workers rate-limited — [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
+      extraFooterRows.push(chalk.yellow(`  all workers rate-limited — [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
     }
   }
-  out.push("");
-  return out.join("\n");
+
+  return renderUnifiedFrame({
+    model: runInfo?.model ?? swarm.model,
+    phase,
+    barPct: swarm.total > 0 ? swarm.completed / swarm.total : 0,
+    barLabel: `${swarm.completed}/${swarm.total}`,
+    active: swarm.active,
+    blocked: swarm.blocked,
+    queued: swarm.pending,
+    startedAt: runInfo?.startedAt ?? swarm.startedAt,
+    totalIn: (runInfo?.accIn ?? 0) + swarm.totalInputTokens,
+    totalOut: (runInfo?.accOut ?? 0) + swarm.totalOutputTokens,
+    totalCost: (runInfo?.accCost ?? swarm.baseCostUsd) + swarm.totalCostUsd,
+    waveNum: runInfo?.waveNum ?? -1,
+    sessionsUsed: (runInfo ? runInfo.accCompleted + runInfo.accFailed : 0) + waveUsed,
+    sessionsBudget: runInfo?.sessionsBudget ?? swarm.total,
+    remaining: Math.max(0, (runInfo?.remaining ?? swarm.total) - waveUsed),
+    usageBarRender: (out, w) => renderUsageBars(out, w, swarm),
+    content,
+    hotkeyRow,
+    extraFooterRows,
+  });
 }
 
 export interface SteeringViewData {
@@ -350,77 +464,107 @@ export function renderSteeringFrame(
   showHotkeys: boolean,
   rlGetter?: RLGetter,
 ): string {
-  const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
-  const out: string[] = [];
   const totalUsed = runInfo.accCompleted + runInfo.accFailed;
+  const ctx = data.context;
 
-  renderHeader(out, w, {
+  const content: ContentRenderer = {
+    sections(): Section[] {
+      const secs: Section[] = [];
+      const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
+
+      // Objective (undecorated — raw line)
+      if (ctx?.objective) {
+        const obj = ctx.objective.replace(/\s+/g, " ").trim();
+        secs.push({ title: "", rows: [
+          `  ${chalk.bold.white("Objective")}  ${chalk.dim(truncate(obj, ww - 15))}`,
+          "",
+        ]});
+      }
+
+      // Status (decorated via renderStatusBlock)
+      if (ctx?.status) {
+        const statusRows: string[] = [];
+        renderStatusBlock(statusRows, ww, ctx.status);
+        if (statusRows.length > 0) {
+          statusRows.push("");
+          secs.push({ title: "", rows: statusRows });
+        }
+      }
+
+      // Last wave (decorated via renderLastWave)
+      if (ctx?.lastWave && ctx.lastWave.tasks.length > 0) {
+        const lwRows: string[] = [];
+        renderLastWave(lwRows, ww, ctx.lastWave);
+        lwRows.push("");
+        secs.push({ title: "", rows: lwRows });
+      }
+
+      // Planner activity (decorated)
+      const plannerRows: string[] = [];
+      const events = data.events.slice(-15);
+      if (events.length === 0) {
+        plannerRows.push(chalk.dim("  (waiting for planner\u2026)"));
+      } else {
+        for (const e of events) {
+          const t = new Date(e.time).toLocaleTimeString("en", { hour12: false });
+          const arrowIdx = e.text.indexOf(" \u2192 ");
+          if (arrowIdx > 0 && arrowIdx < 30) {
+            const toolName = e.text.slice(0, arrowIdx);
+            const target = e.text.slice(arrowIdx + 3);
+            plannerRows.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + chalk.yellow(toolName));
+            plannerRows.push(chalk.dim(`      ${truncate(target, ww - 10)}`));
+          } else {
+            plannerRows.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + colorEvent(truncate(e.text, ww - 22)));
+          }
+        }
+      }
+      secs.push({ title: "Planner activity", rows: plannerRows });
+
+      // Status line (undecorated)
+      const liveClean = data.statusLine.replace(/\n/g, " ");
+      secs.push({ title: "", rows: [`  ${chalk.cyan("\u25B6")} ${chalk.dim(truncate(liveClean, ww - 6))}`] });
+
+      return secs;
+    },
+  };
+
+  // Usage bar
+  const usageBarRender = rlGetter
+    ? (out: string[], w: number) => {
+        const rl = rlGetter();
+        if (rl && (rl.utilization > 0 || rl.windows.size > 0)) {
+          renderSteeringUsageBar(out, w, rl);
+        }
+      }
+    : undefined;
+
+  // Footer
+  let hotkeyRow: string | undefined;
+  if (showHotkeys) {
+    const pending = runInfo?.pendingSteer ?? 0;
+    const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
+    hotkeyRow = chalk.dim("  [b] budget  [s] steer  [q] stop") + chip;
+  }
+
+  return renderUnifiedFrame({
     model: runInfo.model,
     phase: chalk.magenta(`STEERING \u2192 wave ${runInfo.waveNum + 2}`),
     barPct: runInfo.sessionsBudget > 0 ? totalUsed / runInfo.sessionsBudget : 0,
     barLabel: `${totalUsed}/${runInfo.sessionsBudget}`,
-    active: 0, queued: 0,
+    active: 0,
+    queued: 0,
     startedAt: runInfo.startedAt,
-    totalIn: runInfo.accIn, totalOut: runInfo.accOut, totalCost: runInfo.accCost,
+    totalIn: runInfo.accIn,
+    totalOut: runInfo.accOut,
+    totalCost: runInfo.accCost,
     waveNum: runInfo.waveNum,
-    sessionsUsed: totalUsed, sessionsBudget: runInfo.sessionsBudget, remaining: runInfo.remaining,
+    sessionsUsed: totalUsed,
+    sessionsBudget: runInfo.sessionsBudget,
+    remaining: runInfo.remaining,
+    usageBarRender,
+    content,
+    hotkeyRow,
   });
-
-  const rl = rlGetter?.();
-  if (rl && (rl.utilization > 0 || rl.windows.size > 0)) renderSteeringUsageBar(out, w, rl);
-
-  out.push("");
-
-  const ctx = data.context;
-
-  if (ctx?.objective) {
-    const obj = ctx.objective.replace(/\s+/g, " ").trim();
-    out.push(`  ${chalk.bold.white("Objective")}  ${chalk.dim(truncate(obj, w - 15))}`);
-    out.push("");
-  }
-
-  if (ctx?.status) {
-    renderStatusBlock(out, w, ctx.status);
-    out.push("");
-  }
-
-  if (ctx?.lastWave && ctx.lastWave.tasks.length > 0) {
-    renderLastWave(out, w, ctx.lastWave);
-    out.push("");
-  }
-
-  section(out, w, "Planner activity");
-  const events = data.events.slice(-15);
-  if (events.length === 0) {
-    out.push(chalk.dim("  (waiting for planner\u2026)"));
-  } else {
-    for (const e of events) {
-      const t = new Date(e.time).toLocaleTimeString("en", { hour12: false });
-      // Tool-use events with target get a secondary detail line
-      const arrowIdx = e.text.indexOf(" \u2192 ");
-      if (arrowIdx > 0 && arrowIdx < 30) {
-        const toolName = e.text.slice(0, arrowIdx);
-        const target = e.text.slice(arrowIdx + 3);
-        out.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + chalk.yellow(toolName));
-        out.push(chalk.dim(`      ${truncate(target, w - 10)}`));
-      } else {
-        out.push(chalk.gray(`  ${t} `) + chalk.magenta("[plan] ") + colorEvent(truncate(e.text, w - 22)));
-      }
-    }
-  }
-  out.push("");
-
-  const liveClean = data.statusLine.replace(/\n/g, " ");
-  out.push(`  ${chalk.cyan("\u25B6")} ${chalk.dim(truncate(liveClean, w - 6))}`);
-  out.push("");
-
-  if (showHotkeys) {
-    const pending = runInfo?.pendingSteer ?? 0;
-    const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
-    out.push(chalk.dim("  [b] budget  [s] steer  [q] stop") + chip);
-  }
-  out.push("");
-  return out.join("\n");
 }
 
 export function renderSummary(swarm: Swarm): string {

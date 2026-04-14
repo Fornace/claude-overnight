@@ -210,9 +210,13 @@ export function ask(question: string): Promise<string> {
             process.exit(130);
           }
           if (ch === "\x7F" || ch === "\b") { backspaceSegments(segs); redraw(); continue; }
-          // Skip ESC and any bytes that are part of an ANSI escape sequence
-          // (arrow keys, function keys, etc. arrive as \x1B [ ... letter)
-          if (ch === "\x1B") { continue; }
+          // ESC submits the current input (same as Enter)
+          if (ch === "\x1B") {
+            stdout.write("\n");
+            cleanup();
+            resolve(segmentsToString(segs).trim());
+            return;
+          }
           const code = ch.charCodeAt(0);
           if (code < 0x20) continue; // control chars
           if (code >= 0x7F && code < 0xA0) continue; // DEL + C1 controls
