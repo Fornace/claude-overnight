@@ -255,7 +255,10 @@ export async function select<T>(label: string, items: { name: string; value: T; 
     };
     const handler = (buf: Buffer) => {
       const s = buf.toString();
-      // Ignore ANSI escape sequences (arrow keys etc.)
+      // Arrow keys: \x1B[A = up, \x1B[B = down
+      if (s === "\x1B[A") { idx = (idx - 1 + items.length) % items.length; draw(); return; }
+      if (s === "\x1B[B") { idx = (idx + 1) % items.length; draw(); return; }
+      // Ignore any other ANSI escape sequences
       if (s[0] === "\x1B") return;
       if (s === "\r") done(items[idx].value);
       else if (s === "\x03") { stdin.setRawMode!(false); process.exit(0); }

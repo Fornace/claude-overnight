@@ -2,7 +2,10 @@
 import { readFileSync, existsSync, readdirSync, mkdirSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 import chalk from "chalk";
+const pkg = createRequire(import.meta.url)("../package.json");
+const VERSION = pkg.version as string;
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
@@ -171,7 +174,7 @@ async function main() {
 
   if (argv.includes("-h") || argv.includes("--help")) {
     console.log(`
-  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("— background lane for your Claude Max plan")}
+  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("v" + VERSION + " — background lane for your Claude Max plan")}
   ${chalk.dim("─".repeat(60))}
 
   ${chalk.cyan("Usage")}
@@ -238,7 +241,7 @@ async function main() {
   // ── Mode detection ──
   // Stop the bin.ts startup splash (if any) before printing our header.
   (globalThis as any).__coStopSplash?.();
-  console.log(`  ${chalk.bold("🌙  claude-overnight")}`);
+  console.log(`  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("v" + VERSION)}`);
   console.log(chalk.dim(`  ${"─".repeat(36)}`));
 
   const noTTY = !process.stdin.isTTY;
