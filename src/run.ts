@@ -232,8 +232,28 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   };
   process.on("SIGINT", gracefulStop);
   process.on("SIGTERM", gracefulStop);
-  process.on("uncaughtException", (err) => { currentSwarm?.abort(); currentSwarm?.cleanup(); display.stop(); restore(); console.error(chalk.red(`\n  Uncaught: ${err.message}`)); process.exit(1); });
-  process.on("unhandledRejection", (reason) => { currentSwarm?.abort(); currentSwarm?.cleanup(); display.stop(); restore(); console.error(chalk.red(`\n  Unhandled: ${reason instanceof Error ? reason.message : reason}`)); process.exit(1); });
+  const crashHandler = (label: string, detail: string) => {
+    // Save run state with currentTasks so resume can pick up where we left off.
+    try { saveRunState(runDir, {
+      id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
+      remaining, workerModel, plannerModel,
+      workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
+      concurrency, permissionMode,
+      usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
+      flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
+      accCost, accCompleted, accFailed, accIn, accOut, accTools,
+      branches, phase: "stopped", startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
+    }); } catch {}
+    // Save partial wave session if swarm was running.
+    if (currentSwarm?.agents.length) {
+      try { saveWaveSession(runDir, waveNum, currentSwarm.agents, currentSwarm.totalCostUsd); } catch {}
+    }
+    display.stop(); restore();
+    console.error(chalk.red(`\n  ${label}: ${detail}`));
+    process.exit(1);
+  };
+  process.on("uncaughtException", (err) => { currentSwarm?.abort(); currentSwarm?.cleanup(); crashHandler("Uncaught", err instanceof Error ? err.message : String(err)); });
+  process.on("unhandledRejection", (reason) => { currentSwarm?.abort(); currentSwarm?.cleanup(); crashHandler("Unhandled", reason instanceof Error ? reason.message : String(reason)); });
 
   // Shared steering logic used by both resume-steering and in-loop steering
   const runSteering = async (): Promise<boolean> => {
@@ -327,12 +347,33 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   while (runAnotherRound) {
     runAnotherRound = false;
   while (remaining > 0 && currentTasks.length > 0 && !stopping) {
+    // Health check: runs once per process start to fix a broken build before
+    // any real work begins. Only triggers when there's nothing else queued —
+    // it must NEVER override tasks that steering has already planned.
     if (!lastHealed) {
+      lastHealed = true;
+      // Only replace tasks with health fix if the queue was essentially empty.
+      // Steering-planned tasks always take priority.
       const healTask = checkProjectHealth(cwd);
-      if (healTask && remaining > 0) { lastHealed = true; currentTasks = [healTask]; }
-    } else { lastHealed = false; }
+      if (healTask && remaining > 0 && currentTasks.length <= 1) {
+        currentTasks = [healTask];
+      }
+    }
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
     syncRunInfo();
+
+    // Save run state BEFORE the swarm — if the process crashes mid-swarm,
+    // resume picks up currentTasks. This is the critical resilience checkpoint.
+    saveRunState(runDir, {
+      id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
+      remaining, workerModel, plannerModel,
+      workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
+      concurrency, permissionMode,
+      usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
+      flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
+      accCost, accCompleted, accFailed, accIn, accOut, accTools,
+      branches, phase: "steering", startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
+    });
 
     const swarm = new Swarm({
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
@@ -346,6 +387,12 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     try { await swarm.run(); }
     catch (err: unknown) {
       if (isAuthError(err)) { display.stop(); restore(); console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`)); process.exit(1); }
+      // Swarm crashed mid-execution — save partial results before propagating.
+      // The pre-swarm saveRunState already preserved currentTasks for resume.
+      // Also save the wave session with whatever agents completed.
+      if (swarm.agents.length > 0) {
+        try { saveWaveSession(runDir, waveNum, swarm.agents, swarm.totalCostUsd); } catch {}
+      }
       throw err;
     }
 

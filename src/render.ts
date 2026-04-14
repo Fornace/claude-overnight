@@ -356,7 +356,7 @@ export function renderSteeringFrame(
 
   renderHeader(out, w, {
     model: runInfo.model,
-    phase: chalk.magenta("STEERING"),
+    phase: chalk.magenta(`STEERING \u2192 wave ${runInfo.waveNum + 2}`),
     barPct: runInfo.sessionsBudget > 0 ? totalUsed / runInfo.sessionsBudget : 0,
     barLabel: `${totalUsed}/${runInfo.sessionsBudget}`,
     active: 0, queued: 0,
@@ -379,13 +379,13 @@ export function renderSteeringFrame(
     out.push("");
   }
 
-  if (ctx?.lastWave && ctx.lastWave.tasks.length > 0) {
-    renderLastWave(out, w, ctx.lastWave);
+  if (ctx?.status) {
+    renderStatusBlock(out, w, ctx.status);
     out.push("");
   }
 
-  if (ctx?.status) {
-    renderStatusBlock(out, w, ctx.status);
+  if (ctx?.lastWave && ctx.lastWave.tasks.length > 0) {
+    renderLastWave(out, w, ctx.lastWave);
     out.push("");
   }
 
