@@ -348,15 +348,6 @@ export class RunDisplay {
   /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw. */
   private handleTyped(s: string): boolean {
     const lc = this.liveConfig!;
-    // Enter in hotkey mode reveals truncated ask answer in Finder
-    if (this.inputMode === "none" && this.askTempFile) {
-      for (const ch of s) {
-        if (ch === "\r" || ch === "\n") {
-          try { execSync(`open -R ${JSON.stringify(this.askTempFile)}`); } catch {}
-          return true;
-        }
-      }
-    }
     if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency" || this.inputMode === "extra") {
       let dirty = false;
       for (const ch of s) {
@@ -456,12 +447,20 @@ export class RunDisplay {
     if (s.length !== 1) return false;
     const key = s[0];
     const code = key.charCodeAt(0);
-    if (code < 0x20 || code > 0x7E) return false;
+    // Allow \r / \n through for Enter-to-reveal
+    if (code === 0x0D || code === 0x0A) {
+      if (this.askTempFile) {
+        try { execSync(`open -R ${JSON.stringify(this.askTempFile)}`); } catch {}
+      }
+      return true;
+    }
+    // ESC clears ask answer panel when in hotkey mode (check before the control-char filter below)
     if (key === "\x1B" && this.askState && !this.askState.streaming) {
       this.askState = undefined;
       this.clearAskTempFile();
       return false;
     }
+    if (code < 0x20 || code > 0x7E) return false;
     if (key === "b" || key === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
     if (key === "t" || key === "T") {
       if (this.swarm) { this.inputMode = "threshold"; this.inputSegs = []; return true; }
