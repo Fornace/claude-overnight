@@ -11,6 +11,10 @@ import {
   appendPasteToSegments,
   backspaceSegments,
 } from "./cli.js";
+import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { execSync } from "child_process";
 
 /** Short-lived context the steering view renders around its live log. */
 export interface SteeringContext {
@@ -61,6 +65,8 @@ type RLGetter = () => { utilization: number; isUsingOverage: boolean; windows: M
 
 const MAX_STEERING_EVENTS = 60;
 const MAX_INPUT_LEN = 600;
+const MAX_ASK_LINES = 40;
+let askTempDir: string | undefined;
 
 export class RunDisplay {
   readonly runInfo: RunInfo;
@@ -81,6 +87,7 @@ export class RunDisplay {
   private lastCompleted = -1;
   private askState?: AskState;
   private askBusy = false;
+  private askTempFile?: string;
   /** ID of the agent whose detail panel is open; undefined = no detail shown. */
   private selectedAgentId?: number;
   private onSteer?: (text: string) => void;
@@ -99,7 +106,22 @@ export class RunDisplay {
   }
 
   /** Replace the ask state. Called by run.ts as the side query streams and completes. */
-  setAsk(state: AskState | undefined): void { this.askState = state; }
+  setAsk(state: AskState | undefined): void {
+    this.askState = state;
+    // Clean up previous temp file
+    this.clearAskTempFile();
+    // Write full answer to temp file when streaming is done and answer is long
+    if (state && !state.streaming && !state.error && state.answer) {
+      const lines = state.answer.split("\n");
+      if (lines.length > MAX_ASK_LINES) {
+        try {
+          askTempDir = mkdtempSync(join(tmpdir(), "overnight-ask-"));
+          this.askTempFile = join(askTempDir, "answer.txt");
+          writeFileSync(this.askTempFile, state.answer, "utf8");
+        } catch {}
+      }
+    }
+  }
 
   /** Signal to the UI whether an ask is in progress (prevents duplicate firings). */
   setAskBusy(busy: boolean): void { this.askBusy = busy; }
@@ -123,6 +145,15 @@ export class RunDisplay {
 
   /** Clear the agent detail panel. */
   clearSelectedAgent(): void { this.selectedAgentId = undefined; }
+
+  private clearAskTempFile(): void {
+    if (this.askTempFile) {
+      try { rmSync(this.askTempFile, { force: true }); } catch {}
+      if (askTempDir) { try { rmSync(askTempDir, { recursive: true, force: true }); } catch {} }
+      this.askTempFile = undefined;
+      askTempDir = undefined;
+    }
+  }
 
   /** Get the currently selected agent's ID for rendering. */
   getSelectedAgentId(): number | undefined { return this.selectedAgentId; }
@@ -182,6 +213,8 @@ export class RunDisplay {
       try { process.stdin.setRawMode!(false); process.stdin.pause(); } catch {}
     }
     try { process.stdout.write("\x1B[?25h"); } catch {}
+    // Clean up ask temp file
+    this.clearAskTempFile();
     this.started = false;
   }
 
@@ -259,12 +292,15 @@ export class RunDisplay {
       out.push(`  ${chalk.dim("A: " + (a.answer || "thinking..."))}`);
     } else {
       const allLines = a.answer.split("\n");
-      const maxLines = 40;
-      const showLines = allLines.slice(0, maxLines);
+      const showLines = allLines.slice(0, MAX_ASK_LINES);
       out.push(`  ${chalk.bold.green("A:")} ${showLines[0] || ""}`);
       for (const ln of showLines.slice(1)) out.push(`     ${ln}`);
-      if (allLines.length > maxLines) {
-        out.push(chalk.dim(`     \u2026 + ${allLines.length - maxLines} more lines (open log for full answer)`));
+      if (allLines.length > MAX_ASK_LINES) {
+        const overflow = allLines.length - MAX_ASK_LINES;
+        out.push(chalk.dim(`     \u2026 + ${overflow} more lines`));
+        if (this.askTempFile) {
+          out.push(chalk.dim("  \u23CE Enter to reveal full answer in Finder"));
+        }
       }
     }
     return "\n" + out.join("\n");
@@ -312,6 +348,15 @@ export class RunDisplay {
   /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw. */
   private handleTyped(s: string): boolean {
     const lc = this.liveConfig!;
+    // Enter in hotkey mode reveals truncated ask answer in Finder
+    if (this.inputMode === "none" && this.askTempFile) {
+      for (const ch of s) {
+        if (ch === "\r" || ch === "\n") {
+          try { execSync(`open -R ${JSON.stringify(this.askTempFile)}`); } catch {}
+          return true;
+        }
+      }
+    }
     if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency" || this.inputMode === "extra") {
       let dirty = false;
       for (const ch of s) {
@@ -414,6 +459,7 @@ export class RunDisplay {
     if (code < 0x20 || code > 0x7E) return false;
     if (key === "\x1B" && this.askState && !this.askState.streaming) {
       this.askState = undefined;
+      this.clearAskTempFile();
       return false;
     }
     if (key === "b" || key === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
@@ -451,7 +497,7 @@ export class RunDisplay {
       this.inputMode = "steer"; this.inputSegs = []; return true;
     }
     if (key === "?" && this.onAsk && this.swarm && !this.askBusy) {
-      if (this.askState && !this.askState.streaming) { this.askState = undefined; return false; }
+      if (this.askState && !this.askState.streaming) { this.askState = undefined; this.clearAskTempFile(); return false; }
       this.inputMode = "ask"; this.inputSegs = []; return true;
     }
     // [d] cycle agent detail panel
