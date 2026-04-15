@@ -10,7 +10,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
 import { detectModelTier, setPlannerEnvResolver } from "./planner-query.js";
-import { pickModel, loadProviders, preflightProvider, buildEnvResolver } from "./providers.js";
+import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider } from "./providers.js";
 import type { ProviderConfig } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
@@ -217,6 +217,17 @@ async function main() {
   if (cliFlags.timeout !== undefined) {
     const n = parseFloat(cliFlags.timeout);
     if (isNaN(n) || n <= 0) { console.error(chalk.red(`  --timeout must be a positive number`)); process.exit(1); }
+  }
+
+  // ── Pre-check: warn if saved Cursor providers exist but proxy is down ──
+  const savedCursorProviders = loadProviders().filter(isCursorProxyProvider);
+  if (savedCursorProviders.length > 0 && !dryRun) {
+    const proxyUp = await healthCheckCursorProxy();
+    if (!proxyUp) {
+      console.warn(chalk.yellow(`\n  ⚠ ${savedCursorProviders.length} Cursor provider(s) saved but proxy is not running at ${PROXY_DEFAULT_URL}`));
+      console.warn(chalk.yellow(`    Start it: npx cursor-api-proxy`));
+      console.warn(chalk.dim(`    (Continuing — you can still use Anthropic models)\n`));
+    }
   }
 
   // ── Load tasks ──

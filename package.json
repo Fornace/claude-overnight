@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.17.0",
+  "version": "1.17.1",
   "description": "Background lane for your Claude Max plan. Parallel Claude Agent SDK sessions in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Opus/Sonnet/Haiku + Qwen/OpenRouter.",
   "type": "module",
   "bin": {

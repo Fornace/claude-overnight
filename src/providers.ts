@@ -1,10 +1,11 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { execSync } from "child_process";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import { ask, select } from "./cli.js";
+import { ask, select, selectKey } from "./cli.js";
 import { getBearerToken, clearTokenCache } from "./auth.js";
 
 // ── Types ──
@@ -25,6 +26,8 @@ export interface ProviderConfig {
   key?: string;
   /** When true, use JWT token auth instead of raw API keys. The bearer token is embedded in a short-lived JWT. */
   useJWT?: boolean;
+  /** When true, this provider routes through cursor-api-proxy (special env/health-check handling). */
+  cursorProxy?: boolean;
 }
 
 // ── Store ──
@@ -80,10 +83,19 @@ export function resolveKey(p: ProviderConfig): string | null {
  * you pass `options.env`.
  */
 export function envFor(p: ProviderConfig): Record<string, string> {
-  const key = resolveKey(p);
-  if (!key) throw new Error(`Provider "${p.id}" has no API key (${p.keyEnv ? `env ${p.keyEnv} is empty` : "inline key missing"})`);
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) base[k] = v;
+
+  if (p.cursorProxy) {
+    // cursor-api-proxy: routes through local proxy, no real API key needed
+    base.ANTHROPIC_BASE_URL = p.baseURL;
+    base.ANTHROPIC_AUTH_TOKEN = process.env.CURSOR_BRIDGE_API_KEY || "unused";
+    delete base.ANTHROPIC_API_KEY;
+    return base;
+  }
+
+  const key = resolveKey(p);
+  if (!key) throw new Error(`Provider "${p.id}" has no API key (${p.keyEnv ? `env ${p.keyEnv} is empty` : "inline key missing"})`);
   base.ANTHROPIC_BASE_URL = p.baseURL;
 
   if (p.useJWT) {
@@ -98,7 +110,7 @@ export function envFor(p: ProviderConfig): Record<string, string> {
 
 // ── Picker UI ──
 
-type PickerItem = { kind: "anthropic"; model: ModelInfo } | { kind: "provider"; provider: ProviderConfig } | { kind: "other" };
+type PickerItem = { kind: "anthropic"; model: ModelInfo } | { kind: "provider"; provider: ProviderConfig } | { kind: "cursor" } | { kind: "other" };
 
 export interface ModelPick {
   model: string;
@@ -133,8 +145,10 @@ export async function pickModel(
     }
     for (const p of saved) {
       const keySrc = p.keyEnv ? `env ${p.keyEnv}` : "stored key";
-      items.push({ name: `${p.displayName}`, value: { kind: "provider", provider: p }, hint: `${p.model} · ${keySrc}` });
+      const cursorTag = p.cursorProxy ? chalk.dim(" · cursor") : "";
+      items.push({ name: `${p.displayName}${cursorTag}`, value: { kind: "provider", provider: p }, hint: `${p.model} · ${keySrc}` });
     }
+    items.push({ name: chalk.green("Cursor…"), value: { kind: "cursor" }, hint: "Cursor API Proxy — composer, composer-2, auto, etc." });
     items.push({ name: chalk.cyan("Other…"), value: { kind: "other" }, hint: "Qwen 3.6 Plus, OpenRouter, or any Anthropic-compatible endpoint" });
 
     let defaultIdx = 0;
@@ -151,6 +165,12 @@ export async function pickModel(
     if (picked.kind === "anthropic") return { model: picked.model.value };
     if (picked.kind === "provider") {
       return { model: picked.provider.model, providerId: picked.provider.id, provider: picked.provider };
+    }
+    if (picked.kind === "cursor") {
+      const cursorPick = await pickCursorModel();
+      if (cursorPick) return cursorPick;
+      // user cancelled cursor picker — loop back
+      continue;
     }
     const added = await promptNewProvider();
     if (added) {
@@ -263,6 +283,264 @@ export async function preflightProvider(p: ProviderConfig, cwd: string, timeoutM
   } finally {
     try { pq?.close(); } catch {}
   }
+}
+
+// ── Cursor API Proxy ──
+
+export const PROXY_DEFAULT_URL = "http://127.0.0.1:8765";
+
+/** Check if a provider routes through cursor-api-proxy. */
+export function isCursorProxyProvider(p: ProviderConfig): boolean {
+  return p.cursorProxy === true || p.baseURL === PROXY_DEFAULT_URL;
+}
+
+/**
+ * Health check: GET /health on the proxy. Returns true if proxy is reachable.
+ */
+export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
+  const url = `${baseUrl.replace(/\/$/, "")}/health`;
+  try {
+    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch available Cursor models via GET /v1/models on the proxy.
+ * Returns model IDs like ["auto", "composer", "composer-2", "opus-4.6", ...].
+ */
+export async function fetchCursorModels(baseUrl = PROXY_DEFAULT_URL): Promise<string[]> {
+  const url = `${baseUrl.replace(/\/$/, "")}/v1/models`;
+  try {
+    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return [];
+    const json = await res.json() as { data?: Array<{ id: string; name?: string }> };
+    return (json.data || []).map(m => m.id).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Known Cursor model recommendations — short hints to guide users.
+ */
+const CURSOR_MODEL_HINTS: Record<string, string> = {
+  "auto": "fast — delegates to best available model",
+  "composer": "Cursor Composer — good for focused tasks",
+  "composer-2": "Cursor Composer 2 — latest, strongest Cursor model",
+};
+
+function cursorModelHint(modelId: string): string {
+  const m = modelId.toLowerCase();
+  if (CURSOR_MODEL_HINTS[m]) return CURSOR_MODEL_HINTS[m];
+  if (m.includes("opus")) return "Opus-tier Cursor model";
+  if (m.includes("sonnet")) return "Sonnet-tier Cursor model";
+  if (m.includes("haiku")) return "Haiku-tier Cursor model (fast)";
+  return "Cursor model";
+}
+
+// ── Cursor Proxy Setup Guide ──
+
+interface SetupStep {
+  label: string;
+  check: () => boolean;
+  autoCmd: string;
+  manualCmd: string;
+  successMsg: string;
+}
+
+function setupSteps(): SetupStep[] {
+  return [
+    {
+      label: "Cursor agent CLI",
+      check: () => {
+        try { execSync("which agent", { stdio: "pipe" }); return true; } catch { return false; }
+      },
+      autoCmd: "curl https://cursor.com/install -fsS | bash",
+      manualCmd: "curl https://cursor.com/install -fsS | bash",
+      successMsg: "Cursor CLI found",
+    },
+    {
+      label: "Cursor authentication",
+      check: () => {
+        try {
+          const out = execSync("agent --list-models", { stdio: "pipe", timeout: 10_000 });
+          return out.toString().trim().length > 0;
+        } catch { return false; }
+      },
+      autoCmd: "agent login",
+      manualCmd: "agent login",
+      successMsg: "Cursor authenticated",
+    },
+    {
+      label: "cursor-api-proxy server",
+      check: () => {
+        try { execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 10_000 }); return true; } catch { return false; }
+      },
+      autoCmd: "npx cursor-api-proxy",
+      manualCmd: "npx cursor-api-proxy",
+      successMsg: "cursor-api-proxy available",
+    },
+  ];
+}
+
+/**
+ * Interactive setup guide for cursor-api-proxy.
+ * Walks through CLI install, login, and proxy start.
+ * Returns true when proxy is running and healthy.
+ */
+export async function setupCursorProxy(): Promise<boolean> {
+  console.log(chalk.dim("\n  Cursor API Proxy Setup"));
+  console.log(chalk.dim("  " + "─".repeat(40)));
+  console.log(chalk.dim("  We need three things: Cursor CLI, authentication, and the proxy server.\n"));
+
+  const steps = setupSteps();
+
+  for (const step of steps) {
+    if (step.check()) {
+      console.log(chalk.green(`  ✓ ${step.successMsg}`));
+      continue;
+    }
+
+    console.log(chalk.yellow(`\n  ${step.label} not found`));
+    const choice = await selectKey(`  Set up ${step.label}:`, [
+      { key: "a", desc: "uto (run command)" },
+      { key: "m", desc: "anual (show command)" },
+      { key: "s", desc: "kip (I'll handle it)" },
+    ]);
+
+    if (choice === "a") {
+      if (step.label === "Cursor authentication") {
+        // agent login needs interactive browser — run it directly
+        console.log(chalk.dim(`  Running: ${step.autoCmd}`));
+        console.log(chalk.dim("  (A browser window will open for login)\n"));
+        try {
+          execSync(step.autoCmd, { stdio: "inherit", timeout: 120_000 });
+          console.log(chalk.green(`  ✓ ${step.successMsg}`));
+        } catch {
+          console.log(chalk.yellow("  Login failed — try manual mode"));
+          // Fall through to manual display
+        }
+      } else if (step.label === "cursor-api-proxy server") {
+        // Don't auto-start the proxy server here — it blocks. Just verify it's installable.
+        console.log(chalk.dim(`  Install check: ${step.autoCmd} --help`));
+        try {
+          execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 30_000 });
+          console.log(chalk.green(`  ✓ cursor-api-proxy installed`));
+          console.log(chalk.yellow(`  → Start it in another terminal: ${chalk.bold("npx cursor-api-proxy")}`));
+          const ready = await selectKey(`  Is the proxy running now?`, [
+            { key: "y", desc: "es" },
+            { key: "n", desc: "ot yet" },
+          ]);
+          if (ready === "y") {
+            if (await healthCheckCursorProxy()) {
+              console.log(chalk.green(`  ✓ Proxy connected`));
+              return true;
+            }
+          }
+        } catch {
+          console.log(chalk.red("  cursor-api-proxy not installed. Install with: npm install -g cursor-api-proxy"));
+        }
+      } else {
+        console.log(chalk.dim(`  Running: ${step.autoCmd}`));
+        try {
+          execSync(step.autoCmd, { stdio: "inherit", timeout: 60_000 });
+          console.log(chalk.green(`  ✓ ${step.successMsg}`));
+        } catch {
+          console.log(chalk.yellow("  Command failed — try manual mode"));
+        }
+      }
+    } else if (choice === "m") {
+      console.log(chalk.cyan(`\n  Run this command:`));
+      console.log(chalk.white(`    ${step.manualCmd}`));
+      if (step.label === "cursor-api-proxy server") {
+        console.log(chalk.yellow(`    Then start the proxy: ${chalk.bold("npx cursor-api-proxy")}`));
+      }
+      console.log();
+      const done = await selectKey(`  Done?`, [
+        { key: "y", desc: "es" },
+        { key: "n", desc: "ot yet" },
+      ]);
+      if (done === "y" && step.label === "cursor-api-proxy server") {
+        if (await healthCheckCursorProxy()) {
+          console.log(chalk.green(`  ✓ Proxy connected`));
+          return true;
+        }
+      }
+    } else {
+      console.log(chalk.dim(`  Skipped: ${step.label}`));
+    }
+  }
+
+  // Final health check
+  if (await healthCheckCursorProxy()) {
+    console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
+    return true;
+  }
+  console.log(chalk.yellow("\n  Proxy not reachable yet. You can start it later and add it via 'Cursor' in the model picker."));
+  return false;
+}
+
+// ── Cursor model picker sub-flow ──
+
+async function pickCursorModel(): Promise<ModelPick | null> {
+  console.log(chalk.dim("\n  Cursor API Proxy Models"));
+  console.log(chalk.dim("  " + "─".repeat(40)));
+
+  // Quick health check with spinner
+  let frame = 0;
+  const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const spinner = setInterval(() => {
+    process.stdout.write(`\x1B[2K\r  ${chalk.cyan(BRAILLE[frame++ % BRAILLE.length])} ${chalk.dim("checking proxy...")}`);
+  }, 120);
+  const healthy = await healthCheckCursorProxy();
+  clearInterval(spinner);
+  process.stdout.write("\x1B[2K\r");
+
+  if (!healthy) {
+    console.log(chalk.yellow("  Proxy is not running at " + PROXY_DEFAULT_URL));
+    const choice = await selectKey(`  What next?`, [
+      { key: "s", desc: "etup guide" },
+      { key: "r", desc: "etry" },
+      { key: "c", desc: "ancel" },
+    ]);
+    if (choice === "s") {
+      const ok = await setupCursorProxy();
+      if (!ok) return null;
+    } else if (choice === "r") {
+      return pickCursorModel();
+    } else {
+      return null;
+    }
+  }
+
+  // Fetch live models
+  const modelIds = await fetchCursorModels();
+  if (modelIds.length === 0) {
+    console.log(chalk.yellow("  No models returned from proxy"));
+    return null;
+  }
+
+  const picked = await select("  Select a Cursor model:", modelIds.map(id => ({
+    name: id,
+    value: id,
+    hint: cursorModelHint(id),
+  })), 0);
+
+  // Save as a cursor proxy provider
+  const provider: ProviderConfig = {
+    id: `cursor-${picked}`,
+    displayName: `Cursor: ${picked}`,
+    baseURL: PROXY_DEFAULT_URL,
+    model: picked,
+    cursorProxy: true,
+  };
+  saveProvider(provider);
+  console.log(chalk.green(`  ✓ Saved as provider: ${provider.displayName}`));
+
+  return { model: picked, providerId: provider.id, provider };
 }
 
 // ── Env resolver for planner/executor roles ──

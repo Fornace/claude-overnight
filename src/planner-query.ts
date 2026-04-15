@@ -49,6 +49,9 @@ export function detectModelTier(model: string): ModelTier {
   if (m === "default" || m.includes("opus")) return "opus";
   if (m.includes("sonnet")) return "sonnet";
   if (m.includes("haiku")) return "haiku";
+  // Cursor API Proxy models
+  if (m === "auto") return "unknown";
+  if (m.startsWith("composer")) return "sonnet";
   return "unknown";
 }
 
@@ -61,6 +64,10 @@ export function modelCapabilityBlock(model: string): string {
     case "haiku":
       return `Each agent runs Claude Haiku  -- fast and efficient, best for focused, well-specified tasks. Be explicit about files, functions, and expected changes. Keep each task scoped to a clear, concrete deliverable.`;
     default:
+      // Cursor API Proxy or unknown model — generic but mention Cursor context
+      if (model.toLowerCase().startsWith("composer") || model.toLowerCase() === "auto") {
+        return `Each agent runs a Cursor model with full codebase access. Capable of focused implementation work. Be explicit about files, functions, and expected changes.`;
+      }
       return `Each agent has full codebase access and can work autonomously.`;
   }
 }
