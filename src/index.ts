@@ -189,6 +189,7 @@ async function main() {
     --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
     --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + executor separately — supports 'Other…' for Qwen / OpenRouter / etc.)")}
+    --fast-model=NAME      Fast model for quick tasks ${chalk.dim("(optional — checked by worker model in next wave)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
     --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
@@ -414,8 +415,10 @@ async function main() {
   // ── Config resolution ──
   let workerModel: string;
   let plannerModel: string;
+  let fastModel: string | undefined;
   let workerProvider: ProviderConfig | undefined;
   let plannerProvider: ProviderConfig | undefined;
+  let fastProvider: ProviderConfig | undefined;
   let budget: number | undefined;
   let concurrency: number;
   let objective: string | undefined = fileCfg?.objective;
@@ -428,23 +431,21 @@ async function main() {
 
   if (resuming) {
     workerModel = resumeState!.workerModel; plannerModel = resumeState!.plannerModel;
+    fastModel = resumeState!.fastModel;
     const saved = loadProviders();
-    if (resumeState!.workerProviderId) {
-      workerProvider = saved.find(p => p.id === resumeState!.workerProviderId);
-      if (!workerProvider) {
-        console.error(chalk.red(`\n  Resume aborted: worker provider "${resumeState!.workerProviderId}" is no longer in ~/.claude/claude-overnight/providers.json`));
+    const resolveProvider = (providerId: string | undefined, role: string): ProviderConfig | undefined => {
+      if (!providerId) return undefined;
+      const p = saved.find(s => s.id === providerId);
+      if (!p) {
+        console.error(chalk.red(`\n  Resume aborted: ${role} provider "${providerId}" is no longer in ~/.claude/claude-overnight/providers.json`));
         console.error(chalk.dim(`  Re-add it via a fresh run's "Other…" flow, or start Fresh instead.\n`));
         process.exit(1);
       }
-    }
-    if (resumeState!.plannerProviderId) {
-      plannerProvider = saved.find(p => p.id === resumeState!.plannerProviderId);
-      if (!plannerProvider) {
-        console.error(chalk.red(`\n  Resume aborted: planner provider "${resumeState!.plannerProviderId}" is no longer in ~/.claude/claude-overnight/providers.json`));
-        console.error(chalk.dim(`  Re-add it via a fresh run's "Other…" flow, or start Fresh instead.\n`));
-        process.exit(1);
-      }
-    }
+      return p;
+    };
+    workerProvider = resolveProvider(resumeState!.workerProviderId, "worker");
+    plannerProvider = resolveProvider(resumeState!.plannerProviderId, "planner");
+    fastProvider = resolveProvider(resumeState!.fastProviderId, "fast");
     budget = resumeState!.budget; concurrency = resumeState!.concurrency;
     objective = resumeState!.objective; usageCap = resumeState!.usageCap;
     allowExtraUsage = resumeState!.allowExtraUsage ?? false;
@@ -484,6 +485,17 @@ async function main() {
     plannerModel = plannerPick.model; plannerProvider = plannerPick.provider;
     const workerPick = await pickModel(`${chalk.cyan("⑤")} Executor model ${chalk.dim("(what runs the tasks — Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models);
     workerModel = workerPick.model; workerProvider = workerPick.provider;
+
+    // ⑤b Optional fast model for quick tasks that will be verified
+    const fastChoice = await select(`${chalk.cyan("⑤b")} Fast model ${chalk.dim("(optional — Haiku/Qwen for quick tasks, checked by worker)")}:`, [
+      { name: "Skip", value: "skip" as const, hint: "two-tier mode only (current setup)" },
+      { name: "Pick a fast model", value: "pick" as const, hint: "Haiku, Qwen, or any provider — for well-scoped tasks" },
+    ]);
+    if (fastChoice === "pick") {
+      const fastPick = await pickModel(`${chalk.cyan("⑤c")} Fast model:`, models);
+      fastModel = fastPick.model; fastProvider = fastPick.provider;
+    }
+
     usageCap = await select(`${chalk.cyan("⑥")} Usage cap:`, [
       { name: "Unlimited", value: undefined as any, hint: "full capacity, wait through rate limits" },
       { name: "90%", value: 0.9, hint: "leave 10% for other work" },
@@ -538,7 +550,8 @@ async function main() {
     }
 
     const parts: string[] = [];
-    if (workerModel !== plannerModel) parts.push(`${detectModelTier(workerModel)} → ${detectModelTier(plannerModel)}`);
+    if (fastModel) parts.push(`${detectModelTier(plannerModel)} → ${detectModelTier(workerModel)} + ${detectModelTier(fastModel)}`);
+    else if (workerModel !== plannerModel) parts.push(`${detectModelTier(workerModel)} → ${detectModelTier(plannerModel)}`);
     else parts.push(detectModelTier(workerModel));
     parts.push(`budget ${budget}`, `${concurrency}×`);
     if (budget > 2) parts.push("flex");
@@ -556,13 +569,29 @@ async function main() {
   } else {
     let models: Awaited<ReturnType<typeof fetchModels>> = [];
     if (!cliFlags.model && !fileCfg?.model) models = await fetchModels(5_000);
-    workerModel = cliFlags.model ?? fileCfg?.model ?? (models[0]?.value || "claude-sonnet-4-6");
-    plannerModel = models[0]?.value || workerModel;
+    // Multi-provider default resolution: match current ANTHROPIC_BASE_URL against
+    // saved providers first, then fetched models, then other providers, then hardcoded
+    // Anthropic default. Adding a new provider to providers.json automatically affects
+    // the default without code changes.
+    const activeBaseURL = process.env.ANTHROPIC_BASE_URL;
+    const savedForCLI = loadProviders();
+    const activeProvider = activeBaseURL ? savedForCLI.find(p => p.baseURL === activeBaseURL) : undefined;
+    const defaultModel = activeProvider?.model
+      ?? models[0]?.value
+      ?? savedForCLI.find(p => p !== activeProvider)?.model
+      ?? "claude-sonnet-4-6";
+    workerModel = cliFlags.model ?? fileCfg?.model ?? defaultModel;
+    plannerModel = activeProvider?.model ?? models[0]?.value ?? workerModel;
     // Auto-resolve a saved custom provider if --model matches its id or model id.
     // Lets `claude-overnight --model=qwen3-coder-plus` route correctly without a separate flag.
-    const savedForCli = loadProviders();
-    const matched = savedForCli.find(p => p.id === workerModel || p.model === workerModel);
+    const matched = savedForCLI.find(p => p.id === workerModel || p.model === workerModel);
     if (matched) { workerProvider = matched; workerModel = matched.model; }
+    // Fast model: --fast-model flag
+    if (cliFlags["fast-model"]) {
+      fastModel = cliFlags["fast-model"];
+      const matchedFast = savedForCLI.find(p => p.id === fastModel || p.model === fastModel);
+      if (matchedFast) { fastProvider = matchedFast; fastModel = matchedFast.model; }
+    }
     concurrency = cliFlags.concurrency ? parseInt(cliFlags.concurrency) : (fileCfg?.concurrency ?? 5);
     budget = cliFlags.budget ? parseInt(cliFlags.budget) : undefined;
     if (budget != null && (isNaN(budget) || budget < 1)) { console.error(chalk.red(`  --budget must be a positive integer`)); process.exit(1); }
@@ -604,26 +633,35 @@ async function main() {
   }
   if (useWorktrees) validateGitRepo(cwd);
 
-  // Custom-provider routing: build a model→env resolver so planner and worker
-  // queries hit the right endpoint without touching process.env globally.
-  const envForModel = buildEnvResolver({ plannerModel, plannerProvider, workerModel, workerProvider });
+  // Custom-provider routing: build a model→env resolver so planner, worker,
+  // and fast queries hit the right endpoint without touching process.env globally.
+  const envForModel = buildEnvResolver({ plannerModel, plannerProvider, workerModel, workerProvider, fastModel, fastProvider });
   setPlannerEnvResolver(envForModel);
 
   // Fail fast if a custom provider is misconfigured — one bad key would
   // otherwise surface as N agent failures scattered across the run.
-  if (plannerProvider || workerProvider) {
+  if (plannerProvider || workerProvider || fastProvider) {
+    const seen = new Set<string>();
+    const all: Array<[string, ProviderConfig | undefined]> = [
+      ["planner", plannerProvider],
+      ["executor", workerProvider],
+      ["fast", fastProvider],
+    ];
     const pending: Array<[string, ProviderConfig]> = [];
-    if (plannerProvider) pending.push(["planner", plannerProvider]);
-    if (workerProvider && workerProvider.id !== plannerProvider?.id) pending.push(["executor", workerProvider]);
-    for (const [role, p] of pending) {
-      process.stdout.write(`  ${chalk.dim(`◆ Pinging ${role} (${p.displayName})...`)}`);
-      const r = await preflightProvider(p, cwd);
-      if (!r.ok) {
-        process.stdout.write(`\x1B[2K\r  ${chalk.red(`✗ ${role} preflight failed:`)} ${chalk.dim(r.error)}\n`);
+    for (const [role, p] of all) {
+      if (p && !seen.has(p.id)) { seen.add(p.id); pending.push([role, p]); }
+    }
+    process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}...`)}\n`);
+    const results = await Promise.all(
+      pending.map(async ([role, p]) => ({ role, provider: p, result: await preflightProvider(p, cwd) })),
+    );
+    for (const { role, provider, result } of results) {
+      if (!result.ok) {
+        console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
         console.error(chalk.red(`\n  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.\n`));
         process.exit(1);
       }
-      process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${role} ready`)} ${chalk.dim(`· ${p.displayName} · ${p.model}`)}\n`);
+      console.log(`  ${chalk.green(`✓ ${role} ready`)} ${chalk.dim(`· ${provider.displayName} · ${provider.model}`)}`);
     }
   }
 
@@ -839,8 +877,8 @@ async function main() {
 
   // ── Execute ──
   await executeRun({
-    tasks, objective, budget: budget ?? tasks.length, workerModel, plannerModel,
-    workerProvider, plannerProvider, concurrency,
+    tasks, objective, budget: budget ?? tasks.length, workerModel, plannerModel, fastModel,
+    workerProvider, plannerProvider, fastProvider, concurrency,
     permissionMode, useWorktrees, mergeStrategy, usageCap, allowExtraUsage, extraUsageBudget,
     flex, agentTimeoutMs, cwd, allowedTools, runDir, previousKnowledge,
     resuming, resumeState: resumeState ?? undefined,

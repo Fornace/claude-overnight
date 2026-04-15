@@ -32,6 +32,7 @@ export async function steerWave(
   cwd: string,
   plannerModel: string,
   workerModel: string,
+  fastModel: string | undefined,
   permissionMode: PermMode,
   concurrency: number,
   onLog: PlannerLog,
@@ -124,7 +125,7 @@ Respond with ONLY a JSON object (no markdown fences):
 
 "estimatedSessionsRemaining" is REQUIRED. Your best honest estimate of how many MORE agent sessions (beyond the wave you just composed above) are needed to reach 'amazing' — include follow-up fixes, polish, verification, and anything else you'd want before shipping. Be realistic, not optimistic. Use 0 only if truly done.
 
-The "model" field on each task: use "worker" (${workerModel}) for implementation tasks, "planner" (${plannerModel}) for review/analysis/verification tasks. Default is "worker".
+The "model" field on each task: use "worker" (${workerModel}) for implementation tasks, "planner" (${plannerModel}) for review/analysis/verification tasks, "fast" (${fastModel ?? workerModel}) for quick, well-scoped changes that will be checked by the worker model in the next wave. Default is "worker".
 Set "noWorktree": true for verify/user-test tasks — they need the real project directory with env files, dependencies, and local config.
 
 If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSessionsRemaining": 0, "tasks": []}`;

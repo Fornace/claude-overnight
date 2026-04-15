@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
-import type { Task, PermMode, MergeStrategy, RunState, BranchRecord, WaveSummary, RunMemory } from "./types.js";
+import type { Task, PermMode, MergeStrategy, RunState, RunConfigBase, BranchRecord, WaveSummary, RunMemory } from "./types.js";
 import { Swarm } from "./swarm.js";
 import { steerWave } from "./steering.js";
 import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver } from "./planner-query.js";
@@ -21,50 +21,58 @@ import {
   appendOvernightLogStart, updateOvernightLogEnd,
 } from "./state.js";
 
-export interface RunConfig {
+export interface RunConfig extends RunConfigBase {
+  /** Tasks to execute. */
   tasks: Task[];
+  /** High-level objective. */
   objective?: string;
-  budget: number;
-  workerModel: string;
-  plannerModel: string;
   /** Custom provider for worker tasks (optional — Anthropic default when undefined). */
   workerProvider?: ProviderConfig;
   /** Custom provider for planner/steering calls (optional). */
   plannerProvider?: ProviderConfig;
-  concurrency: number;
-  permissionMode: PermMode;
-  useWorktrees: boolean;
-  mergeStrategy: MergeStrategy;
-  usageCap?: number;
-  allowExtraUsage: boolean;
-  extraUsageBudget?: number;
-  flex: boolean;
+  /** Custom provider for fast model tasks (optional). */
+  fastProvider?: ProviderConfig;
+  /** Per-agent timeout in ms. */
   agentTimeoutMs?: number;
+  /** Working directory. */
   cwd: string;
+  /** Allowlist of SDK tool names agents are permitted to use. */
   allowedTools?: string[];
+  /** Persisted run directory path. */
   runDir: string;
+  /** Knowledge about the codebase from a pre-run thinking wave. */
   previousKnowledge: string;
+  /** Whether this run is being resumed from a prior run.json. */
   resuming: boolean;
+  /** State from the prior run (only set when resuming). */
   resumeState?: RunState;
+  /** Sessions consumed by the pre-run thinking wave. */
   thinkingUsed: number;
+  /** Cost of the pre-run thinking wave. */
   thinkingCost: number;
+  /** Input tokens from the pre-run thinking wave. */
   thinkingIn: number;
+  /** Output tokens from the pre-run thinking wave. */
   thinkingOut: number;
+  /** Tool calls from the pre-run thinking wave. */
   thinkingTools: number;
+  /** Wave summary from the pre-run thinking wave. */
   thinkingHistory?: WaveSummary;
+  /** Unix timestamp (ms) when the run started. */
   runStartedAt: number;
 }
 
 export async function executeRun(cfg: RunConfig): Promise<void> {
   const restore = () => { try { process.stdout.write("\x1B[?25h\n"); } catch {} };
   const {
-    objective, cwd, workerModel, plannerModel, concurrency, permissionMode,
+    objective, cwd, workerModel, plannerModel, fastModel, concurrency, permissionMode,
     allowedTools, runDir, previousKnowledge,
   } = cfg;
 
   const envForModel = buildEnvResolver({
     plannerModel, plannerProvider: cfg.plannerProvider,
     workerModel, workerProvider: cfg.workerProvider,
+    fastModel: cfg.fastModel, fastProvider: cfg.fastProvider,
   });
   setPlannerEnvResolver(envForModel);
   let { usageCap, flex } = cfg;
@@ -224,6 +232,25 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     } catch {}
   }
 
+  const buildRunState = (varying: {
+    remaining: number;
+    phase: RunState["phase"];
+    currentTasks: Task[];
+    fastModel?: string;
+  }): RunState => ({
+    id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
+    remaining, workerModel, plannerModel,
+    ...("fastModel" in varying ? { fastModel: varying.fastModel } : {}),
+    workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
+    fastProviderId: cfg.fastProvider?.id,
+    concurrency, permissionMode,
+    usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
+    flex, useWorktrees, mergeStrategy, waveNum,
+    currentTasks: varying.currentTasks,
+    accCost, accCompleted, accFailed, accIn, accOut, accTools,
+    branches, phase: varying.phase, startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
+  });
+
   let stopping = false;
   const gracefulStop = () => {
     if (stopping) { currentSwarm?.cleanup(); display.stop(); restore(); process.exit(0); }
@@ -233,17 +260,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   process.on("SIGINT", gracefulStop);
   process.on("SIGTERM", gracefulStop);
   const crashHandler = (label: string, detail: string) => {
-    // Save run state with currentTasks so resume can pick up where we left off.
-    try { saveRunState(runDir, {
-      id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-      remaining, workerModel, plannerModel,
-      workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
-      concurrency, permissionMode,
-      usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
-      flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
-      accCost, accCompleted, accFailed, accIn, accOut, accTools,
-      branches, phase: "stopped", startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
-    }); } catch {}
+    try { saveRunState(runDir, buildRunState({ remaining, phase: "stopped", currentTasks })); } catch {}
     // Save partial wave session if swarm was running.
     if (currentSwarm?.agents.length) {
       try { saveWaveSession(runDir, waveNum, currentSwarm.agents, currentSwarm.totalCostUsd); } catch {}
@@ -267,7 +284,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         const appliedGuidance = memory.userGuidance;
         if (appliedGuidance) display.appendSteeringEvent(`User directives applied: ${appliedGuidance.slice(0, 80)}`);
         const steer = await steerWave(
-          objective!, waveHistory, remaining, cwd, plannerModel, workerModel,
+          objective!, waveHistory, remaining, cwd, plannerModel, workerModel, fastModel,
           permissionMode, concurrency, steeringLog, memory,
         );
         accCost += getTotalPlannerCost() - plannerCostBefore;
@@ -306,9 +323,14 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
           break;
         }
 
+        const modelMap = new Map<string, string>([
+          ["planner", plannerModel],
+          ["worker", workerModel],
+        ]);
+        if (fastModel) modelMap.set("fast", fastModel);
         currentTasks = steer.tasks.map(t => ({
           ...t,
-          model: t.model === "planner" ? plannerModel : t.model === "worker" ? workerModel : t.model,
+          model: t.model ? (modelMap.get(t.model) ?? t.model) : undefined,
         }));
         steered = true;
       } catch (err: any) {
@@ -362,18 +384,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
     syncRunInfo();
 
-    // Save run state BEFORE the swarm — if the process crashes mid-swarm,
-    // resume picks up currentTasks. This is the critical resilience checkpoint.
-    saveRunState(runDir, {
-      id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-      remaining, workerModel, plannerModel,
-      workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
-      concurrency, permissionMode,
-      usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
-      flex, useWorktrees, mergeStrategy, waveNum, currentTasks,
-      accCost, accCompleted, accFailed, accIn, accOut, accTools,
-      branches, phase: "steering", startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
-    });
+    saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks, fastModel }));
 
     const swarm = new Swarm({
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
@@ -421,16 +432,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     // wasn't decremented (only attempted agents were), so no refund needed.
     const attemptedPrompts = new Set(swarm.agents.map(a => a.task.prompt));
     const neverStarted = currentTasks.filter(t => !attemptedPrompts.has(t.prompt));
-    saveRunState(runDir, {
-      id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-      remaining, workerModel, plannerModel,
-      workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
-      concurrency, permissionMode,
-      usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
-      flex, useWorktrees, mergeStrategy, waveNum, currentTasks: neverStarted,
-      accCost, accCompleted, accFailed, accIn, accOut, accTools,
-      branches, phase: "steering", startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
-    });
+    saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks: neverStarted, fastModel }));
 
     waveHistory.push({
       wave: waveNum,
@@ -486,16 +488,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const trulyDone = objectiveComplete || (!flex && remaining <= 0);
   const wasCapped = lastCapped || lastAborted;
   const finalPhase = trulyDone ? "done" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
-  saveRunState(runDir, {
-    id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-    remaining, workerModel, plannerModel,
-    workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
-    concurrency, permissionMode,
-    usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
-    flex, useWorktrees, mergeStrategy, waveNum, currentTasks: [],
-    accCost, accCompleted, accFailed, accIn, accOut, accTools,
-    branches, phase: finalPhase, startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
-  });
+  saveRunState(runDir, buildRunState({ remaining, phase: finalPhase, currentTasks: [] }));
   if (trulyDone) {
     try { rmSync(join(runDir, "designs"), { recursive: true, force: true }); } catch {}
     try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}

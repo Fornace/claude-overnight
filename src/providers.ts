@@ -260,10 +260,13 @@ export function buildEnvResolver(opts: {
   plannerProvider?: ProviderConfig;
   workerModel: string;
   workerProvider?: ProviderConfig;
+  fastModel?: string;
+  fastProvider?: ProviderConfig;
 }): EnvResolver {
   const byModel = new Map<string, ProviderConfig>();
   if (opts.plannerProvider) byModel.set(opts.plannerModel, opts.plannerProvider);
   if (opts.workerProvider) byModel.set(opts.workerModel, opts.workerProvider);
+  if (opts.fastProvider && opts.fastModel) byModel.set(opts.fastModel, opts.fastProvider);
   if (byModel.size === 0) return () => undefined;
   return (model) => {
     if (!model) return undefined;

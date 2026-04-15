@@ -164,36 +164,70 @@ export interface RunMemory {
   userGuidance?: string;
 }
 
-/** Persisted run state for crash recovery and resume. */
-export interface RunState {
-  id: string;
-  objective: string;
+/** Shared configuration for a run — both live (RunConfig) and persisted (RunState). */
+export interface RunConfigBase {
+  /** Total session budget. */
   budget: number;
-  remaining: number;
+  /** Model for worker/agent tasks. */
   workerModel: string;
+  /** Model for planner/steering calls. */
   plannerModel: string;
-  /** Optional id of a custom provider (from ~/.claude/claude-overnight/providers.json) used for worker tasks. */
+  /** Optional fast model for quick tasks that will be verified. */
+  fastModel?: string;
+  /** Custom provider id for worker tasks. */
   workerProviderId?: string;
-  /** Optional id of a custom provider used for planner/steering calls. */
+  /** Custom provider id for planner/steering calls. */
   plannerProviderId?: string;
+  /** Custom provider id for fast model tasks. */
+  fastProviderId?: string;
+  /** Max parallel agents. */
   concurrency: number;
+  /** Permission mode for SDK tool calls. */
   permissionMode: PermMode;
+  /** Stop dispatching when rate-limit utilization reaches this %. */
   usageCap?: number;
+  /** Whether extra/overage usage is allowed. */
   allowExtraUsage: boolean;
-  extraUsageBudget?: number; // max $ for extra usage
+  /** Max $ for extra usage. */
+  extraUsageBudget?: number;
+  /** Enable adaptive multi-wave planning. */
   flex: boolean;
+  /** Use git worktree isolation for agents. */
   useWorktrees: boolean;
+  /** How worktree branches are merged. */
   mergeStrategy: MergeStrategy;
+}
+
+/** Persisted run state for crash recovery and resume. */
+export interface RunState extends RunConfigBase {
+  /** Unique run identifier. */
+  id: string;
+  /** Run objective/goal. */
+  objective: string;
+  /** Remaining sessions. */
+  remaining: number;
+  /** Current wave number. */
   waveNum: number;
+  /** Tasks for the current/next wave. */
   currentTasks: Task[];
+  /** Accumulated cost in USD. */
   accCost: number;
+  /** Accumulated completed sessions. */
   accCompleted: number;
+  /** Accumulated failed sessions. */
   accFailed: number;
+  /** Accumulated input tokens. */
   accIn?: number;
+  /** Accumulated output tokens. */
   accOut?: number;
+  /** Accumulated tool calls. */
   accTools?: number;
+  /** Tracked git branches. */
   branches: BranchRecord[];
+  /** Current lifecycle phase. */
   phase: "planning" | "steering" | "capped" | "done" | "stopped";
+  /** ISO timestamp when the run started. */
   startedAt: string;
+  /** Working directory for the run. */
   cwd: string;
 }
