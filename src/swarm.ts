@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   SDKMessage, SDKResultMessage, SDKResultError, SDKAssistantMessage,
@@ -10,6 +11,7 @@ import { NudgeError, RATE_LIMIT_WINDOW_SHORT } from "./types.js";
 import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult } from "./merge.js";
+import { ensureCursorProxyRunning } from "./providers.js";
 
 const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
 
@@ -52,6 +54,8 @@ export interface SwarmConfig {
   baseCostUsd?: number;
   /** Per-task env overrides: given a model id, return the env to pass to `query()` (or undefined for Anthropic default). */
   envForModel?: (model?: string) => Record<string, string> | undefined;
+  /** When true, the run uses cursor-api-proxy. The swarm will attempt to restart it if it crashes mid-run. */
+  cursorProxy?: boolean;
 }
 
 export class Swarm {
@@ -314,7 +318,19 @@ export class Swarm {
         const task = this.queue.shift();
         if (!task) break;
         try { await this.runAgent(task); }
-        catch (err: any) { this.log(-1, `Worker error: ${String(err?.message || err).slice(0, 80)}`); }
+        catch (err: any) {
+          const msg = String(err?.message || err).slice(0, 80);
+          this.log(-1, `Worker error: ${msg}`);
+          // If cursor proxy is in use and the task may have failed due to a proxy crash,
+          // attempt to restart it before the next task.
+          if (this.config.cursorProxy) {
+            this.log(-1, "  Checking cursor proxy health…");
+            const restarted = await ensureCursorProxyRunning();
+            if (!restarted) {
+              this.log(-1, chalk.yellow("  ⚠ Proxy still down — remaining tasks may fail"));
+            }
+          }
+        }
         tasksProcessed++;
       }
       this.log(-1, `Worker finished (${tasksProcessed} tasks)`);

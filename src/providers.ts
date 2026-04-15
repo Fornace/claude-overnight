@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
@@ -374,6 +374,227 @@ async function fetchLiveCursorModels(): Promise<string[]> {
   return [];
 }
 
+/**
+ * Verify something is actually cursor-api-proxy (not just any HTTP service on the port).
+ * Calls /v1/models and checks the response shape. Returns true if it looks like the proxy.
+ */
+async function verifyCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
+  const url = `${baseUrl.replace(/\/$/, "")}/v1/models`;
+  try {
+    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000) });
+    if (!res.ok) return false;
+    const json = await res.json() as any;
+    // cursor-api-proxy returns { data: [{ id: "...", ... }] }
+    return Array.isArray(json?.data);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check whether something is already listening on the proxy port.
+ * Returns true if any process bound the port (another instance, Cursor CLI, etc.).
+ */
+async function isPortInUse(port: number, host = "127.0.0.1"): Promise<boolean> {
+  try {
+    const res = await fetch(`http://${host}:${port}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(2_000),
+    });
+    return res.ok || res.status >= 400; // any response means something is listening
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find the system `node` binary path. Uses `which` to bypass any bundled node.
+ */
+function resolveSystemNode(): string | null {
+  try {
+    return execSync("which node 2>/dev/null", {
+      timeout: 3_000, encoding: "utf-8", shell: "bash",
+    }).trim() || null;
+  } catch { return null; }
+}
+
+/**
+ * Find the cursor-agent's index.js. Mirrors the logic in fetchLiveCursorModels:
+ * resolves the `agent` symlink to find the version directory containing index.js.
+ */
+function resolveAgentIndexJs(): string | null {
+  try {
+    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
+      timeout: 3_000, encoding: "utf-8", shell: "bash",
+    }).trim();
+    if (!agentPath) return null;
+    const dir = dirname(realpathSync(agentPath));
+    const indexPath = `${dir}/index.js`;
+    return existsSync(indexPath) ? indexPath : null;
+  } catch { return null; }
+}
+
+/**
+ * Patch the proxy's env.js to use CURSOR_AGENT_NODE + CURSOR_AGENT_SCRIPT on Unix.
+ *
+ * The proxy already reads these env vars (lines 152-153 of env.js) but only uses
+ * them on Windows in resolveAgentCommand(). We inject a Unix code path before the
+ * final `return { command: cmd, args, env }` so that when these vars are set,
+ * the proxy spawns system node with the agent script instead of the bundled node
+ * (which segfaults with --list-models on macOS).
+ *
+ * Safe to call repeatedly — the patch is idempotent.
+ */
+function patchProxyEnvJs(proxyDir: string): boolean {
+  const envJs = join(proxyDir, "dist", "lib", "env.js");
+  if (!existsSync(envJs)) return false;
+  const src = readFileSync(envJs, "utf-8");
+
+  // Check if already patched
+  if (src.includes("/* claude-overnight patch */")) return true;
+
+  const patch = `\n/* claude-overnight patch: use CURSOR_AGENT_NODE+SCRIPT on unix */\n` +
+    `if (platform !== "win32" && loaded.agentNode && loaded.agentScript) {\n` +
+    `  return { command: loaded.agentNode, args: [loaded.agentScript, ...args], env: { ...env, CURSOR_INVOKED_AS: "agent" }, agentScriptPath: loaded.agentScript };\n` +
+    `}`;
+
+  // Insert before the final return in resolveAgentCommand
+  const target = "    return { command: cmd, args, env };\n}";
+  if (!src.includes(target)) {
+    // Try minified variant
+    const target2 = "return{command:cmd,args,env}}";
+    if (!src.includes(target2)) return false;
+    writeFileSync(envJs, src.replace(target2, patch + "\n" + target2), "utf-8");
+  } else {
+    writeFileSync(envJs, src.replace(target, patch + "\n" + target), "utf-8");
+  }
+  return true;
+}
+
+/**
+ * Find the cursor-api-proxy package directory (npx cache or global install).
+ */
+function findProxyPackageDir(): string | null {
+  try {
+    // Try npx cache first
+    const npmCacheRoot = join(homedir(), ".npm", "_npx");
+    if (existsSync(npmCacheRoot)) {
+      const dirs = readdirSync(npmCacheRoot);
+      for (const d of dirs) {
+        const candidate = join(npmCacheRoot, d, "node_modules", "cursor-api-proxy");
+        if (existsSync(join(candidate, "dist", "lib", "env.js"))) return candidate;
+      }
+    }
+  } catch {}
+  // Try global install
+  try {
+    const globalDir = execSync("npm root -g 2>/dev/null", {
+      timeout: 5_000, encoding: "utf-8", shell: "bash",
+    }).trim();
+    if (globalDir && existsSync(join(globalDir, "cursor-api-proxy", "dist", "lib", "env.js"))) {
+      return join(globalDir, "cursor-api-proxy");
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Auto-start the cursor-api-proxy as a detached background process.
+ *
+ * When the proxy is started, we also configure it to use system Node.js
+ * for spawning the cursor-agent subprocess. The agent's bundled Node.js
+ * segfaults with --list-models on macOS (exit 139), so we resolve the
+ * system `node` binary and the agent's index.js, patch the proxy's env.js
+ * to respect CURSOR_AGENT_NODE/SCRIPT on Unix, and pass those env vars.
+ *
+ * Handles:
+ *  - Proxy already running and verified → returns true immediately
+ *  - Something on the port but not our proxy → warns, skips spawn
+ *  - Port in use by nothing responsive → returns true (something bound it)
+ *  - Proxy not running → spawns `npx cursor-api-proxy` detached, waits for health
+ *  - Spawn fails (not installed) → returns false, caller falls back to manual instructions
+ *
+ * Returns true when the proxy is reachable at PROXY_DEFAULT_URL.
+ */
+export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
+  const url = new URL(baseUrl);
+  const port = parseInt(url.port, 10) || 80;
+
+  // Already healthy?
+  if (await healthCheckCursorProxy(baseUrl)) return true;
+
+  // Something bound the port — verify it's actually the cursor proxy
+  if (await isPortInUse(port, url.hostname)) {
+    const isProxy = await verifyCursorProxy(baseUrl);
+    if (isProxy) {
+      console.log(chalk.dim(`  Proxy verified at port ${port}`));
+      return true;
+    }
+    console.log(chalk.yellow(`  ⚠ Something is on port ${port} but it's not cursor-api-proxy`));
+    console.log(chalk.dim(`  Skip auto-start. If this is unexpected, stop the service or pick a different port.`));
+    return false;
+  }
+
+  // Port is free — auto-start the proxy
+  console.log(chalk.yellow(`\n  Proxy not running at ${baseUrl} — starting it for you…`));
+
+  // Resolve system node and agent index.js so the proxy doesn't use the
+  // agent's bundled node (segfaults with --list-models on macOS).
+  const sysNode = resolveSystemNode();
+  const agentJs = resolveAgentIndexJs();
+  let patchedProxy = false;
+  if (sysNode && agentJs) {
+    const proxyDir = findProxyPackageDir();
+    if (proxyDir) {
+      patchedProxy = patchProxyEnvJs(proxyDir);
+      if (patchedProxy) {
+        console.log(chalk.dim(`  Using system node for agent subprocess: ${sysNode}`));
+      } else {
+        console.log(chalk.yellow(`  ⚠ Couldn't patch proxy env.js — /v1/models may fail`));
+      }
+    }
+  }
+
+  const proxyEnv: Record<string, string> = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([, v]) => v !== undefined)
+    ) as Record<string, string>,
+    CURSOR_BRIDGE_API_KEY: process.env.CURSOR_BRIDGE_API_KEY
+      || loadProviders().find(p => p.cursorProxy)?.cursorApiKey
+      || "unused",
+  };
+  if (patchedProxy && sysNode && agentJs) {
+    proxyEnv.CURSOR_AGENT_NODE = sysNode;
+    proxyEnv.CURSOR_AGENT_SCRIPT = agentJs;
+  }
+
+  try {
+    const child = spawn("npx", ["cursor-api-proxy"], {
+      detached: true,
+      stdio: "ignore",
+      env: proxyEnv,
+    });
+
+    child.unref(); // let it outlive this process
+
+    // Wait up to 15s for the proxy to become healthy
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      if (await healthCheckCursorProxy(baseUrl)) {
+        console.log(chalk.green(`  ✓ Proxy started (PID ${child.pid}) and healthy`));
+        return true;
+      }
+    }
+
+    console.log(chalk.yellow(`  ⚠ Proxy process spawned but not responding after 15s`));
+    console.log(chalk.dim(`  It may still be initializing. You can check with: curl ${baseUrl}/health`));
+    return false;
+  } catch (err: any) {
+    console.log(chalk.yellow(`  ⚠ Failed to auto-start proxy: ${String(err?.message || err).slice(0, 100)}`));
+    return false;
+  }
+}
+
 // ── Cursor Proxy Setup Guide ──
 
 interface SetupStep {
@@ -456,12 +677,14 @@ async function promptAndSaveCursorKey(): Promise<boolean> {
 }
 
 /**
- * Interactive setup guide for cursor-api-proxy.
+ * Full install + configure flow for cursor-api-proxy.
  * Walks through CLI install, API key config, and proxy start.
+ * Only needed when the quick auto-start (`ensureCursorProxyRunning`) fails —
+ * e.g. npx can't find the package or the user has no API key yet.
  * Returns true when proxy is running and healthy.
  */
 export async function setupCursorProxy(): Promise<boolean> {
-  console.log(chalk.dim("\n  Cursor API Proxy Setup"));
+  console.log(chalk.dim("\n  Configure cursor-api-proxy"));
   console.log(chalk.dim("  " + "─".repeat(40)));
   console.log(chalk.dim("  We need three things: Cursor CLI, an API key, and the proxy server.\n"));
 
@@ -473,7 +696,7 @@ export async function setupCursorProxy(): Promise<boolean> {
     console.log(chalk.green(`  ✓ ${cliStep.successMsg}`));
   } else {
     console.log(chalk.yellow(`\n  ${cliStep.label} not found`));
-    const choice = await selectKey(`  Set up ${cliStep.label}:`, [
+    const choice = await selectKey(`  Install ${cliStep.label}?`, [
       { key: "a", desc: "uto (run command)" },
       { key: "m", desc: "anual (show command)" },
       { key: "s", desc: "kip (I'll handle it)" },
@@ -510,38 +733,64 @@ export async function setupCursorProxy(): Promise<boolean> {
     }
   }
 
-  // ── Step 3: Proxy server ──
+  // ── Step 3: Proxy server — auto-start if needed ──
   const proxyStep = steps[2];
   if (proxyStep.check()) {
     console.log(chalk.green(`  ✓ ${proxyStep.successMsg}`));
   } else {
-    console.log(chalk.yellow(`\n  ${proxyStep.label} not found`));
-    console.log(chalk.dim(`  Install check:`));
-    try {
-      execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 15_000 });
-      console.log(chalk.green(`  ✓ cursor-api-proxy is installed`));
-    } catch {
-      console.log(chalk.cyan(`    ${chalk.white("Install with:")} ${chalk.bold("npm install -g cursor-api-proxy")}`));
+    console.log(chalk.yellow(`\n  ${proxyStep.label} not installed`));
+    const choice = await selectKey(`  Install and start it?`, [
+      { key: "a", desc: "uto (install + start)" },
+      { key: "m", desc: "anual (show commands)" },
+      { key: "s", desc: "kip (I'll handle it)" },
+    ]);
+    if (choice === "a") {
+      console.log(chalk.dim(`  Checking install…`));
+      try {
+        execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 15_000 });
+        console.log(chalk.green(`  ✓ cursor-api-proxy is installed`));
+      } catch {
+        console.log(chalk.dim(`  Installing…`));
+        try {
+          execSync("npm install -g cursor-api-proxy", { stdio: "inherit", timeout: 120_000 });
+          console.log(chalk.green(`  ✓ Installed`));
+        } catch {
+          console.log(chalk.yellow("  Install failed — try manual: npm install -g cursor-api-proxy"));
+          return false;
+        }
+      }
+    } else if (choice === "m") {
+      console.log(chalk.cyan(`\n  Install:  ${chalk.bold("npm install -g cursor-api-proxy")}`));
+      console.log(chalk.cyan(`  Start:    ${chalk.bold("npx cursor-api-proxy")}\n`));
+      const ok = await selectKey(`  Started it?`, [
+        { key: "r", desc: "eady" },
+        { key: "c", desc: "ancel" },
+      ]);
+      if (ok === "c") return false;
+    } else {
+      console.log(chalk.dim(`  Skipped: ${proxyStep.label}`));
+      return false;
     }
   }
 
-  // Wait for the proxy to be reachable (retry loop)
+  // Auto-start the proxy (detached background process)
+  if (await ensureCursorProxyRunning()) return true;
+
+  // Auto-start failed or not responding — offer manual fallback
+  console.log(chalk.yellow(`\n  Couldn't start the proxy automatically. Start it manually:`));
+  console.log(chalk.white(`    ${chalk.bold("npx cursor-api-proxy")}`));
   for (;;) {
-    if (await healthCheckCursorProxy()) {
-      console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
-      return true;
-    }
-
-    console.log(chalk.yellow(`\n  Proxy not reachable at ${PROXY_DEFAULT_URL}`));
-    console.log(chalk.dim(`  Make sure it's started in another terminal:`));
-    console.log(chalk.white(`    ${chalk.bold("npx cursor-api-proxy")}`));
-
-    const choice = await selectKey(`  Ready to check again?`, [
+    const choice = await selectKey(`  Proxy started?`, [
       { key: "r", desc: "etry" },
       { key: "c", desc: "ancel" },
     ]);
-    if (choice === "c") {
-      console.log(chalk.dim("\n  No worries — start the proxy later and pick 'Cursor' in the model picker."));
+    if (choice === "r") {
+      if (await healthCheckCursorProxy()) {
+        console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
+        return true;
+      }
+      console.log(chalk.yellow(`  Still not reachable at ${PROXY_DEFAULT_URL}`));
+    } else {
       return false;
     }
   }
@@ -601,19 +850,31 @@ async function pickCursorModel(): Promise<ModelPick | null> {
   process.stdout.write("\x1B[2K\r");
 
   if (!healthy) {
-    console.log(chalk.yellow("  Proxy is not running at " + PROXY_DEFAULT_URL));
-    const choice = await selectKey(`  What next?`, [
-      { key: "s", desc: "etup guide" },
-      { key: "r", desc: "etry" },
-      { key: "c", desc: "ancel" },
-    ]);
-    if (choice === "s") {
-      const ok = await setupCursorProxy();
-      if (!ok) return null;
-    } else if (choice === "r") {
-      return pickCursorModel();
+    // Try to auto-start the proxy before bugging the user
+    const autoStarted = await ensureCursorProxyRunning();
+    if (autoStarted) {
+      // Proxy is up now — proceed to model list
     } else {
-      return null;
+      console.log(chalk.yellow("  Proxy is not running at " + PROXY_DEFAULT_URL));
+      const choice = await selectKey(`  How to proceed?`, [
+        { key: "i", desc: "nstall + configure (CLI, API key, server)" },
+        { key: "r", desc: "etry (I started it manually)" },
+        { key: "c", desc: "ancel" },
+      ]);
+      if (choice === "s") {
+        const ok = await setupCursorProxy();
+        if (!ok) return null;
+      } else if (choice === "r") {
+        // User manually started it — one more health check
+        if (await healthCheckCursorProxy()) {
+          console.log(chalk.green("  ✓ Proxy detected"));
+        } else {
+          console.log(chalk.yellow("  Still not reachable — try the install flow or cancel."));
+          return null;
+        }
+      } else {
+        return null;
+      }
     }
   }
 

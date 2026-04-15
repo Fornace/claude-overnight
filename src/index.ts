@@ -11,7 +11,7 @@ import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
 import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
 import { setPlannerEnvResolver } from "./planner-query.js";
-import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider } from "./providers.js";
+import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, ensureCursorProxyRunning } from "./providers.js";
 import type { ProviderConfig } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
@@ -659,9 +659,20 @@ async function main() {
       ["fast", fastProvider],
     ];
     const pending: Array<[string, ProviderConfig]> = [];
+    const cursorProxies: ProviderConfig[] = [];
     for (const [role, p] of all) {
-      if (p && !seen.has(p.id)) { seen.add(p.id); pending.push([role, p]); }
+      if (p && !seen.has(p.id)) {
+        seen.add(p.id);
+        pending.push([role, p]);
+        if (isCursorProxyProvider(p)) cursorProxies.push(p);
+      }
     }
+
+    // Auto-start cursor proxy before pinging
+    if (cursorProxies.length > 0) {
+      await ensureCursorProxyRunning();
+    }
+
     process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}...`)}\n`);
     const results = await Promise.all(
       pending.map(async ([role, p]) => ({ role, provider: p, result: await preflightProvider(p, cwd) })),
@@ -669,7 +680,12 @@ async function main() {
     for (const { role, provider, result } of results) {
       if (!result.ok) {
         console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
-        console.error(chalk.red(`\n  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.\n`));
+        if (isCursorProxyProvider(provider)) {
+          console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed. Start it: npx cursor-api-proxy`));
+        } else {
+          console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));
+        }
+        console.error("");
         process.exit(1);
       }
       console.log(`  ${chalk.green(`✓ ${role} ready`)} ${chalk.dim(`· ${provider.displayName} · ${provider.model}`)}`);
@@ -780,6 +796,7 @@ async function main() {
             tasks: thinkingTasks, concurrency, cwd, model: plannerModel, permissionMode,
             useWorktrees: false, mergeStrategy: "yolo", agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
             envForModel,
+            cursorProxy: [plannerProvider, workerProvider, fastProvider].some(p => p && isCursorProxyProvider(p)),
           });
           const thinkRunInfo = { accIn: 0, accOut: 0, accCost: 0, accCompleted: 0, accFailed: 0, sessionsBudget: budget ?? 10, waveNum: -1, remaining: budget ?? 10, model: plannerModel, startedAt: Date.now() };
           const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, concurrency, paused: false, dirty: false });

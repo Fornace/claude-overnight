@@ -7,7 +7,7 @@ import { Swarm } from "./swarm.js";
 import { steerWave } from "./steering.js";
 import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver } from "./planner-query.js";
 import type { ProviderConfig } from "./providers.js";
-import { buildEnvResolver } from "./providers.js";
+import { buildEnvResolver, isCursorProxyProvider } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import type { LiveConfig, RunInfo, SteeringContext } from "./ui.js";
 import type { PlannerLog } from "./planner-query.js";
@@ -400,6 +400,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       useWorktrees, mergeStrategy: waveMerge, agentTimeoutMs: cfg.agentTimeoutMs,
       usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
       baseCostUsd: accCost, envForModel,
+      cursorProxy: [cfg.workerProvider, cfg.plannerProvider, cfg.fastProvider].some(p => p && isCursorProxyProvider(p)),
     });
     currentSwarm = swarm;
     display.setWave(swarm);
