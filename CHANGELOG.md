@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.17.0
+
+### Three-layer review system
+
+Agents review their own work, waves get reviewed, and the final diff gets a quality gate — all wired through the SDK's session resume (continue) mechanism so no extra context is needed.
+
+- **Layer 1 — Per-agent self-review (always-on).** Enhanced the existing simplify pass that runs after every agent finishes. The review prompt now covers specific checks: missed reuse (existing utilities, hand-rolled patterns vs built-ins), quality (redundant state, copy-paste variations, leaky abstractions, stringly-typed code, narrative comments), and efficiency (N+1 patterns, hot-path bloat, TOCTOU anti-patterns, memory leaks, recurring no-op updates). Runs via **session resume** — the same agent session continues with a follow-up prompt, keeping the agent's full context from its task. No initial context bloat.
+- **Layer 2 — Post-wave review wave.** After each wave (flex mode, budget remaining, wave > 0), a dedicated review agent inspects the consolidated diff for issues individual agents blind-spotted. Runs as a single-agent swarm wave. Gated — skips on abort/cap/first wave.
+- **Layer 3 — Post-run final review gate.** Before the final summary, a comprehensive review runs against the full `git diff main`. Checks architecture coherence, consistency with existing patterns, build integrity, and test pass. The last quality gate before the diff lands.
+- **Continue mechanism.** All per-agent reviews use the SDK's `resume` parameter — the agent session picks up where it left off with its full conversation context intact. The review prompt is appended as a follow-up, not prepended to the initial instruction. This keeps the initial task prompt lean and lets the agent's own context do the heavy lifting.
+
 ## 1.16.16
 
 ### Playwright parallel testing quicksheet + headless by default

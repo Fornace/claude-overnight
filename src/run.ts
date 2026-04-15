@@ -75,6 +75,11 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     fastModel: cfg.fastModel, fastProvider: cfg.fastProvider,
   });
   setPlannerEnvResolver(envForModel);
+  const modelMap = new Map<string, string>([
+    ["planner", plannerModel],
+    ["worker", workerModel],
+  ]);
+  if (fastModel) modelMap.set("fast", fastModel);
   let { usageCap, flex } = cfg;
   const useWorktrees = cfg.useWorktrees;
   const mergeStrategy = cfg.mergeStrategy;
@@ -236,11 +241,9 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     remaining: number;
     phase: RunState["phase"];
     currentTasks: Task[];
-    fastModel?: string;
   }): RunState => ({
     id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-    remaining, workerModel, plannerModel,
-    ...("fastModel" in varying ? { fastModel: varying.fastModel } : {}),
+    remaining, workerModel, plannerModel, fastModel,
     workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
     fastProviderId: cfg.fastProvider?.id,
     concurrency, permissionMode,
@@ -269,8 +272,9 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     console.error(chalk.red(`\n  ${label}: ${detail}`));
     process.exit(1);
   };
-  process.on("uncaughtException", (err) => { currentSwarm?.abort(); currentSwarm?.cleanup(); crashHandler("Uncaught", err instanceof Error ? err.message : String(err)); });
-  process.on("unhandledRejection", (reason) => { currentSwarm?.abort(); currentSwarm?.cleanup(); crashHandler("Unhandled", reason instanceof Error ? reason.message : String(reason)); });
+  const cleanupSwarm = () => { currentSwarm?.abort(); currentSwarm?.cleanup(); };
+  process.on("uncaughtException", (err) => { cleanupSwarm(); crashHandler("Uncaught", err instanceof Error ? err.message : String(err)); });
+  process.on("unhandledRejection", (reason) => { cleanupSwarm(); crashHandler("Unhandled", reason instanceof Error ? reason.message : String(reason)); });
 
   // Shared steering logic used by both resume-steering and in-loop steering
   const runSteering = async (): Promise<boolean> => {
@@ -323,11 +327,6 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
           break;
         }
 
-        const modelMap = new Map<string, string>([
-          ["planner", plannerModel],
-          ["worker", workerModel],
-        ]);
-        if (fastModel) modelMap.set("fast", fastModel);
         currentTasks = steer.tasks.map(t => ({
           ...t,
           model: t.model ? (modelMap.get(t.model) ?? t.model) : undefined,
@@ -384,7 +383,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
     syncRunInfo();
 
-    saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks, fastModel }));
+    saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks }));
 
     const swarm = new Swarm({
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
@@ -432,12 +431,32 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     // wasn't decremented (only attempted agents were), so no refund needed.
     const attemptedPrompts = new Set(swarm.agents.map(a => a.task.prompt));
     const neverStarted = currentTasks.filter(t => !attemptedPrompts.has(t.prompt));
-    saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks: neverStarted, fastModel }));
+    saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks: neverStarted }));
 
     waveHistory.push({
       wave: waveNum,
       tasks: swarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, filesChanged: a.filesChanged, error: a.error })),
     });
+
+    // Post-wave review: a single review agent against the consolidated diff.
+    // Runs only when there was real work (not first wave, not abort/cap).
+    if (flex && remaining > 0 && !swarm.aborted && !swarm.cappedOut && waveNum > 0) {
+      const reviewResult = await runPostWaveReview({
+        cwd, plannerModel, permissionMode, concurrency,
+        remaining, usageCap, allowExtraUsage: cfg.allowExtraUsage,
+        extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: accCost,
+        envForModel, mergeStrategy: waveMerge, useWorktrees,
+      });
+      if (reviewResult) {
+        accCost += reviewResult.costUsd;
+        accIn += reviewResult.inputTokens;
+        accOut += reviewResult.outputTokens;
+        accCompleted += reviewResult.completed;
+        remaining = Math.max(0, remaining - reviewResult.completed);
+        liveConfig.remaining = remaining;
+        display.appendSteeringEvent(`Post-wave review: ${reviewResult.completed} done${reviewResult.failed > 0 ? ` / ${reviewResult.failed} failed` : ""}`);
+      }
+    }
 
     if (!flex || remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
 
@@ -489,10 +508,27 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const wasCapped = lastCapped || lastAborted;
   const finalPhase = trulyDone ? "done" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
   saveRunState(runDir, buildRunState({ remaining, phase: finalPhase, currentTasks: [] }));
+
+  // Post-run final review: comprehensive review of the entire diff before shipping.
+  if (flex && remaining > 0 && waveNum > 0) {
+    const finalReview = await runPostRunReview(
+      objective || "", cwd, plannerModel, permissionMode,
+      remaining, usageCap, cfg.allowExtraUsage, cfg.extraUsageBudget,
+      accCost, envForModel, waveMerge, useWorktrees,
+    );
+    if (finalReview) {
+      accCost += finalReview.costUsd;
+      accIn += finalReview.inputTokens;
+      accOut += finalReview.outputTokens;
+      accCompleted += finalReview.completed;
+      remaining = Math.max(0, remaining - finalReview.completed);
+    }
+  }
+
   if (trulyDone) {
-    try { rmSync(join(runDir, "designs"), { recursive: true, force: true }); } catch {}
-    try { rmSync(join(runDir, "reflections"), { recursive: true, force: true }); } catch {}
-    try { rmSync(join(runDir, "verifications"), { recursive: true, force: true }); } catch {}
+    try {
+      for (const dir of ["designs", "reflections", "verifications"]) rmSync(join(runDir, dir), { recursive: true, force: true });
+    } catch {}
   }
   try {
     updateOvernightLogEnd(cwd, runId, {
@@ -538,7 +574,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   console.log("");
 
   const statusFile = join(runDir, "status.md");
-  if (existsSync(statusFile)) {
+  try {
     const statusContent = readFileSync(statusFile, "utf-8").trim();
     if (statusContent) {
       console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
@@ -547,7 +583,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       for (const line of statusContent.split("\n")) console.log(`  ${line}`);
       console.log("");
     }
-  }
+  } catch {}
 
   if (totalConflicts > 0) {
     console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
@@ -566,6 +602,149 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
 
   if (accFailed > 0) process.exit(1);
   if (lastAborted || accCompleted === 0) process.exit(2);
+}
+
+// ── Post-wave review: a single review agent inspects the consolidated diff ──
+
+interface ReviewOpts {
+  cwd: string;
+  plannerModel: string;
+  permissionMode: PermMode;
+  concurrency: number;
+  remaining: number;
+  usageCap: number | undefined;
+  allowExtraUsage: boolean;
+  extraUsageBudget: number | undefined;
+  baseCostUsd: number;
+  envForModel: ((model?: string) => Record<string, string> | undefined) | undefined;
+  mergeStrategy: MergeStrategy;
+  useWorktrees: boolean;
+}
+
+interface ReviewResult {
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  completed: number;
+  failed: number;
+}
+
+const POST_WAVE_REVIEW_PROMPT = `You are reviewing all changes made in the most recent wave of agent work.
+
+Run \`git diff\` to see what changed. Review for:
+
+1. **Missed reuse**: Did any agent write something that already exists elsewhere? Find existing utilities and suggest replacements.
+2. **Quality issues**: Redundant state, copy-paste variations, leaky abstractions, stringly-typed code where enums exist, unnecessary JSX nesting, comments that narrate what the code does.
+3. **Efficiency problems**: Redundant computations, sequential operations that could be parallel, hot-path bloat, recurring no-op updates, TOCTOU patterns, memory leaks.
+4. **Merge conflicts or inconsistencies**: Changes that work against each other or break existing patterns.
+
+Fix issues directly. Delete and simplify rather than add. If the code is already clean, skip.
+
+No need to explain your changes — just fix them.`;
+
+async function runPostWaveReview(opts: ReviewOpts): Promise<ReviewResult | null> {
+  const reviewTask: Task = {
+    id: "post-wave-review",
+    prompt: POST_WAVE_REVIEW_PROMPT,
+    noWorktree: false,
+  };
+
+  const reviewSwarm = new Swarm({
+    tasks: [reviewTask],
+    concurrency: 1,
+    cwd: opts.cwd,
+    model: opts.plannerModel,
+    permissionMode: opts.permissionMode,
+    useWorktrees: opts.useWorktrees,
+    mergeStrategy: opts.mergeStrategy,
+    usageCap: opts.usageCap,
+    allowExtraUsage: opts.allowExtraUsage,
+    extraUsageBudget: opts.extraUsageBudget,
+    baseCostUsd: opts.baseCostUsd,
+    envForModel: opts.envForModel,
+  });
+
+  try {
+    await reviewSwarm.run();
+    return {
+      costUsd: reviewSwarm.totalCostUsd,
+      inputTokens: reviewSwarm.totalInputTokens,
+      outputTokens: reviewSwarm.totalOutputTokens,
+      completed: reviewSwarm.completed,
+      failed: reviewSwarm.failed,
+    };
+  } catch (err: unknown) {
+    // Non-fatal — review is advisory, don't crash the run
+    return null;
+  }
+}
+
+// ── Post-run final review: comprehensive review of the entire diff ──
+
+const POST_RUN_REVIEW_PROMPT = `You are the final quality gate before this autonomous run completes.
+
+The objective was: {{OBJECTIVE}}
+
+Run \`git diff main\` (or \`git diff HEAD\` if on the same branch) to see ALL changes made during this run. Review comprehensively:
+
+1. **Architecture coherence**: Do the changes form a coherent whole, or are they a patchwork of independent edits that don't fit together?
+2. **Missed reuse**: Any new code that duplicates existing functionality?
+3. **Quality**: Redundant state, copy-paste variations, leaky abstractions, stringly-typed code, unnecessary nesting, narrative comments.
+4. **Efficiency**: N+1 patterns, redundant computations, hot-path bloat, missing cleanup, unbounded data structures.
+5. **Consistency**: Do all changes follow the project's existing patterns, conventions, and design system?
+6. **Build and test**: Run the build and any existing tests. Fix any breakage.
+
+Fix issues directly. Delete and simplify. If the codebase is clean and the build passes, say so.
+
+No need to explain your changes — just fix them.`;
+
+async function runPostRunReview(
+  objective: string,
+  cwd: string,
+  plannerModel: string,
+  permissionMode: PermMode,
+  remaining: number,
+  usageCap: number | undefined,
+  allowExtraUsage: boolean,
+  extraUsageBudget: number | undefined,
+  baseCostUsd: number,
+  envForModel: ((model?: string) => Record<string, string> | undefined) | undefined,
+  mergeStrategy: MergeStrategy,
+  useWorktrees: boolean,
+): Promise<ReviewResult | null> {
+  const reviewTask: Task = {
+    id: "post-run-review",
+    prompt: POST_RUN_REVIEW_PROMPT.replace("{{OBJECTIVE}}", objective || "improve the codebase"),
+    noWorktree: false,
+  };
+
+  const reviewSwarm = new Swarm({
+    tasks: [reviewTask],
+    concurrency: 1,
+    cwd,
+    model: plannerModel,
+    permissionMode,
+    useWorktrees,
+    mergeStrategy,
+    usageCap,
+    allowExtraUsage,
+    extraUsageBudget,
+    baseCostUsd,
+    envForModel,
+  });
+
+  try {
+    await reviewSwarm.run();
+    return {
+      costUsd: reviewSwarm.totalCostUsd,
+      inputTokens: reviewSwarm.totalInputTokens,
+      outputTokens: reviewSwarm.totalOutputTokens,
+      completed: reviewSwarm.completed,
+      failed: reviewSwarm.failed,
+    };
+  } catch (err: unknown) {
+    return null;
+  }
 }
 
 async function promptBudgetExtension(ctx: {

@@ -122,7 +122,17 @@ An orchestrator session reads all design documents and synthesizes concrete exec
 
 ### 3. Parallel execution waves
 
-Tasks run in parallel agent sessions (each in its own git worktree). After completing its task, each session automatically runs a **simplify pass** — reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits.
+Tasks run in parallel agent sessions (each in its own git worktree). After completing its task, each session automatically runs a **simplify pass** — reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits. This is done via the SDK's **session resume** mechanism: the same agent session continues with a follow-up prompt, so the agent's full context from its task is still available — no need to re-instruct or re-fill context.
+
+### 4. Post-wave review
+
+After each wave (flex mode, budget remaining), a dedicated **review agent** inspects the consolidated diff for issues the individual agents may have blind-spotted: missed reuse opportunities, copy-paste variations, leaky abstractions, efficiency regressions. Runs as a single-agent wave — one session reviews what the swarm just produced.
+
+### 5. Post-run final gate
+
+When the run completes (steering declares done), a final **comprehensive review** runs against the full `git diff main`. Checks architecture coherence, consistency with existing patterns, build integrity, and test pass. The last quality gate before the diff lands.
+
+### 6. Steering
 
 After each wave, steering assesses: "how good is this?" — not "what's missing?" It can:
 
@@ -130,11 +140,7 @@ After each wave, steering assesses: "how good is this?" — not "what's missing?
 - **Reflect** by spinning up 1-2 review sessions for deep quality/architecture audits
 - **Declare done** when the vision is met at high quality
 
-### 4. Goal refinement and steering
-
-The tool starts with your broad objective but refines its definition of quality as it learns your codebase. Steering updates the goal after each wave. Late waves are informed by early discoveries.
-
-### 5. Three-layer context memory
+### Three-layer context memory
 
 Long runs stay sharp because steering maintains three layers of memory:
 
