@@ -534,10 +534,12 @@ function patchProxyTokenCacheJs(proxyDir: string): boolean {
   const patch = `\n/* claude-overnight patch: skip keychain */\n` +
     `return undefined;`;
 
-  // Replace the execSync call inside readKeychainToken
-  const target = 'const t = execSync(\'security find-generic-password -s "cursor-access-token" -w\'';
+  // Replace the entire execSync chain inside readKeychainToken (multi-line)
+  const target = `const t = execSync('security find-generic-password -s "cursor-access-token" -w', { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 })
+            .toString()
+            .trim();`;
   if (!src.includes(target)) return false;
-  writeFileSync(tcJs, src.replace(target, patch + "\n// " + target), "utf-8");
+  writeFileSync(tcJs, src.replace(target, patch + "\n// " + target.replace(/\n/g, "\n// ")), "utf-8");
   return true;
 }
 
