@@ -1,0 +1,6 @@
+[
+  {"prompt": "Refactor the authentication module to use JWT tokens with proper refresh token rotation"},
+  {"prompt": "Add rate limiting to the API endpoints using a sliding window counter"},
+  {"prompt": "Migrate the database schema from PostgreSQL 14 to PostgreSQL 16 with zero downtime"},
+  {"prompt": "Implement end-to-end encryption for the messaging system using libsodium"}
+]

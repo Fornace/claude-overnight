@@ -1,0 +1,4 @@
+[
+  {"prompt": "Refactor the authentication module to use JWT tokens"},
+  {"prompt": "Add rate limiting to the API endpoints"}
+]

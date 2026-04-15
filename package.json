@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.16.14",
+  "version": "1.16.15",
   "description": "Background lane for your Claude Max plan. Parallel Claude Agent SDK sessions in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Opus/Sonnet/Haiku + Qwen/OpenRouter.",
   "type": "module",
   "bin": {
@@ -10,6 +10,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/bin.js",
+    "test": "node --test dist/__tests__/*.test.js",
     "prepublishOnly": "node scripts/sync-plugin-version.js"
   },
   "dependencies": {
@@ -18,6 +19,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "node-pty": "^1.1.0",
+    "strip-ansi": "^7.1.0",
     "typescript": "^5.7.0"
   },
   "license": "MIT",
