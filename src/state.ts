@@ -86,7 +86,7 @@ export function writeGoalUpdate(baseDir: string, update: string): void {
   let existing = "";
   try { existing = readFileSync(goalPath, "utf-8"); } catch {}
   const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
-  const entry = `\n\n## Update — ${ts}\n${update}`;
+  const entry = `\n\n## Update  -- ${ts}\n${update}`;
   const full = existing + entry;
   const trimmed = full.length > 4000 ? full.slice(0, 1000) + "\n\n...\n\n" + full.slice(-3000) : full;
   writeFileSync(goalPath, trimmed, "utf-8");
@@ -136,7 +136,7 @@ export function appendOvernightLogStart(cwd: string, runId: string, meta: Overni
   ].join("\n");
   let existing = "";
   try { existing = readFileSync(path, "utf-8"); } catch {}
-  const header = existing ? "" : "# claude-overnight — run history\n\n";
+  const header = existing ? "" : "# claude-overnight  -- run history\n\n";
   writeFileSync(path, header + existing + block, "utf-8");
 }
 
@@ -158,7 +158,7 @@ export function updateOvernightLogEnd(cwd: string, runId: string, meta: Overnigh
   if (re.test(existing)) {
     writeFileSync(path, existing.replace(re, `$1${endLines}`), "utf-8");
   } else {
-    const header = existing ? "" : "# claude-overnight — run history\n\n";
+    const header = existing ? "" : "# claude-overnight  -- run history\n\n";
     const block = `## ${runId}\n${endLines}\n\n`;
     writeFileSync(path, header + existing + block, "utf-8");
   }
@@ -187,7 +187,7 @@ export function findIncompleteRuns(rootDir: string, filterCwd: string): { dir: s
       if (!state || state.phase === "done" || state.cwd !== filterCwd) continue;
       // Planning-phase runs are resumable if either tasks.json was written
       // (orchestrate completed) OR design docs exist on disk (thinking wave
-      // got killed mid-way — we can re-orchestrate from the designs on resume).
+      // got killed mid-way  -- we can re-orchestrate from the designs on resume).
       if (state.phase === "planning"
         && !existsSync(join(runDir, "tasks.json"))
         && !readMdDir(join(runDir, "designs"))) continue;
@@ -218,10 +218,10 @@ export function findOrphanedDesigns(rootDir: string): string | null {
  * to findIncompleteRuns forever.
  *
  * Idempotent: runs with an existing run.json are skipped. Synthesizes a
- * minimal "planning" state from what can be read off disk — dir name for
+ * minimal "planning" state from what can be read off disk  -- dir name for
  * timestamp, task count for budget, sane defaults for everything else.
  * The cwd field is set to filterCwd so findIncompleteRuns picks it up on the
- * current project (which is safe — rootDir is already scoped to `cwd`).
+ * current project (which is safe  -- rootDir is already scoped to `cwd`).
  */
 export function backfillOrphanedPlans(rootDir: string, filterCwd: string): number {
   const runsDir = join(rootDir, "runs");
@@ -414,7 +414,7 @@ export function recordBranches(
 }
 
 export function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: (msg: string) => void): void {
-  // Do NOT gate on filesChanged — pre-1.11.10 runs can record filesChanged=0
+  // Do NOT gate on filesChanged  -- pre-1.11.10 runs can record filesChanged=0
   // for branches that actually contain real commits (agent self-committed).
   // Feed every unmerged branch to git; it will no-op harmlessly if truly empty.
   const unmerged = branches.filter(b => b.status === "unmerged");
@@ -438,7 +438,7 @@ export function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: 
           onLog(`  ✓ ${br.branch} (force-merged)`);
         } else {
           br.status = "merge-failed";
-          onLog(`  ✗ ${br.branch} (conflict — preserved for manual merge)`);
+          onLog(`  ✗ ${br.branch} (conflict  -- preserved for manual merge)`);
         }
       }
     }
@@ -453,5 +453,5 @@ export function archiveMilestone(baseDir: string, waveNum: number): void {
   const milestoneDir = join(baseDir, "milestones");
   mkdirSync(milestoneDir, { recursive: true });
   const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
-  writeFileSync(join(milestoneDir, `wave-${waveNum}.md`), `# Milestone — Wave ${waveNum} (${ts})\n\n${content}`, "utf-8");
+  writeFileSync(join(milestoneDir, `wave-${waveNum}.md`), `# Milestone  -- Wave ${waveNum} (${ts})\n\n${content}`, "utf-8");
 }

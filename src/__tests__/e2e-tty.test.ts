@@ -20,7 +20,7 @@ function taskFile(name: string) {
 
 // ── tests ──
 
-describe("E2E TTY — header bar", () => {
+describe("E2E TTY  -- header bar", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -51,7 +51,7 @@ describe("E2E TTY — header bar", () => {
   });
 });
 
-describe("E2E TTY — agent table", () => {
+describe("E2E TTY  -- agent table", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -85,7 +85,7 @@ describe("E2E TTY — agent table", () => {
   });
 });
 
-describe("E2E TTY — event log", () => {
+describe("E2E TTY  -- event log", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -111,7 +111,7 @@ describe("E2E TTY — event log", () => {
   });
 });
 
-describe("E2E TTY — hotkey bar", () => {
+describe("E2E TTY  -- hotkey bar", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -133,7 +133,7 @@ describe("E2E TTY — hotkey bar", () => {
   });
 });
 
-describe("E2E TTY — hotkey interactions", () => {
+describe("E2E TTY  -- hotkey interactions", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -198,7 +198,7 @@ describe("E2E TTY — hotkey interactions", () => {
   });
 });
 
-describe("E2E TTY — navigation", () => {
+describe("E2E TTY  -- navigation", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -271,7 +271,7 @@ describe("E2E TTY — navigation", () => {
   });
 });
 
-describe("E2E TTY — concurrency variations", () => {
+describe("E2E TTY  -- concurrency variations", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -290,7 +290,7 @@ describe("E2E TTY — concurrency variations", () => {
   });
 });
 
-describe("E2E TTY — resilience", () => {
+describe("E2E TTY  -- resilience", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 

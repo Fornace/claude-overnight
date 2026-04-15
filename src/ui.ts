@@ -26,7 +26,7 @@ export interface SteeringContext {
 /** One scrollback line in the steering event log. */
 export interface SteeringEvent { time: number; text: string }
 
-/** Cumulative run-level stats — mutable, updated between phases. */
+/** Cumulative run-level stats  -- mutable, updated between phases. */
 export interface RunInfo {
   accIn: number;
   accOut: number;
@@ -49,7 +49,7 @@ export interface LiveConfig {
   concurrency: number;
   paused: boolean;
   dirty: boolean;
-  /** Overage spend cap ($) — undefined = unlimited. Synced from the [e] hotkey. */
+  /** Overage spend cap ($)  -- undefined = unlimited. Synced from the [e] hotkey. */
   extraUsageBudget?: number;
 }
 
@@ -359,7 +359,7 @@ export class RunDisplay {
     if (this.steeringEvents.length > MAX_STEERING_EVENTS) this.steeringEvents.shift();
   }
 
-  /** Backwards-compat alias — treats input as the current status line. */
+  /** Backwards-compat alias  -- treats input as the current status line. */
   updateText(text: string): void { this.updateSteeringStatus(text); }
 
   pause(): void {
@@ -515,7 +515,7 @@ export class RunDisplay {
 
   /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw.
    *
-   * Demux pipeline — routes arrow keys and ESC BEFORE hotkey matching:
+   * Demux pipeline  -- routes arrow keys and ESC BEFORE hotkey matching:
    *   Raw stdin chunk → splitPaste
    *     ├─ paste → handlePaste (existing, fine)
    *     └─ typed → demux
@@ -536,7 +536,7 @@ export class RunDisplay {
       if (dir === "B") { this.navigate("down"); return true; }
       if (dir === "C") { this.navigate("right"); return true; }
       if (dir === "D") { this.navigate("left"); return true; }
-      // Other ANSI sequences — swallow silently
+      // Other ANSI sequences  -- swallow silently
       return true;
     }
 
@@ -621,7 +621,7 @@ export class RunDisplay {
           this.inputSegs = [];
           return true;
         }
-        // ESC cancels input mode (no ANSI-byte consumption loop — arrows arrive
+        // ESC cancels input mode (no ANSI-byte consumption loop  -- arrows arrive
         // as "\x1B[A" in a single call and are caught by step 1 above)
         if (ch === "\x1B") {
           this.inputMode = "none";

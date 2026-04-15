@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Tiny launcher: prints a splash the instant node is ready, then dynamically
 // imports the real entrypoint. Loading `@anthropic-ai/claude-agent-sdk` and the
-// rest of the module graph takes several seconds on a cold cache — without
+// rest of the module graph takes several seconds on a cold cache  -- without
 // this, the terminal sits black that whole time. index.ts stops the splash
 // via `globalThis.__coStopSplash` as soon as its header is about to print.
 

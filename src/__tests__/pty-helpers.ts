@@ -67,7 +67,7 @@ export class PTYProcess {
         this.dataHandlers.delete(onData);
         reject(
           new Error(
-            `waitFor timeout (${timeoutMs}ms) — pattern: ${regex.source}\nLast output:\n${stripAnsi(this.buffer).slice(-2000)}`,
+            `waitFor timeout (${timeoutMs}ms)  -- pattern: ${regex.source}\nLast output:\n${stripAnsi(this.buffer).slice(-2000)}`,
           ),
         );
       }, timeoutMs);

@@ -5,7 +5,7 @@ import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess, detect
 // Resilience: if the planner query throws but the agent already wrote valid
 // tasks to `outFile` (via its Write tool), salvage them instead of discarding
 // expensive work. Returns salvaged tasks on success, null if nothing usable on
-// disk — caller should then re-throw the original error.
+// disk  -- caller should then re-throw the original error.
 export function salvageFromFile(outFile: string | undefined, budget: number | undefined, onLog: (text: string, kind?: "status" | "event") => void, why: string): Task[] | null {
   if (!outFile) return null;
   try {
@@ -16,18 +16,18 @@ export function salvageFromFile(outFile: string | undefined, budget: number | un
     }));
     tasks = postProcess(tasks, budget, onLog);
     if (tasks.length === 0) return null;
-    onLog(`Planner errored (${why}) — salvaged ${tasks.length} tasks from ${outFile}`, "event");
+    onLog(`Planner errored (${why})  -- salvaged ${tasks.length} tasks from ${outFile}`, "event");
     return tasks;
   } catch { return null; }
 }
 
-// The core framing for all planning. Not a checklist — a way of thinking.
+// The core framing for all planning. Not a checklist  -- a way of thinking.
 export const DESIGN_THINKING = `
 HOW TO THINK ABOUT EVERY TASK:
 
-Start from the user's job. What is someone hiring this product to do? "I need to send money abroad cheaply" — not "I need a currency conversion API." Every decision — what to build, how fast it responds, what happens on error — flows from the job.
+Start from the user's job. What is someone hiring this product to do? "I need to send money abroad cheaply"  -- not "I need a currency conversion API." Every decision  -- what to build, how fast it responds, what happens on error  -- flows from the job.
 
-The experience IS the product. A 200ms server response is not a "performance metric" — it's the difference between an app that feels alive and one that feels broken. A loading state is not "polish" — it's the user knowing the app heard them. An error message is not "error handling" — it's the app being honest. There is no line between backend and UX. The server, the API, the database query, the render — they're all one experience the user either trusts or doesn't.
+The experience IS the product. A 200ms server response is not a "performance metric"  -- it's the difference between an app that feels alive and one that feels broken. A loading state is not "polish"  -- it's the user knowing the app heard them. An error message is not "error handling"  -- it's the app being honest. There is no line between backend and UX. The server, the API, the database query, the render  -- they're all one experience the user either trusts or doesn't.
 
 Build the core, verify it works, learn, iterate. Don't plan 20 features and build them all. Build the ONE thing that matters most, run it, see if it actually works from a user's chair. What you learn from seeing it run will change what you build next. Each wave should make what exists better before adding what doesn't exist yet.
 
@@ -61,7 +61,7 @@ function plannerPrompt(objective: string, workerModel: string, budget?: number, 
   const tier = detectModelTier(workerModel);
   const capability = modelCapabilityBlock(workerModel);
   const concLine = concurrency
-    ? `\n- ${concurrency} agents run in parallel — tasks that run concurrently must touch DIFFERENT files to avoid merge conflicts`
+    ? `\n- ${concurrency} agents run in parallel  -- tasks that run concurrently must touch DIFFERENT files to avoid merge conflicts`
     : "";
   const flexLine = flexNote ? `\n\n${flexNote}` : "";
 
@@ -74,10 +74,10 @@ AGENT CAPABILITY: ${capability}
 
 Requirements:
 - Target exactly ~${b} tasks
-- Each task MUST be independent — no task depends on another
+- Each task MUST be independent  -- no task depends on another
 - Each task should target specific files/areas to avoid merge conflicts
 - Be specific: mention exact file paths, function names, what to change
-- Keep tasks focused: one concrete change per task — Haiku agents work best with clear, scoped instructions${concLine}${flexLine}
+- Keep tasks focused: one concrete change per task  -- Haiku agents work best with clear, scoped instructions${concLine}${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
 {
@@ -99,7 +99,7 @@ Objective: ${objective}
 AGENT CAPABILITY: ${capability}
 
 Requirements:
-- Each task MUST be independent — no task depends on another
+- Each task MUST be independent  -- no task depends on another
 - Each task should target specific files/areas to avoid merge conflicts
 - Be specific: mention exact file paths, function names, what to change
 - Keep tasks focused: one logical change per task
@@ -126,7 +126,7 @@ Do NOT over-specify. Give each agent a MISSION, not step-by-step instructions. L
 Requirements:
 - Target exactly ~${b} tasks
 - Each task should be a substantial piece of work (5-30 minutes of agent time)
-- Each task MUST be independent — no task depends on another
+- Each task MUST be independent  -- no task depends on another
 - Tasks that run concurrently must touch DIFFERENT files/areas to avoid merge conflicts
 - Give agents scope and autonomy: "Design and implement X" not "In file Y, add function Z"
 - Include research/exploration tasks, design tasks, implementation tasks, testing tasks, and polish tasks
@@ -141,7 +141,7 @@ Respond with ONLY a JSON object (no markdown fences):
 }`;
   }
 
-  return `You are a task coordinator for a parallel agent system with ${b} agent sessions available. This is a LARGE budget — equivalent to months of professional engineering work.
+  return `You are a task coordinator for a parallel agent system with ${b} agent sessions available. This is a LARGE budget  -- equivalent to months of professional engineering work.
 
 Objective: ${objective}
 
@@ -162,7 +162,7 @@ With ${b} sessions, you should think BIG:
 Requirements:
 - Target exactly ~${b} tasks
 - Each task should be substantial: 10-30 minutes of autonomous agent work
-- Each task MUST be independent — no task depends on another
+- Each task MUST be independent  -- no task depends on another
 - Tasks that run concurrently must target DIFFERENT files/areas to avoid merge conflicts
 - Give agents missions with full autonomy: "Own the entire X subsystem" not "edit line 42 of Y.ts"
 - Cover ALL aspects: architecture, implementation, testing, UX, performance, security, polish
@@ -234,7 +234,7 @@ export async function identifyThemes(
 export function buildThinkingTasks(
   objective: string, themes: string[], designDir: string, plannerModel: string, previousKnowledge?: string,
 ): Task[] {
-  const prevBlock = previousKnowledge ? `\nKNOWLEDGE FROM PREVIOUS RUNS:\n${previousKnowledge}\n\nBuild on this — don't re-discover what's already known.\n` : "";
+  const prevBlock = previousKnowledge ? `\nKNOWLEDGE FROM PREVIOUS RUNS:\n${previousKnowledge}\n\nBuild on this  -- don't re-discover what's already known.\n` : "";
   return themes.map((theme, i) => ({
     id: `think-${i}`,
     prompt: `## Research: ${theme}
@@ -251,19 +251,19 @@ Explore the codebase thoroughly using Read, Glob, and Grep. Then write a design 
 Key files, patterns, and architecture you discovered. Cite specific file paths and function names.
 
 ## The Job
-What is someone hiring this product to do? Not the feature — the outcome. Frame everything below through this lens.
+What is someone hiring this product to do? Not the feature  -- the outcome. Frame everything below through this lens.
 
 ## Proposed Work Items
 For each item:
 - **What**: What to build or change
 - **Where**: Specific file paths
-- **Why**: How this serves the job — including how fast it needs to respond and what happens when it fails
+- **Why**: How this serves the job  -- including how fast it needs to respond and what happens when it fails
 - **Risk**: Conflicts or complications
 
 ## Key Files
 Relevant files with one-line descriptions.
 
-Be thorough — your findings drive the execution plan.`,
+Be thorough  -- your findings drive the execution plan.`,
     model: plannerModel,
   }));
 }
@@ -291,11 +291,11 @@ Create exactly ~${budget} concrete execution tasks based on these findings.
 
 Requirements:
 - Each task is actionable by a single agent session
-- Each task MUST be independent — no dependencies between tasks
-- ${concurrency} agents run in parallel — tasks must touch DIFFERENT files
-- Trust the research — don't tell agents to re-explore what's documented
+- Each task MUST be independent  -- no dependencies between tasks
+- ${concurrency} agents run in parallel  -- tasks must touch DIFFERENT files
+- Trust the research  -- don't tell agents to re-explore what's documented
 - Reference specific files and patterns from the findings
-- Build the core user job first, then expand. Each task should produce something complete and usable — not scaffolding for later
+- Build the core user job first, then expand. Each task should produce something complete and usable  -- not scaffolding for later
 - There is no separate "polish" phase. Loading states, error handling, sub-200ms responses, and edge cases are part of every task${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
@@ -335,7 +335,7 @@ export async function refinePlan(
   const prev = previousTasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n");
   const capability = modelCapabilityBlock(workerModel);
   const b = budget ?? 10;
-  const scaleNote = b > 50 ? `This is a LARGE budget (${b} sessions). Think big — missions, not micro-tasks.`
+  const scaleNote = b > 50 ? `This is a LARGE budget (${b} sessions). Think big  -- missions, not micro-tasks.`
     : b > 15 ? `Each of the ${b} sessions is a capable AI agent. Give substantial missions, not trivial edits.`
     : `Target ~${b} tasks.`;
   const prompt = `You are a task coordinator. You previously planned these tasks for the objective:

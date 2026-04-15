@@ -62,4 +62,4 @@ npx ctx7@latest library playwright "parallel browser instances isolation"
 npx ctx7@latest docs <libraryId> "parallel browser instances"
 ```
 
-**Note:** ctx7 requires authentication (`npx ctx7@latest login` or `CONTEXT7_API_KEY` env var). If unauthenticated, lookups will fail — agents should fall back to training data.
+**Note:** ctx7 requires authentication (`npx ctx7@latest login` or `CONTEXT7_API_KEY` env var). If unauthenticated, lookups will fail  -- agents should fall back to training data.

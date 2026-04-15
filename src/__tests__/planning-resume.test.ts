@@ -8,10 +8,10 @@ import type { RunState } from "../types.js";
 
 // Regression test for resume visibility of plan-phase runs.
 // Before 1.11.7, findIncompleteRuns only returned runs with a run.json, but
-// run.json was only written inside executeRun — so a plan-phase failure was
+// run.json was only written inside executeRun  -- so a plan-phase failure was
 // invisible to the resume picker. 1.11.7 writes an early run.json with
 // phase: "planning" and requires tasks.json on disk for it to be surfaced.
-// 1.11.14 also accepts designs/ on disk — a thinking-wave kill used to
+// 1.11.14 also accepts designs/ on disk  -- a thinking-wave kill used to
 // leave a run.json with phase "planning" but no tasks.json, silently hiding
 // the run and throwing away the thinking spend.
 
@@ -39,7 +39,7 @@ function baseState(phase: RunState["phase"]): RunState {
   };
 }
 
-describe("findIncompleteRuns — planning phase visibility", () => {
+describe("findIncompleteRuns  -- planning phase visibility", () => {
   it("surfaces a planning-phase run when tasks.json exists", () => {
     const dir = makeRun("2026-04-12T13-03-57");
     saveRunState(dir, baseState("planning"));
@@ -59,7 +59,7 @@ describe("findIncompleteRuns — planning phase visibility", () => {
   it("skips planning-phase runs with neither tasks.json nor designs", () => {
     const dir = makeRun("2026-04-10T09-00-00");
     saveRunState(dir, baseState("planning"));
-    // No tasks.json and no designs/ on disk — nothing to resume
+    // No tasks.json and no designs/ on disk  -- nothing to resume
     const runs = findIncompleteRuns(tmp, cwd);
     assert.equal(runs.find(r => r.dir === dir), undefined, "empty planning run should be filtered");
   });
@@ -102,7 +102,7 @@ describe("findIncompleteRuns — planning phase visibility", () => {
   });
 });
 
-describe("backfillOrphanedPlans — pre-1.11.7 recovery", () => {
+describe("backfillOrphanedPlans  -- pre-1.11.7 recovery", () => {
   const btmp = mkdtempSync(join(tmpdir(), "backfill-"));
   after(() => { try { rmSync(btmp, { recursive: true, force: true }); } catch {} });
 
@@ -133,7 +133,7 @@ describe("backfillOrphanedPlans — pre-1.11.7 recovery", () => {
     assert.equal(state!.startedAt, "2026-04-12T13:03:57.000Z");
   });
 
-  it("is idempotent — does not re-write existing run.json", () => {
+  it("is idempotent  -- does not re-write existing run.json", () => {
     // The previous test already backfilled 2026-04-12T13-03-57
     const dir = join(btmp, "runs", "2026-04-12T13-03-57");
     const before = loadRunState(dir);

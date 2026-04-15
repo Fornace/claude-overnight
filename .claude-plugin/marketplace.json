@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-overnight",
-  "description": "Claude Code plugin for claude-overnight — parallel agent orchestration, inspection, and resume guidance.",
+  "description": "Claude Code plugin for claude-overnight  -- parallel agent orchestration, inspection, and resume guidance.",
   "owner": {
     "name": "Francesco Fornace"
   },

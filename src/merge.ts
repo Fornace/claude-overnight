@@ -16,7 +16,7 @@ export interface MergeResult {
   filesChanged: number;
 }
 
-/** Total files the agent touched vs base — tracked changes + untracked. */
+/** Total files the agent touched vs base  -- tracked changes + untracked. */
 function measureWork(worktreeCwd: string, baseRef: string): number {
   const seen = new Set<string>();
   try {
@@ -59,7 +59,7 @@ export function autoCommit(
       if (!m.includes("nothing to commit")) {
         // Hook-gated project: the user's pre-commit hooks rejected a
         // potentially work-in-progress commit (lint errors, type errors,
-        // whatever). Retry bypassing hooks — this is swarm scaffolding,
+        // whatever). Retry bypassing hooks  -- this is swarm scaffolding,
         // not a user-facing commit. Without this the branch stays empty,
         // the merge gate drops it, and the work is destroyed when the
         // worktree is cleaned up.
@@ -87,7 +87,7 @@ export function autoCommit(
   // branch. Surfaces silent data loss (stuck hooks, writes outside the
   // worktree, gitignored targets) that used to look like "agent did 0 work".
   if (landed === 0 && preCount > 0) {
-    log(agentId, `${preCount} file(s) touched but did NOT land on branch — check hooks / gitignore / absolute paths`);
+    log(agentId, `${preCount} file(s) touched but did NOT land on branch  -- check hooks / gitignore / absolute paths`);
     return preCount;
   }
   if (landed > 0) log(agentId, `${landed} file(s) changed`);
@@ -170,7 +170,7 @@ export function mergeAllBranches(
     }
 
     if (existsSync(join(cwd, ".git", "MERGE_HEAD"))) {
-      log(-1, "Partial merge detected — aborting");
+      log(-1, "Partial merge detected  -- aborting");
       try { gitExec("git merge --abort", cwd); } catch {}
     }
 
@@ -200,7 +200,7 @@ export function mergeAllBranches(
  * 3-way merge. Walks `git diff --name-status base..branch` and for each entry
  * either checks out the branch's version (add/modify/rename) or removes the
  * file (delete). Always succeeds unless the branch itself is broken. Trades
- * merge-graph fidelity for "your changes actually land" — the right call for
+ * merge-graph fidelity for "your changes actually land"  -- the right call for
  * an autonomous swarm.
  */
 export function forceMergeOverlay(branch: string, cwd: string): boolean {
@@ -248,7 +248,7 @@ export function cleanStaleWorktrees(cwd: string, log: (id: number, msg: string) 
     // `/var/folders/...` while git reports worktrees as `/private/var/...`
     // (realpath-resolved), so the prefix never matched and stale worktrees
     // silently accumulated. The `claude-overnight-` substring is unambiguous
-    // enough on its own — nothing else in the repo uses that prefix.
+    // enough on its own  -- nothing else in the repo uses that prefix.
     for (const line of list.split("\n")) {
       if (line.startsWith("worktree ")) {
         const wpath = line.slice("worktree ".length);
@@ -278,7 +278,7 @@ export function cleanStaleWorktrees(cwd: string, log: (id: number, msg: string) 
     }
     if (cleaned > 0) log(-1, `Cleaned ${cleaned} stale swarm branch(es)`);
     const orphaned = branches.length - cleaned;
-    if (orphaned > 0) log(-1, `Kept ${orphaned} orphaned swarm branch(es) with unmerged commits — resume to recover`);
+    if (orphaned > 0) log(-1, `Kept ${orphaned} orphaned swarm branch(es) with unmerged commits  -- resume to recover`);
   } catch {}
 }
 

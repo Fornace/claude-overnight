@@ -279,7 +279,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     sections(): Section[] {
       const secs: Section[] = [];
 
-      // Agent table (undecorated — raw header + rows)
+      // Agent table (undecorated  -- raw header + rows)
       if (show.length > 0) {
         const rows: string[] = [
           chalk.gray("  #   Status   Task" + " ".repeat(Math.max(1, (process.stdout.columns ?? 80) || 80, 60) - 56)) + "Action",
@@ -358,7 +358,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     const selectChip = swarm.active > 0 && running.length <= 10 ? chalk.dim("  [0-9] select") : "";
     hotkeyRow = chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip;
     if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
-      extraFooterRows.push(chalk.yellow(`  all workers rate-limited — [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
+      extraFooterRows.push(chalk.yellow(`  all workers rate-limited  -- [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
     }
   }
 
@@ -386,7 +386,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
 }
 
 export interface SteeringViewData {
-  /** The ephemeral ticker heartbeat — elapsed, tool count, cost, current reasoning snippet. */
+  /** The ephemeral ticker heartbeat  -- elapsed, tool count, cost, current reasoning snippet. */
   statusLine: string;
   /** Persistent scrollback of discrete events (tool uses, retries, nudges). */
   events: SteeringEvent[];
@@ -472,7 +472,7 @@ export function renderSteeringFrame(
       const secs: Section[] = [];
       const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
 
-      // Objective (undecorated — raw line)
+      // Objective (undecorated  -- raw line)
       if (ctx?.objective) {
         const obj = ctx.objective.replace(/\s+/g, " ").trim();
         secs.push({ title: "", rows: [

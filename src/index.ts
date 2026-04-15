@@ -174,7 +174,7 @@ async function main() {
 
   if (argv.includes("-h") || argv.includes("--help")) {
     console.log(`
-  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("v" + VERSION + " — background lane for your Claude Max plan")}
+  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("v" + VERSION + "  -- background lane for your Claude Max plan")}
   ${chalk.dim("─".repeat(60))}
 
   ${chalk.cyan("Usage")}
@@ -188,8 +188,8 @@ async function main() {
     --dry-run              Show planned tasks without running them
     --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
-    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + executor separately — supports 'Other…' for Qwen / OpenRouter / etc.)")}
-    --fast-model=NAME      Fast model for quick tasks ${chalk.dim("(optional — checked by worker model in next wave)")}
+    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + executor separately  -- supports 'Other…' for Qwen / OpenRouter / etc.)")}
+    --fast-model=NAME      Fast model for quick tasks ${chalk.dim("(optional  -- checked by worker model in next wave)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
     --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
@@ -250,7 +250,7 @@ async function main() {
   const cwd = fileCfg?.cwd ?? process.cwd();
   const allowedTools = fileCfg?.allowedTools;
   if (!existsSync(cwd)) { console.error(chalk.red(`  Working directory does not exist: ${cwd}`)); process.exit(1); }
-  if (noTTY) console.log(chalk.dim("  Non-interactive mode — using defaults\n"));
+  if (noTTY) console.log(chalk.dim("  Non-interactive mode  -- using defaults\n"));
 
   // ── Run history ──
   const rootDir = join(cwd, ".claude-overnight");
@@ -365,7 +365,7 @@ async function main() {
       // Covers two cases:
       //   1. Planning-phase resumes (the prior run died before executeRun).
       //   2. Stopped/capped runs whose state was saved with currentTasks: []
-      //      (saveRunState always stores [] — the plan is on disk in tasks.json).
+      //      (saveRunState always stores []  -- the plan is on disk in tasks.json).
       if (resumeState.currentTasks.length === 0) {
         const loaded = salvageFromFile(join(resumeRunDir, "tasks.json"), resumeState.budget, () => {}, "resume");
         if (loaded) {
@@ -373,12 +373,12 @@ async function main() {
           const label = resumeState.phase === "planning" ? "Resuming plan" : `Resuming ${resumeState.phase} run`;
           console.log(chalk.green(`\n  ✓ ${label} · ${loaded.length} tasks loaded from tasks.json`));
         } else if (resumeState.phase === "planning") {
-          // No tasks.json — the thinking wave got killed before orchestrate ran.
+          // No tasks.json  -- the thinking wave got killed before orchestrate ran.
           // If design docs survived, re-orchestrate from them (salvages the
           // thinking spend instead of throwing it away).
           const designs = readMdDir(join(resumeRunDir, "designs"));
           if (!designs || !resumeState.objective) {
-            console.error(chalk.red(`\n  Planning-phase run has no usable tasks.json or designs — start Fresh instead.\n`));
+            console.error(chalk.red(`\n  Planning-phase run has no usable tasks.json or designs  -- start Fresh instead.\n`));
             process.exit(1);
           }
           const remainingBudget = Math.max(resumeState.concurrency, resumeState.budget - resumeState.accCompleted);
@@ -481,15 +481,15 @@ async function main() {
     }, 120);
     let models: Awaited<ReturnType<typeof fetchModels>>;
     try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
-    const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering — use your strongest)")}:`, models);
+    const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering  -- use your strongest)")}:`, models);
     plannerModel = plannerPick.model; plannerProvider = plannerPick.provider;
-    const workerPick = await pickModel(`${chalk.cyan("⑤")} Executor model ${chalk.dim("(what runs the tasks — Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models);
+    const workerPick = await pickModel(`${chalk.cyan("⑤")} Executor model ${chalk.dim("(what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models);
     workerModel = workerPick.model; workerProvider = workerPick.provider;
 
     // ⑤b Optional fast model for quick tasks that will be verified
-    const fastChoice = await select(`${chalk.cyan("⑤b")} Fast model ${chalk.dim("(optional — Haiku/Qwen for quick tasks, checked by worker)")}:`, [
+    const fastChoice = await select(`${chalk.cyan("⑤b")} Fast model ${chalk.dim("(optional  -- Haiku/Qwen for quick tasks, checked by worker)")}:`, [
       { name: "Skip", value: "skip" as const, hint: "two-tier mode only (current setup)" },
-      { name: "Pick a fast model", value: "pick" as const, hint: "Haiku, Qwen, or any provider — for well-scoped tasks" },
+      { name: "Pick a fast model", value: "pick" as const, hint: "Haiku, Qwen, or any provider  -- for well-scoped tasks" },
     ]);
     if (fastChoice === "pick") {
       const fastPick = await pickModel(`${chalk.cyan("⑤c")} Fast model:`, models);
@@ -638,7 +638,7 @@ async function main() {
   const envForModel = buildEnvResolver({ plannerModel, plannerProvider, workerModel, workerProvider, fastModel, fastProvider });
   setPlannerEnvResolver(envForModel);
 
-  // Fail fast if a custom provider is misconfigured — one bad key would
+  // Fail fast if a custom provider is misconfigured  -- one bad key would
   // otherwise surface as N agent failures scattered across the run.
   if (plannerProvider || workerProvider || fastProvider) {
     const seen = new Set<string>();
@@ -688,7 +688,7 @@ async function main() {
   // Persist an early planning-phase state so the run is visible to the resume
   // picker even if orchestrate dies before executeRun gets a chance to run.
   // Without this, a crashed plan phase leaves no run.json and the run vanishes
-  // from findIncompleteRuns — you pay for orchestration and can't see it.
+  // from findIncompleteRuns  -- you pay for orchestration and can't see it.
   if (needsPlan && objective) {
     try {
       saveRunState(runDir, {
@@ -815,7 +815,7 @@ async function main() {
           tasks = await orchestrate(objective!, designs, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote, taskFile);
           process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
         } else {
-          console.log(chalk.yellow(`\n  No design docs — falling back to direct planning\n`));
+          console.log(chalk.yellow(`\n  No design docs  -- falling back to direct planning\n`));
           const waveBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
           tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), undefined, taskFile);
           process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
@@ -865,7 +865,7 @@ async function main() {
       }
     } catch (err: any) {
       planRestore();
-      if (isAuthError(err)) console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`));
+      if (isAuthError(err)) console.error(chalk.red(`\n  Authentication failed  -- check your API key or run: claude auth\n`));
       else console.error(chalk.red(`\n  Planning failed: ${err.message}\n`));
       process.exit(1);
     }

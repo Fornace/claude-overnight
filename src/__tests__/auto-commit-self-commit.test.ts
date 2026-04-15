@@ -9,10 +9,10 @@ import { autoCommit } from "../merge.js";
 // Regression test for the pre-1.11.10 filesChanged=0 orphan-branch bug.
 //
 // autoCommit() used to measure work by counting `git status --porcelain` lines
-// in the worktree. When an agent committed its own work (common — some agents
+// in the worktree. When an agent committed its own work (common  -- some agents
 // prefer to own their git hygiene), the worktree was clean at measurement time,
 // `status --porcelain` returned empty, autoCommit returned 0, and the branch was
-// dropped from the merge gate (`filesChanged > 0`) — the commit survived on the
+// dropped from the merge gate (`filesChanged > 0`)  -- the commit survived on the
 // branch but never landed in main, silently orphaned.
 //
 // The fix: measure filesChanged from `<baseRef>..HEAD` diff. This is correct
@@ -44,16 +44,16 @@ function makeRepo(name: string): { repo: string; worktree: string; baseRef: stri
 
 const noop = () => {};
 
-describe("autoCommit — agent-self-commit accounting (regression)", () => {
+describe("autoCommit  -- agent-self-commit accounting (regression)", () => {
   it("counts files when the agent already committed its work", () => {
     const { worktree, baseRef } = makeRepo("self-commit");
 
-    // Agent writes and commits its own work — worktree ends up CLEAN.
+    // Agent writes and commits its own work  -- worktree ends up CLEAN.
     writeFileSync(join(worktree, "a.txt"), "a\n");
     writeFileSync(join(worktree, "b.txt"), "b\n");
     sh("git add -A && git commit -q -m 'agent self commit'", worktree);
     const status = sh("git status --porcelain", worktree).trim();
-    assert.equal(status, "", "worktree must be clean — this is the bug's precondition");
+    assert.equal(status, "", "worktree must be clean  -- this is the bug's precondition");
 
     const n = autoCommit(0, "task prompt", worktree, baseRef, noop);
     assert.equal(n, 2, "should report 2 files from branch-diff even though status is clean");
@@ -126,16 +126,16 @@ describe("autoCommit — agent-self-commit accounting (regression)", () => {
   });
 
   // Defensive: even in the impossible case where BOTH normal and --no-verify
-  // commits fail, we still need to report the work the agent did — returning
+  // commits fail, we still need to report the work the agent did  -- returning
   // 0 would pretend nothing happened and drop the branch.
   it("reports preCount when the commit could not land at all", () => {
     const { repo, worktree, baseRef } = makeRepo("commit-impossible");
-    // Make BOTH hook paths fail — pre-commit AND the bypass-resistant way:
+    // Make BOTH hook paths fail  -- pre-commit AND the bypass-resistant way:
     // point .git/hooks/pre-commit at a script that fails, and override the
     // core.hooksPath to a path that doesn't exist so --no-verify alone isn't
     // enough to explain the failure. Then corrupt the index to cause commit
     // to fail by removing write permission on .git/index. (Cross-platform
-    // hack — if this turns flaky, skip.)
+    // hack  -- if this turns flaky, skip.)
     const hookPath = join(repo, ".git", "hooks", "pre-commit");
     writeFileSync(hookPath, "#!/bin/sh\nexit 1\n");
     chmodSync(hookPath, 0o755);
@@ -148,7 +148,7 @@ describe("autoCommit — agent-self-commit accounting (regression)", () => {
     try {
       writeFileSync(lockPath, "lock\n");
     } catch {
-      // Worktree name differs; skip this hard test — the easy case above
+      // Worktree name differs; skip this hard test  -- the easy case above
       // already covers the real-world scenario.
       return;
     }
@@ -158,7 +158,7 @@ describe("autoCommit — agent-self-commit accounting (regression)", () => {
 
     // Either the commit fell through both paths (n === preCount === 1) or
     // one path unexpectedly succeeded (n === 1 via landed). Both are OK for
-    // this test — the critical property is "n > 0 so merge gate doesn't
+    // this test  -- the critical property is "n > 0 so merge gate doesn't
     // silently drop this branch".
     assert.ok(n >= 1, `expected preCount fallback >= 1, got ${n}: ${JSON.stringify(logs)}`);
   });
@@ -168,7 +168,7 @@ describe("autoCommit — agent-self-commit accounting (regression)", () => {
   it("counts untracked files that the agent created but never staged", () => {
     const { worktree, baseRef } = makeRepo("untracked");
     writeFileSync(join(worktree, "fresh.txt"), "hi\n");
-    // No git add — the file is untracked.
+    // No git add  -- the file is untracked.
     const statusBefore = sh("git status --porcelain", worktree).trim();
     assert.match(statusBefore, /^\?\? fresh\.txt/);
 

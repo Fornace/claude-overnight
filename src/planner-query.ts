@@ -9,7 +9,7 @@ import type { Task, PermMode, RateLimitWindow } from "./types.js";
  * Logging callback used by planner/steering queries.
  * `kind` distinguishes ephemeral status updates (heartbeat ticker) from
  * discrete events worth persisting in a scrollback log (tool uses, retries).
- * Plain (text) callers still work — extra arg is ignored.
+ * Plain (text) callers still work  -- extra arg is ignored.
  */
 export type PlannerLog = (text: string, kind?: "status" | "event") => void;
 
@@ -55,11 +55,11 @@ export function detectModelTier(model: string): ModelTier {
 export function modelCapabilityBlock(model: string): string {
   switch (detectModelTier(model)) {
     case "opus":
-      return `Each agent runs Claude Opus with 1M context — a powerhouse. It can own entire epics, do deep codebase research, make architectural decisions, implement complex multi-file systems end-to-end, use browser tools for analysis, and deliver expert-level work. These agents can work for 30+ minutes on the most complex tasks. Do NOT waste them on trivial edits — give them ownership and autonomy.`;
+      return `Each agent runs Claude Opus with 1M context  -- a powerhouse. It can own entire epics, do deep codebase research, make architectural decisions, implement complex multi-file systems end-to-end, use browser tools for analysis, and deliver expert-level work. These agents can work for 30+ minutes on the most complex tasks. Do NOT waste them on trivial edits  -- give them ownership and autonomy.`;
     case "sonnet":
-      return `Each agent runs Claude Sonnet — capable of substantial implementation, refactoring, testing, and design work. Can work autonomously for 10-20 minutes on complex tasks. Give agents meaningful scope — not just single-line edits.`;
+      return `Each agent runs Claude Sonnet  -- capable of substantial implementation, refactoring, testing, and design work. Can work autonomously for 10-20 minutes on complex tasks. Give agents meaningful scope  -- not just single-line edits.`;
     case "haiku":
-      return `Each agent runs Claude Haiku — fast and efficient, best for focused, well-specified tasks. Be explicit about files, functions, and expected changes. Keep each task scoped to a clear, concrete deliverable.`;
+      return `Each agent runs Claude Haiku  -- fast and efficient, best for focused, well-specified tasks. Be explicit about files, functions, and expected changes. Keep each task scoped to a clear, concrete deliverable.`;
     default:
       return `Each agent has full codebase access and can work autonomously.`;
   }
@@ -104,17 +104,17 @@ export async function runPlannerQuery(
     } catch (err: any) {
       if (err instanceof NudgeError) {
         if (err.sessionId) {
-          onLog("Silent 15m — resuming session with continue", "event");
+          onLog("Silent 15m  -- resuming session with continue", "event");
           currentPrompt = "Continue. Complete the task.";
           currentOpts = { ...opts, resumeSessionId: err.sessionId };
         } else {
-          onLog("Silent 15m — restarting planner (no session to resume)", "event");
+          onLog("Silent 15m  -- restarting planner (no session to resume)", "event");
         }
         continue;
       }
       if (attempt < MAX_RETRIES && isRateLimitError(err)) {
         const waitMs = BACKOFF[attempt];
-        onLog(`Rate limited — waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`, "event");
+        onLog(`Rate limited  -- waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`, "event");
         await new Promise((r) => setTimeout(r, waitMs));
         continue;
       }
@@ -178,12 +178,12 @@ async function runPlannerQueryOnce(
       const silent = Date.now() - lastActivity;
       if (elapsed >= WALL_CLOCK_LIMIT_MS) {
         pq.interrupt().catch(() => pq.close());
-        reject(new Error(`Planner hit wall-clock limit (${Math.round(elapsed / 60000)}min) — likely rate limited`));
+        reject(new Error(`Planner hit wall-clock limit (${Math.round(elapsed / 60000)}min)  -- likely rate limited`));
         return;
       }
       if (silent >= timeoutMs) {
         pq.interrupt().catch(() => pq.close());
-        if (isResume) reject(new Error(`Planner silent for ${Math.round(silent / 1000)}s — assumed hung`));
+        if (isResume) reject(new Error(`Planner silent for ${Math.round(silent / 1000)}s  -- assumed hung`));
         else reject(new NudgeError(sessionId, silent));
       } else {
         timer = setTimeout(check, Math.min(30_000, timeoutMs - silent + 1000));

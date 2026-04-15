@@ -88,6 +88,6 @@ describe("salvageFromFile", () => {
     const result = salvageFromFile(p, 10, onLog, "Planner query failed after retries");
     assert.ok(result);
     const hit = logs.find(l => l.includes("salvaged") && l.includes("Planner query failed after retries"));
-    assert.ok(hit, `expected salvage log line — got: ${logs.join(" | ")}`);
+    assert.ok(hit, `expected salvage log line  -- got: ${logs.join(" | ")}`);
   });
 });

@@ -18,7 +18,7 @@ export interface ProviderConfig {
   displayName: string;
   baseURL: string;
   model: string;
-  /** Env var name holding the key — preferred over inline `key` (nothing on disk). */
+  /** Env var name holding the key  -- preferred over inline `key` (nothing on disk). */
   keyEnv?: string;
   /** Inline API key. Stored plaintext in providers.json (mode 0600). */
   key?: string;
@@ -117,7 +117,7 @@ export async function pickModel(
       items.push({
         name: "claude-sonnet-4-6",
         value: { kind: "anthropic", model: { value: "claude-sonnet-4-6", displayName: "claude-sonnet-4-6", description: "default (model list unavailable)" } as ModelInfo },
-        hint: "default — Anthropic model list unavailable",
+        hint: "default  -- Anthropic model list unavailable",
       });
     }
     for (const p of saved) {
@@ -146,7 +146,7 @@ export async function pickModel(
       saveProvider(added);
       return { model: added.model, providerId: added.id, provider: added };
     }
-    // user cancelled "Other…" — loop back to picker
+    // user cancelled "Other…"  -- loop back to picker
   }
 }
 
@@ -174,7 +174,7 @@ async function promptNewProvider(): Promise<ProviderConfig | null> {
     const envName = await ask(`\n  ${chalk.cyan("Env var name")} ${chalk.dim(`(e.g. CO_KEY_${id.toUpperCase()}):`)} `);
     if (!envName) return null;
     if (!process.env[envName]) {
-      console.log(chalk.yellow(`\n  ⚠ ${envName} is not set in the current shell — you'll need to export it before running.`));
+      console.log(chalk.yellow(`\n  ⚠ ${envName} is not set in the current shell  -- you'll need to export it before running.`));
     }
     return { id, displayName, baseURL, model, keyEnv: envName };
   }

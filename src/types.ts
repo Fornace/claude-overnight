@@ -8,7 +8,7 @@ export interface Task {
   cwd?: string;
   /** Claude model override for this specific task (e.g. "sonnet", "opus"). */
   model?: string;
-  /** When true, skip worktree isolation — run in the real project directory with env files, dependencies, and local config. */
+  /** When true, skip worktree isolation  -- run in the real project directory with env files, dependencies, and local config. */
   noWorktree?: boolean;
 }
 
@@ -32,7 +32,7 @@ export interface TaskFile {
   usageCap?: number;
   /** Enable adaptive multi-wave planning: after each wave, a steering agent reads the codebase and plans the next wave. Default true in interactive mode. */
   flexiblePlan?: boolean;
-  /** Tasks to execute — either plain prompt strings or objects with per-task overrides. */
+  /** Tasks to execute  -- either plain prompt strings or objects with per-task overrides. */
   tasks: (string | { prompt: string; cwd?: string; model?: string })[];
 }
 
@@ -63,7 +63,7 @@ export interface AgentState {
   costUsd?: number;
   /** Git branch name when using worktree isolation. */
   branch?: string;
-  /** Commit the worktree branch was created from — the baseline for measuring filesChanged. */
+  /** Commit the worktree branch was created from  -- the baseline for measuring filesChanged. */
   baseRef?: string;
   /** Number of files changed by the agent (from git diff). */
   filesChanged?: number;
@@ -83,8 +83,8 @@ export interface LogEntry {
 
 /**
  * How the SDK handles permission prompts for potentially dangerous operations.
- * - "auto": SDK decides what's safe — accepts low-risk tools, rejects high-risk ones.
- * - "bypassPermissions": Skip all permission prompts (dangerous — agents can run anything).
+ * - "auto": SDK decides what's safe  -- accepts low-risk tools, rejects high-risk ones.
+ * - "bypassPermissions": Skip all permission prompts (dangerous  -- agents can run anything).
  * - "default": Prompt the user for each dangerous operation.
  */
 export type PermMode = "auto" | "bypassPermissions" | "default";
@@ -127,10 +127,10 @@ export const RATE_LIMIT_WINDOW_SHORT: Record<string, string> = {
   seven_day_sonnet: "7d sonnet", overage: "extra",
 };
 
-/** Thrown when a query goes silent — carries session ID for interrupt+resume. */
+/** Thrown when a query goes silent  -- carries session ID for interrupt+resume. */
 export class NudgeError extends Error {
   constructor(public sessionId: string | undefined, silentMs: number) {
-    super(`Silent for ${Math.round(silentMs / 1000)}s — nudging`);
+    super(`Silent for ${Math.round(silentMs / 1000)}s  -- nudging`);
     this.name = "NudgeError";
   }
 }
@@ -151,7 +151,7 @@ export interface SteerResult {
   estimatedSessionsRemaining?: number;
 }
 
-/** Accumulated run memory — designs, verifications, etc. — fed to the steerer. */
+/** Accumulated run memory  -- designs, verifications, etc.  -- fed to the steerer. */
 export interface RunMemory {
   designs: string;
   reflections: string;
@@ -164,7 +164,7 @@ export interface RunMemory {
   userGuidance?: string;
 }
 
-/** Shared configuration for a run — both live (RunConfig) and persisted (RunState). */
+/** Shared configuration for a run  -- both live (RunConfig) and persisted (RunState). */
 export interface RunConfigBase {
   /** Total session budget. */
   budget: number;

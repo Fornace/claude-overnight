@@ -13,7 +13,7 @@ function isStaleOvernightWorktree(wpath: string): boolean {
   return wpath.includes("/claude-overnight-");
 }
 
-describe("cleanStaleWorktrees — /private path handling", () => {
+describe("cleanStaleWorktrees  -- /private path handling", () => {
   it("matches realpath'd macOS tmp worktree paths", () => {
     const wpath = "/private/var/folders/0k/0xvnwvx52735tpb2kv2b347r0000gn/T/claude-overnight-Z3VDYu/agent-0";
     assert.equal(isStaleOvernightWorktree(wpath), true);

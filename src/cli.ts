@@ -60,10 +60,10 @@ export async function fetchModels(timeoutMs = 10_000): Promise<ModelInfo[]> {
     if (err.message === "model_fetch_timeout") {
       // Silent: callers fall back to a text prompt with the current value as default.
     } else if (isAuthError(err)) {
-      console.error(chalk.red("\n  Authentication failed — check your API key or run: claude auth\n"));
+      console.error(chalk.red("\n  Authentication failed  -- check your API key or run: claude auth\n"));
       process.exit(1);
     } else {
-      console.warn(chalk.yellow(`\n  Could not fetch models: ${String(err.message || err).slice(0, 80)} — continuing with defaults`));
+      console.warn(chalk.yellow(`\n  Could not fetch models: ${String(err.message || err).slice(0, 80)}  -- continuing with defaults`));
     }
     return [];
   }
@@ -74,7 +74,7 @@ export async function fetchModels(timeoutMs = 10_000): Promise<ModelInfo[]> {
 // When the terminal is in bracketed paste mode, pasted content is wrapped with
 // \x1B[200~ ... \x1B[201~ so we can distinguish typed Enter from pasted newlines.
 // Multi-line or long pastes are stored as opaque segments and shown as a compact
-// [Pasted +N lines] placeholder while editing — the full text is substituted on submit.
+// [Pasted +N lines] placeholder while editing  -- the full text is substituted on submit.
 
 export const PASTE_START = "\x1B[200~";
 export const PASTE_END = "\x1B[201~";
@@ -147,7 +147,7 @@ function stripAnsi(s: string): string {
 
 /**
  * Read a line from the user with bracketed-paste awareness.
- * Pasted multi-line text stays in the buffer as a single block — only a typed
+ * Pasted multi-line text stays in the buffer as a single block  -- only a typed
  * Enter submits. Falls back to cooked readline when stdin isn't a TTY.
  */
 export function ask(question: string): Promise<string> {

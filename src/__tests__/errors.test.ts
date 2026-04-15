@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // Copied from src/swarm.ts (not exported)
 class AgentTimeoutError extends Error {
   constructor(silentMs: number) {
-    super(`Agent silent for ${Math.round(silentMs / 1000)}s — assumed hung`);
+    super(`Agent silent for ${Math.round(silentMs / 1000)}s  -- assumed hung`);
     this.name = "AgentTimeoutError";
   }
 }

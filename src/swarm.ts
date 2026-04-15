@@ -15,7 +15,7 @@ const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify yo
 
 Run \`git diff\` to see what you changed, then fix any issues:
 
-1. **Reuse**: Search the codebase — did you write something that already exists? Use existing utilities, helpers, patterns instead. Hand-rolled string manipulation, manual path handling, custom env checks, ad-hoc type guards — all candidates for existing utilities.
+1. **Reuse**: Search the codebase  -- did you write something that already exists? Use existing utilities, helpers, patterns instead. Hand-rolled string manipulation, manual path handling, custom env checks, ad-hoc type guards  -- all candidates for existing utilities.
 
 2. **Quality**:
    - Redundant state: cached values that could be derived, observers that could be direct calls
@@ -23,17 +23,17 @@ Run \`git diff\` to see what you changed, then fix any issues:
    - Leaky abstractions: exposing internals or breaking existing abstraction boundaries
    - Stringly-typed code: raw strings where enums/unions already exist
    - Unnecessary JSX nesting: wrappers that add no layout value
-   - Comments narrating WHAT the code does — delete them; keep only non-obvious WHY
+   - Comments narrating WHAT the code does  -- delete them; keep only non-obvious WHY
 
 3. **Efficiency**:
    - Redundant computations, repeated file reads, duplicate API calls
    - Sequential operations that could be parallel
    - Hot-path bloat: new blocking work in startup or per-request paths
-   - Recurring no-op updates: state/store updates inside polling loops that fire unconditionally — add change-detection guard
+   - Recurring no-op updates: state/store updates inside polling loops that fire unconditionally  -- add change-detection guard
    - Unnecessary existence checks before operating (TOCTOU anti-pattern)
    - Memory: unbounded data structures, missing cleanup, event listener leaks
 
-Less code is better. Delete and simplify rather than add. Fix directly — no need to explain.`;
+Less code is better. Delete and simplify rather than add. Fix directly  -- no need to explain.`;
 
 export interface SwarmConfig {
   tasks: Task[];
@@ -82,7 +82,7 @@ export class Swarm {
 
   /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
   targetConcurrency: number;
-  /** When true, dispatch is frozen — workers wait without starting new tasks. */
+  /** When true, dispatch is frozen  -- workers wait without starting new tasks. */
   paused = false;
   /** Wall-clock ms of the last sign of real progress (assistant msg, tool use, result). */
   lastProgressAt = Date.now();
@@ -155,7 +155,7 @@ export class Swarm {
     this.log(-1, b ? "Dispatch paused" : "Dispatch resumed");
   }
 
-  /** Returns the rate-limit window currently holding the swarm back — rejected first, then highest utilization. */
+  /** Returns the rate-limit window currently holding the swarm back  -- rejected first, then highest utilization. */
   mostConstrainedWindow(): RateLimitWindow | undefined {
     const windows = Array.from(this.rateLimitWindows.values());
     if (windows.length === 0) return undefined;
@@ -200,7 +200,7 @@ export class Swarm {
     const wakers = this.rateLimitWakers.slice();
     this.rateLimitWakers.length = 0;
     for (const w of wakers) w();
-    this.log(-1, `Retry-now: woke ${n} worker(s) — hitting API immediately (may be rejected again)`);
+    this.log(-1, `Retry-now: woke ${n} worker(s)  -- hitting API immediately (may be rejected again)`);
   }
 
   /** Live-adjust the overage spend cap. `undefined` = unlimited. If already over the new cap, stop dispatch. */
@@ -211,7 +211,7 @@ export class Swarm {
     const fmt = (v: number | undefined) => v != null ? `$${v}` : "unlimited";
     this.log(-1, `Extra usage budget: ${fmt(prev)} → ${fmt(n)}`);
     if (n != null && this.isUsingOverage && this.overageCostUsd >= n) {
-      this.capForOverage(`Extra usage budget $${n} exceeded ($${this.overageCostUsd.toFixed(2)} spent) — stopping dispatch`);
+      this.capForOverage(`Extra usage budget $${n} exceeded ($${this.overageCostUsd.toFixed(2)} spent)  -- stopping dispatch`);
     }
   }
 
@@ -323,7 +323,7 @@ export class Swarm {
     }
   }
 
-  /** Mark real progress — resets stall state. Called on any assistant/tool/result message. */
+  /** Mark real progress  -- resets stall state. Called on any assistant/tool/result message. */
   private markProgress(): void {
     this.lastProgressAt = Date.now();
     if (this.stallLevel > 0 && this.lastProgressAt > this.stallActionAt) this.stallLevel = 0;
@@ -346,7 +346,7 @@ export class Swarm {
     if (stalledFor >= 30 * 60_000) {
       this.stallLevel = 4;
       this.stallActionAt = Date.now();
-      this.log(-1, `Stalled ${Math.round(stalledFor / 60000)}m with no progress — aborting run so you can resume later`);
+      this.log(-1, `Stalled ${Math.round(stalledFor / 60000)}m with no progress  -- aborting run so you can resume later`);
       this.abort();
       return;
     }
@@ -355,7 +355,7 @@ export class Swarm {
       this.stallActionAt = Date.now();
       const until = Date.now() + 10 * 60_000;
       this.rateLimitResetsAt = until;
-      this.log(-1, `Stalled at concurrency 1 for ${Math.round(stalledFor / 60000)}m — forcing 10m cooldown`);
+      this.log(-1, `Stalled at concurrency 1 for ${Math.round(stalledFor / 60000)}m  -- forcing 10m cooldown`);
       return;
     }
     if (this.stallLevel < 2 && this.targetConcurrency > 1) {
@@ -379,12 +379,12 @@ export class Swarm {
 
     // Hard stop: overage budget exhausted (only legitimate cap)
     if (this.isUsingOverage && this.extraUsageBudget != null && this.overageCostUsd >= this.extraUsageBudget) {
-      this.capForOverage(`Extra usage budget $${this.extraUsageBudget} reached ($${this.overageCostUsd.toFixed(2)} spent) — stopping dispatch`);
+      this.capForOverage(`Extra usage budget $${this.extraUsageBudget} reached ($${this.overageCostUsd.toFixed(2)} spent)  -- stopping dispatch`);
       return;
     }
 
     // Wait loop: keep waiting until the blocking condition clears
-    // isUsingOverage is purely informational — the API enforces overage via 429s
+    // isUsingOverage is purely informational  -- the API enforces overage via 429s
     // which the retry loop handles. Throttle only gates on actual rejections and user cap.
     let consecutiveWaits = 0;
     for (;;) {
@@ -401,7 +401,7 @@ export class Swarm {
       const reason = capExceeded
         ? `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap! * 100)}%)`
         : `Rate limited${this.windowTag()}`;
-      this.log(-1, `${reason} — waiting ${Math.ceil(waitMs / 1000)}s then retrying ([r] to retry now)`);
+      this.log(-1, `${reason}  -- waiting ${Math.ceil(waitMs / 1000)}s then retrying ([r] to retry now)`);
       this.rateLimitPaused++;
       await this.rateLimitSleep(waitMs);
       this.rateLimitPaused--;
@@ -446,7 +446,7 @@ export class Swarm {
         agent.baseRef = baseRef;
         this.log(id, `Worktree: ${branch}`);
       } else {
-        this.log(id, `Worktree failed after retry — running without isolation`);
+        this.log(id, `Worktree failed after retry  -- running without isolation`);
       }
     }
 
@@ -471,7 +471,7 @@ export class Swarm {
           const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
           const agentPrompt = isResume ? resumePrompt
             : this.config.useWorktrees && !task.noWorktree
-              ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes — the framework handles that.\n\n${preamble}${task.prompt}`
+              ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}`
               : `${preamble}${task.prompt}`;
 
           const effectiveModel = task.model || this.config.model;
@@ -526,7 +526,7 @@ export class Swarm {
         try { await runOnce(false); }
         catch (nudgeErr) {
           if (nudgeErr instanceof NudgeError && resumeSessionId) {
-            this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m — resuming with continue`);
+            this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
             await runOnce(true);
           } else throw nudgeErr;
         }
@@ -540,7 +540,7 @@ export class Swarm {
           agent.finishedAt = Date.now();
           const duration = agent.finishedAt - (agent.startedAt || agent.finishedAt);
           if (agent.toolCalls === 0 && (agent.costUsd ?? 0) < 0.001 && duration < 15_000) {
-            agent.status = "error"; agent.error = "Agent did no work — exited without tool use"; this.failed++;
+            agent.status = "error"; agent.error = "Agent did no work  -- exited without tool use"; this.failed++;
             this.log(id, agent.error);
           } else {
             agent.status = "done"; this.completed++;
@@ -555,11 +555,11 @@ export class Swarm {
             ? Math.max(5000, this.rateLimitResetsAt - Date.now())
             : 120_000;
           // If the whole swarm has been making zero progress for a while, stop giving
-          // rate-limit retries a free pass — force them to count against maxRetries so
+          // rate-limit retries a free pass  -- force them to count against maxRetries so
           // we eventually surrender instead of looping forever.
           const globallyStalled = Date.now() - this.lastProgressAt > 15 * 60_000;
           const freebie = !globallyStalled;
-          this.log(id, `Rate limited${this.windowTag()} — waiting ${Math.ceil(waitMs / 1000)}s${freebie ? " (attempt not counted)" : " (counted — swarm stalled)"} ([r] to retry now)`);
+          this.log(id, `Rate limited${this.windowTag()}  -- waiting ${Math.ceil(waitMs / 1000)}s${freebie ? " (attempt not counted)" : " (counted  -- swarm stalled)"} ([r] to retry now)`);
           agent.blockedAt = Date.now();
           this.rateLimitPaused++;
           await this.rateLimitSleep(waitMs);
@@ -675,7 +675,7 @@ export class Swarm {
             parts.push(errs[0]);
             for (const e of errs.slice(1, 3)) this.log(agent.id, `err: ${String(e).slice(0, 160)}`);
           }
-          agent.error = parts.join(" — ").slice(0, 180);
+          agent.error = parts.join("  -- ").slice(0, 180);
           this.failed++; this.log(agent.id, agent.error);
         }
         break;
@@ -704,9 +704,9 @@ export class Swarm {
             this.rateLimitExplained = true;
             const name = windowType ? (RATE_LIMIT_WINDOW_SHORT[windowType] ?? windowType.replace(/_/g, " ")) : "Anthropic";
             const overageNote = this.isUsingOverage ? " even on overage" : "";
-            this.log(-1, `${name} window is full${overageNote} — plan-level Anthropic limit, not a claude-overnight cap. Press [r] to retry now, [c] to lower concurrency, or wait for reset.`);
+            this.log(-1, `${name} window is full${overageNote}  -- plan-level Anthropic limit, not a claude-overnight cap. Press [r] to retry now, [c] to lower concurrency, or wait for reset.`);
           }
-          throw new Error("rate limit rejected — retrying");
+          throw new Error("rate limit rejected  -- retrying");
         }
         break;
       }
@@ -716,7 +716,7 @@ export class Swarm {
 
 class AgentTimeoutError extends Error {
   constructor(silentMs: number) {
-    super(`Agent silent for ${Math.round(silentMs / 1000)}s — assumed hung`);
+    super(`Agent silent for ${Math.round(silentMs / 1000)}s  -- assumed hung`);
     this.name = "AgentTimeoutError";
   }
 }

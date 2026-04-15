@@ -26,7 +26,7 @@ export interface RunConfig extends RunConfigBase {
   tasks: Task[];
   /** High-level objective. */
   objective?: string;
-  /** Custom provider for worker tasks (optional — Anthropic default when undefined). */
+  /** Custom provider for worker tasks (optional  -- Anthropic default when undefined). */
   workerProvider?: ProviderConfig;
   /** Custom provider for planner/steering calls (optional). */
   plannerProvider?: ProviderConfig;
@@ -172,7 +172,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         const answer = await runPlannerQuery(
           prompt,
           { cwd, model: plannerModel, permissionMode },
-          () => { /* swallow ticker — don't clobber main status */ },
+          () => { /* swallow ticker  -- don't clobber main status */ },
         );
         accCost += getTotalPlannerCost() - plannerCostBefore;
         syncRunInfo();
@@ -313,7 +313,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         if (steer.done || steer.tasks.length === 0) {
           const hasVerification = waveHistory.some(w => w.tasks.some(t => t.prompt.toLowerCase().includes("verif")));
           if (!hasVerification && remaining >= 1) {
-            display.appendSteeringEvent("Done blocked — auto-composing verification wave");
+            display.appendSteeringEvent("Done blocked  -- auto-composing verification wave");
             currentTasks = [{
               id: "verify-0",
               prompt: `## Verification: Build, run, and test the application end-to-end\n\nYou are the final gatekeeper before this run is marked complete. The steerer believes the objective is done. Your job: prove it or disprove it.\n\n1. Run the build (npm run build, or whatever this project uses). Report ALL errors.\n2. Start the dev server. If a port is taken, try another. If a dependency is missing, install it.\n3. Navigate key flows as a real user would. Check that the main features work.\n4. Write your findings to .claude-overnight/latest/verifications/final-verify.md\n\nBe relentless. Do not give up if the first approach fails. Search the codebase for dev login routes, test tokens, seed users, env vars, CLI auth commands, or any bypass.`,
@@ -335,10 +335,10 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       } catch (err: any) {
         accCost += getTotalPlannerCost() - plannerCostBefore;
         if (steerAttempts < 3) {
-          display.appendSteeringEvent(`Steering failed (attempt ${steerAttempts}/3) — retrying...`);
+          display.appendSteeringEvent(`Steering failed (attempt ${steerAttempts}/3)  -- retrying...`);
           continue;
         }
-        display.appendSteeringEvent(`Steering failed ${steerAttempts}× — falling back`);
+        display.appendSteeringEvent(`Steering failed ${steerAttempts}×  -- falling back`);
         let fallbackStatus = "";
         try { fallbackStatus = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
         currentTasks = [{
@@ -369,7 +369,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     runAnotherRound = false;
   while (remaining > 0 && currentTasks.length > 0 && !stopping) {
     // Health check: runs once per process start to fix a broken build before
-    // any real work begins. Only triggers when there's nothing else queued —
+    // any real work begins. Only triggers when there's nothing else queued --
     // it must NEVER override tasks that steering has already planned.
     if (!lastHealed) {
       lastHealed = true;
@@ -396,8 +396,8 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     display.resume();
     try { await swarm.run(); }
     catch (err: unknown) {
-      if (isAuthError(err)) { display.stop(); restore(); console.error(chalk.red(`\n  Authentication failed — check your API key or run: claude auth\n`)); process.exit(1); }
-      // Swarm crashed mid-execution — save partial results before propagating.
+      if (isAuthError(err)) { display.stop(); restore(); console.error(chalk.red(`\n  Authentication failed  -- check your API key or run: claude auth\n`)); process.exit(1); }
+      // Swarm crashed mid-execution  -- save partial results before propagating.
       // The pre-swarm saveRunState already preserved currentTasks for resume.
       // Also save the wave session with whatever agents completed.
       if (swarm.agents.length > 0) {
@@ -555,11 +555,11 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   console.log("");
   const bannerChar = accFailed === 0 ? "=" : "-";
   console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
-  if (trulyDone) console.log(chalk.bold.green(`  CLAUDE OVERNIGHT — COMPLETE`));
-  else if (remaining <= 0) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — BUDGET EXHAUSTED`));
-  else if (lastCapped) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — BUDGET EXHAUSTED`));
-  else if (stopping || lastAborted) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — INTERRUPTED`));
-  else console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT — STOPPED`));
+  if (trulyDone) console.log(chalk.bold.green(`  CLAUDE OVERNIGHT  -- COMPLETE`));
+  else if (remaining <= 0) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- BUDGET EXHAUSTED`));
+  else if (lastCapped) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- BUDGET EXHAUSTED`));
+  else if (stopping || lastAborted) console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- INTERRUPTED`));
+  else console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- STOPPED`));
   console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
   console.log("");
 
@@ -595,7 +595,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   }
 
   console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
-  if (runBranch) console.log(chalk.dim(`  Branch: ${runBranch} — git merge ${runBranch}`));
+  if (runBranch) console.log(chalk.dim(`  Branch: ${runBranch}  -- git merge ${runBranch}`));
   console.log(chalk.dim(`  Run: ${runDir}`));
   if (currentSwarm?.logFile) console.log(chalk.dim(`  Log: ${currentSwarm.logFile}`));
   console.log("");
@@ -640,7 +640,7 @@ Run \`git diff\` to see what changed. Review for:
 
 Fix issues directly. Delete and simplify rather than add. If the code is already clean, skip.
 
-No need to explain your changes — just fix them.`;
+No need to explain your changes  -- just fix them.`;
 
 async function runPostWaveReview(opts: ReviewOpts): Promise<ReviewResult | null> {
   const reviewTask: Task = {
@@ -674,7 +674,7 @@ async function runPostWaveReview(opts: ReviewOpts): Promise<ReviewResult | null>
       failed: reviewSwarm.failed,
     };
   } catch (err: unknown) {
-    // Non-fatal — review is advisory, don't crash the run
+    // Non-fatal  -- review is advisory, don't crash the run
     return null;
   }
 }
@@ -696,7 +696,7 @@ Run \`git diff main\` (or \`git diff HEAD\` if on the same branch) to see ALL ch
 
 Fix issues directly. Delete and simplify. If the codebase is clean and the build passes, say so.
 
-No need to explain your changes — just fix them.`;
+No need to explain your changes  -- just fix them.`;
 
 async function runPostRunReview(
   objective: string,
@@ -763,15 +763,15 @@ async function promptBudgetExtension(ctx: {
   const estCost = avg > 0 ? ` · ~$${(suggested * avg).toFixed(2)}` : "";
   const estLine = ctx.estimate != null
     ? chalk.dim(`  Planner estimate: ${ctx.estimate} sessions to complete${avg > 0 ? ` (~$${(ctx.estimate * avg).toFixed(2)} at $${avg.toFixed(2)}/session)` : ""}`)
-    : chalk.dim(`  No planner estimate available — using default${avg > 0 ? ` (~$${avg.toFixed(2)}/session)` : ""}`);
+    : chalk.dim(`  No planner estimate available  -- using default${avg > 0 ? ` (~$${avg.toFixed(2)}/session)` : ""}`);
   console.log("");
-  console.log(chalk.yellow(`  Budget exhausted — run not yet complete.`));
+  console.log(chalk.yellow(`  Budget exhausted  -- run not yet complete.`));
   console.log(estLine);
-  console.log(chalk.dim(`  Continue with ${chalk.bold.white(String(suggested))} more sessions${estCost}? Everything stays the same — just hit enter.`));
+  console.log(chalk.dim(`  Continue with ${chalk.bold.white(String(suggested))} more sessions${estCost}? Everything stays the same  -- just hit enter.`));
   const action = await selectKey("", [
     { key: "y", desc: "es (↵)" },
     { key: "c", desc: "ustom" },
-    { key: "n", desc: "o — stop here" },
+    { key: "n", desc: "o  -- stop here" },
   ]);
   if (action === "y") return suggested;
   if (action === "n") return 0;
