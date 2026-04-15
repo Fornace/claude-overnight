@@ -4,6 +4,8 @@
 
 Your Max plan rate limits eat interactive coding time. One deep refactor and the 5-hour window is gone before lunch. `claude-overnight` runs background agent sessions up to the percentage cap you pick (90% is typical), leaving the rest free for your own Claude Code session. Hand it an objective and a session budget, walk away, review the diff when the run ends.
 
+Cursor API Proxy supported -- route through Cursor's model gateway for Composer-powered execution on `auto`, `composer`, or `composer-2` models. See **Run via Cursor API Proxy** below.
+
 Isolated by default. Every agent runs in its own git worktree on its own branch, so a misbehaving agent can't trash your working tree. You choose what agents can do before the run starts  -- no surprise escalation mid-flight. Unmerged branches are preserved for manual review, never discarded. Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)  -- not a Claude Code replacement, but a background lane that runs alongside it.
 
 Different shape from hosted agent harnesses like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): instead of one agent in one cloud container billed separately, you get many parallel sessions on your own machine, in your real repo, against your own Max plan (or API key). Works with Claude Opus, Sonnet, and Haiku  -- or pair an Anthropic planner with a cheaper executor on Qwen, OpenRouter, or any Anthropic-compatible endpoint.
@@ -32,6 +34,39 @@ export ANTHROPIC_API_KEY="sk-..."
 export ANTHROPIC_MODEL="qwen3.6-plus"
 claude-overnight
 ```
+
+## Run via Cursor API Proxy
+
+Use Cursor's model gateway as an executor -- `auto` (delegates to best available), `composer`, or `composer-2` models. Runs locally through a proxy that speaks the Anthropic Messages API, so it's a drop-in replacement for any other provider.
+
+1. **Install the Cursor CLI and proxy:**
+
+   ```bash
+   curl https://cursor.com/install -fsS | bash
+   npm install -g cursor-api-proxy
+   ```
+
+2. **Get an API key.** Visit [cursor.com/dashboard/integrations](https://cursor.com/dashboard/integrations) and scroll to the "API Keys" section.
+
+3. **Set up.** Run `claude-overnight` and when prompted to pick a model, choose **Cursor…**. It walks you through a one-time setup: CLI check, API key entry (persisted to `providers.json`), and proxy health check.
+
+4. **Start the proxy** (in a separate terminal):
+
+   ```bash
+   npx cursor-api-proxy
+   ```
+
+5. Pick your model (`auto`, `composer`, `composer-2`, etc.). The provider is saved and reappears in every future run.
+
+Or configure the key manually:
+
+```bash
+export CURSOR_BRIDGE_API_KEY="sk-..."
+npx cursor-api-proxy &
+claude-overnight
+```
+
+**Tip:** run `claude-overnight` with the `--model=cursor-auto` flag in non-interactive mode to skip the picker. If the proxy isn't running at startup, a warning is shown but Anthropic providers remain available.
 
 ## Install
 
