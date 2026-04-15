@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { execSync, spawn } from "child_process";
@@ -450,141 +450,16 @@ async function isPortInUse(port: number, host = "127.0.0.1"): Promise<boolean> {
 }
 
 /**
- * Find the system `node` binary path. Uses `which` to bypass any bundled node.
- */
-function resolveSystemNode(): string | null {
-  try {
-    return execSync("which node 2>/dev/null", {
-      timeout: 3_000, encoding: "utf-8", shell: "bash",
-    }).trim() || null;
-  } catch { return null; }
-}
-
-/**
- * Find the cursor-agent's index.js. Mirrors the logic in fetchLiveCursorModels:
- * resolves the `agent` symlink to find the version directory containing index.js.
- */
-function resolveAgentIndexJs(): string | null {
-  try {
-    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
-      timeout: 3_000, encoding: "utf-8", shell: "bash",
-    }).trim();
-    if (!agentPath) return null;
-    const dir = dirname(realpathSync(agentPath));
-    const indexPath = `${dir}/index.js`;
-    return existsSync(indexPath) ? indexPath : null;
-  } catch { return null; }
-}
-
-/**
- * Patch the proxy's env.js to use CURSOR_AGENT_NODE + CURSOR_AGENT_SCRIPT on Unix.
- *
- * The proxy already reads these env vars (lines 152-153 of env.js) but only uses
- * them on Windows in resolveAgentCommand(). We inject a Unix code path before the
- * final `return { command: cmd, args, env }` so that when these vars are set,
- * the proxy spawns system node with the agent script instead of the bundled node
- * (which segfaults with --list-models on macOS).
- *
- * Safe to call repeatedly — the patch is idempotent.
- */
-function patchProxyEnvJs(proxyDir: string): boolean {
-  const envJs = join(proxyDir, "dist", "lib", "env.js");
-  if (!existsSync(envJs)) return false;
-  const src = readFileSync(envJs, "utf-8");
-
-  // Check if already patched
-  if (src.includes("/* claude-overnight patch */")) return true;
-
-  const patch = `\n/* claude-overnight patch: use CURSOR_AGENT_NODE+SCRIPT on unix */\n` +
-    `if (platform !== "win32" && loaded.agentNode && loaded.agentScript) {\n` +
-    `  return { command: loaded.agentNode, args: [loaded.agentScript, ...args], env: { ...env, CURSOR_INVOKED_AS: "agent" }, agentScriptPath: loaded.agentScript };\n` +
-    `}`;
-
-  // Insert before the final return in resolveAgentCommand
-  const target = "    return { command: cmd, args, env };\n}";
-  if (!src.includes(target)) {
-    // Try minified variant
-    const target2 = "return{command:cmd,args,env}}";
-    if (!src.includes(target2)) return false;
-    writeFileSync(envJs, src.replace(target2, patch + "\n" + target2), "utf-8");
-  } else {
-    writeFileSync(envJs, src.replace(target, patch + "\n" + target), "utf-8");
-  }
-  return true;
-}
-
-/**
- * Patch the proxy's token-cache.js to skip the macOS keychain read.
- *
- * The proxy calls `security find-generic-password -s "cursor-access-token" -w`
- * after every agent run to cache tokens for its multi-account pool feature.
- * This triggers a macOS keychain popup even though the key is not needed for
- * auth (the cursor-agent subprocess handles its own auth). We neutralize it.
- *
- * Safe to call repeatedly — the patch is idempotent.
- */
-function patchProxyTokenCacheJs(proxyDir: string): boolean {
-  const tcJs = join(proxyDir, "dist", "lib", "token-cache.js");
-  if (!existsSync(tcJs)) return false;
-  const src = readFileSync(tcJs, "utf-8");
-
-  // Check if already patched
-  if (src.includes("/* claude-overnight patch: skip keychain */")) return true;
-
-  const patch = `\n/* claude-overnight patch: skip keychain */\n` +
-    `return undefined;`;
-
-  // Replace the entire execSync chain inside readKeychainToken (multi-line)
-  const target = `const t = execSync('security find-generic-password -s "cursor-access-token" -w', { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 })
-            .toString()
-            .trim();`;
-  if (!src.includes(target)) return false;
-  writeFileSync(tcJs, src.replace(target, patch + "\n// " + target.replace(/\n/g, "\n// ")), "utf-8");
-  return true;
-}
-
-/**
- * Find the cursor-api-proxy package directory (npx cache or global install).
- */
-function findProxyPackageDir(): string | null {
-  try {
-    // Try npx cache first
-    const npmCacheRoot = join(homedir(), ".npm", "_npx");
-    if (existsSync(npmCacheRoot)) {
-      const dirs = readdirSync(npmCacheRoot);
-      for (const d of dirs) {
-        const candidate = join(npmCacheRoot, d, "node_modules", "cursor-api-proxy");
-        if (existsSync(join(candidate, "dist", "lib", "env.js"))) return candidate;
-      }
-    }
-  } catch {}
-  // Try global install
-  try {
-    const globalDir = execSync("npm root -g 2>/dev/null", {
-      timeout: 5_000, encoding: "utf-8", shell: "bash",
-    }).trim();
-    if (globalDir && existsSync(join(globalDir, "cursor-api-proxy", "dist", "lib", "env.js"))) {
-      return join(globalDir, "cursor-api-proxy");
-    }
-  } catch {}
-  return null;
-}
-
-/**
  * Auto-start the cursor-api-proxy as a detached background process.
  *
- * When the proxy is started, we also configure it to use system Node.js
- * for spawning the cursor-agent subprocess. The agent's bundled Node.js
- * segfaults with --list-models on macOS (exit 139), so we resolve the
- * system `node` binary and the agent's index.js, patch the proxy's env.js
- * to respect CURSOR_AGENT_NODE/SCRIPT on Unix, and pass those env vars.
+ * Passes CURSOR_AGENT_NODE/SCRIPT so the fork uses system Node.js for the
+ * agent subprocess (avoids segfaults with --list-models on macOS).
  *
  * Handles:
  *  - Proxy already running and verified → returns true immediately
- *  - Something on the port but not our proxy → warns, skips spawn
- *  - Port in use by nothing responsive → returns true (something bound it)
- *  - Proxy not running → spawns `npx cursor-api-proxy` detached, waits for health
- *  - Spawn fails (not installed) → returns false, caller falls back to manual instructions
+ *  - Something on the port but not our proxy → warns, kills, restarts
+ *  - Proxy not running → spawns detached, waits for health
+ *  - Spawn fails → returns false, caller falls back to manual instructions
  *
  * When `forceRestart` is true and a stale process is on the port, it will be
  * killed and the proxy restarted.
@@ -595,20 +470,8 @@ export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forc
   const url = new URL(baseUrl);
   const port = parseInt(url.port, 10) || 80;
 
-  // Always patch the npx cache on startup so proxy skips keychain reads.
-  // Idempotent — safe to call on every run.
-  const proxyDir = findProxyPackageDir();
-  if (proxyDir) patchProxyTokenCacheJs(proxyDir);
-
   // Already healthy?
   if (await healthCheckCursorProxy(baseUrl)) {
-    // Proxy was running before the patch — restart it to load the patched token-cache.js.
-    console.log(chalk.dim(`  Proxy already running — restarting to pick up keychain patch…`));
-    const killedPid = killProcessOnPort(port, url.hostname);
-    if (killedPid) {
-      await new Promise(r => setTimeout(r, 500));
-      return startProxyProcess(baseUrl, url, port);
-    }
     return true;
   }
 
@@ -643,22 +506,21 @@ export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forc
 async function startProxyProcess(baseUrl: string, url: URL, port: number): Promise<boolean> {
   console.log(chalk.yellow(`\n  Proxy not running at ${baseUrl} — starting it for you…`));
 
-  // Resolve system node and agent index.js so the proxy doesn't use the
-  // agent's bundled node (segfaults with --list-models on macOS).
-  const sysNode = resolveSystemNode();
-  const agentJs = resolveAgentIndexJs();
-  let patchedProxy = false;
-  if (sysNode && agentJs) {
-    const proxyDir = findProxyPackageDir();
-    if (proxyDir) {
-      patchedProxy = patchProxyEnvJs(proxyDir);
-      if (patchedProxy) {
-        console.log(chalk.dim(`  Using system node for agent subprocess: ${sysNode}`));
-      } else {
-        console.log(chalk.yellow(`  ⚠ Couldn't patch proxy env.js — /v1/models may fail`));
-      }
+  // Resolve system node and agent index.js so the proxy uses system Node.js
+  // for the agent subprocess (avoids segfaults with --list-models on macOS).
+  let sysNode: string | null = null;
+  let agentJs: string | null = null;
+  try {
+    sysNode = execSync("which node 2>/dev/null", { timeout: 3_000, encoding: "utf-8", shell: "bash" }).trim() || null;
+    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
+      timeout: 3_000, encoding: "utf-8", shell: "bash",
+    }).trim();
+    if (agentPath) {
+      const agentDir = dirname(realpathSync(agentPath));
+      const indexPath = `${agentDir}/index.js`;
+      if (existsSync(indexPath)) agentJs = indexPath;
     }
-  }
+  } catch {}
 
   const proxyEnv: Record<string, string> = {
     ...Object.fromEntries(
@@ -668,9 +530,10 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
       || loadProviders().find(p => p.cursorProxy)?.cursorApiKey
       || "unused",
   };
-  if (patchedProxy && sysNode && agentJs) {
+  if (sysNode && agentJs) {
     proxyEnv.CURSOR_AGENT_NODE = sysNode;
     proxyEnv.CURSOR_AGENT_SCRIPT = agentJs;
+    console.log(chalk.dim(`  Using system node for agent subprocess: ${sysNode}`));
   }
 
   try {
