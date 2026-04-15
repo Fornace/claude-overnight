@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.24.4
+
+- **Dependency:** `cursor-composer-in-claude` **^0.7.6** (proxy forces `CI=true` on every agent spawn alongside keychain skip — fixes macOS keychain prompts when the proxy was not started with `CI`).
+
 ## 1.17.0
 
 ### Three-layer review system
