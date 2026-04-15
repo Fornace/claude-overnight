@@ -529,6 +529,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     CURSOR_BRIDGE_API_KEY: process.env.CURSOR_BRIDGE_API_KEY
       || loadProviders().find(p => p.cursorProxy)?.cursorApiKey
       || "unused",
+    CURSOR_SKIP_KEYCHAIN: "1",
   };
   if (sysNode && agentJs) {
     proxyEnv.CURSOR_AGENT_NODE = sysNode;
@@ -537,7 +538,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
   }
 
   try {
-    const child = spawn("npx", ["cursor-api-proxy"], {
+    const child = spawn("npx", ["@claude-overnight/cursor-api-proxy"], {
       detached: true,
       stdio: "ignore",
       env: proxyEnv,
@@ -597,10 +598,10 @@ function setupSteps(): SetupStep[] {
     {
       label: "cursor-api-proxy server",
       check: () => {
-        try { execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 10_000 }); return true; } catch { return false; }
+        try { execSync("npx @claude-overnight/cursor-api-proxy --help", { stdio: "pipe", timeout: 10_000 }); return true; } catch { return false; }
       },
-      autoCmd: "npx cursor-api-proxy",
-      manualCmd: "npx cursor-api-proxy",
+      autoCmd: "npx @claude-overnight/cursor-api-proxy",
+      manualCmd: "npx @claude-overnight/cursor-api-proxy",
       successMsg: "cursor-api-proxy available",
     },
   ];
@@ -715,21 +716,21 @@ export async function setupCursorProxy(): Promise<boolean> {
     if (choice === "a") {
       console.log(chalk.dim(`  Checking install…`));
       try {
-        execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 15_000 });
+        execSync("npx @claude-overnight/cursor-api-proxy --help", { stdio: "pipe", timeout: 15_000 });
         console.log(chalk.green(`  ✓ cursor-api-proxy is installed`));
       } catch {
         console.log(chalk.dim(`  Installing…`));
         try {
-          execSync("npm install -g cursor-api-proxy", { stdio: "inherit", timeout: 120_000 });
+          execSync("npm install -g @claude-overnight/cursor-api-proxy", { stdio: "inherit", timeout: 120_000 });
           console.log(chalk.green(`  ✓ Installed`));
         } catch {
-          console.log(chalk.yellow("  Install failed — try manual: npm install -g cursor-api-proxy"));
+          console.log(chalk.yellow("  Install failed — try manual: npm install -g @claude-overnight/cursor-api-proxy"));
           return false;
         }
       }
     } else if (choice === "m") {
-      console.log(chalk.cyan(`\n  Install:  ${chalk.bold("npm install -g cursor-api-proxy")}`));
-      console.log(chalk.cyan(`  Start:    ${chalk.bold("npx cursor-api-proxy")}\n`));
+      console.log(chalk.cyan(`\n  Install:  ${chalk.bold("npm install -g @claude-overnight/cursor-api-proxy")}`));
+      console.log(chalk.cyan(`  Start:    ${chalk.bold("npx @claude-overnight/cursor-api-proxy")}\n`));
       const ok = await selectKey(`  Started it?`, [
         { key: "r", desc: "eady" },
         { key: "c", desc: "ancel" },
@@ -746,7 +747,7 @@ export async function setupCursorProxy(): Promise<boolean> {
 
   // Auto-start failed or not responding — offer manual fallback
   console.log(chalk.yellow(`\n  Couldn't start the proxy automatically. Start it manually:`));
-  console.log(chalk.white(`    ${chalk.bold("npx cursor-api-proxy")}`));
+  console.log(chalk.white(`    ${chalk.bold("npx @claude-overnight/cursor-api-proxy")}`));
   for (;;) {
     const choice = await selectKey(`  Proxy started?`, [
       { key: "r", desc: "etry (re-attempt auto-start + kill stale)" },

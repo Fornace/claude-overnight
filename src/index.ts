@@ -223,7 +223,7 @@ async function main() {
     const proxyUp = await healthCheckCursorProxy();
     if (!proxyUp) {
       console.warn(chalk.yellow(`\n  ⚠ ${savedCursorProviders.length} Cursor provider(s) saved but proxy is not running at ${PROXY_DEFAULT_URL}`));
-      console.warn(chalk.yellow(`    Start it: npx cursor-api-proxy`));
+      console.warn(chalk.yellow(`    Start it: npx @claude-overnight/cursor-api-proxy`));
       console.warn(chalk.dim(`    (Continuing — you can still use Anthropic models)\n`));
     }
   }
@@ -649,7 +649,8 @@ async function main() {
 
   // Fail fast if a custom provider is misconfigured  -- one bad key would
   // otherwise surface as N agent failures scattered across the run.
-  if (plannerProvider || workerProvider || fastProvider) {
+  // Skip when NO_PREFLIGHT=1 (used by e2e tests).
+  if ((plannerProvider || workerProvider || fastProvider) && process.env.NO_PREFLIGHT !== "1") {
     const seen = new Set<string>();
     const all: Array<[string, ProviderConfig | undefined]> = [
       ["planner", plannerProvider],
@@ -679,7 +680,7 @@ async function main() {
       if (!result.ok) {
         console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
         if (isCursorProxyProvider(provider)) {
-          console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed. Start it: npx cursor-api-proxy`));
+          console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed. Start it: npx @claude-overnight/cursor-api-proxy`));
         } else {
           console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));
         }
