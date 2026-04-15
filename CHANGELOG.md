@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.16.16
+
+### Playwright parallel testing quicksheet + headless by default
+
+- **`QUICKSHEET_PLAYWRIGHT.md`** — standalone reference with three isolation tiers: `--isolated` for lock-free parallel runs, per-agent `userDataDir` for saved logins, and headed fallback only when anti-bot detection (CAPTCHA, Cloudflare) requires visible browser interaction. Shipped via npm (`files[]` includes `plugins/` + quicksheet).
+- **Headless mode by default.** Headed browser launches steal macOS focus during long runs. All MCP config examples now use `--headless` — drop it only when you hit anti-bot walls.
+- **SKILL.md Playwright section.** The claude-overnight skill now teaches agents the isolation rules at a glance and points to the full quicksheet.
+- **Context7 (ctx7) integration.** Quickstart commands for fetching current Playwright docs, with a pre-flight auth check and graceful fallback when unauthenticated.
+
 ## 1.16.4
 
 ### Merge healing, silent-data-loss fixes, and noise reduction

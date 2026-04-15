@@ -280,6 +280,36 @@ Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (
 
 **Non-interactive / CI.** `claude-overnight --model=qwen3.6-plus` auto-resolves the model id to a saved provider — no separate `--provider` flag.
 
+## Parallel Playwright Testing
+
+When agents use the Playwright MCP server for testing, parallel instances conflict on browser locks and cookie state. Add multiple MCP entries to `settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "playwright-1": {
+      "command": "npx",
+      "args": ["@anthropic-ai/mcp-playwright@latest", "--isolated", "--headless"]
+    },
+    "playwright-2": {
+      "command": "npx",
+      "args": ["@anthropic-ai/mcp-playwright@latest", "--isolated", "--headless"]
+    }
+  }
+}
+```
+
+**Isolation levels:**
+
+| Goal | Approach |
+|---|---|
+| Non-disruptive, no focus steal | Headless mode (default) |
+| Parallel agents, no shared cookies | Headless + `--isolated` per MCP server |
+| Parallel agents, each with saved login | Headless + unique `userDataDir` or `--storage-state` per server |
+| Anti-bot interception (CAPTCHA, Cloudflare) | Drop `--headless` only when necessary |
+
+See `QUICKSHEET_PLAYWRIGHT.md` for full config examples.
+
 ## Spend caps and usage controls
 
 ### Extra usage protection

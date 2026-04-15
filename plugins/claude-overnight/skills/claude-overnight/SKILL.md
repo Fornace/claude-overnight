@@ -72,3 +72,21 @@ Merged branches from prior runs are not re-run. Knowledge carries forward across
 - Don't delete `.claude-overnight/` to "clean up" — it holds the only record of what the run learned. It should be in `.gitignore`.
 - Don't truncate or summarize agent output files when reading them back — never discard expensive agent output.
 - Don't confuse this with Vercel Workflow DevKit — unrelated despite the word "workflow".
+
+# Playwright Parallel Usage
+
+When agents use the Playwright MCP server for testing, parallel instances conflict on browser locks and cookie state. See `QUICKSHEET_PLAYWRIGHT.md` at the repo root for the full reference.
+
+**Quick rules:**
+- **Headless by default** — prevents focus stealing on macOS. Only use headed when anti-bot detection (CAPTCHA, Cloudflare) forces it
+- **Isolated agents (no login):** Each MCP server needs `--isolated --headless`
+- **Isolated agents (with saved login):** Each needs its own `userDataDir` or `--storage-state` file, plus `--headless`
+- Multiple MCP entries in `settings.json` — one per concurrency slot, or use a single `--isolated` entry if cookies don't need to persist
+
+**Context7 (ctx7) docs:** Requires authentication (`npx ctx7@latest login` or `CONTEXT7_API_KEY`). Pre-flight check:
+
+```bash
+npx ctx7@latest library playwright "parallel browser instances"
+```
+
+If this fails with a quota/auth error, fall back to training data — don't block the run.
