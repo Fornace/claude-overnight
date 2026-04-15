@@ -303,13 +303,28 @@ export function isCursorProxyProvider(p: ProviderConfig): boolean {
   return p.cursorProxy === true || p.baseURL === PROXY_DEFAULT_URL;
 }
 
+/** Resolve the cursor-api-proxy API key from env or providers.json. */
+function resolveCursorProxyKey(): string | null {
+  if (process.env.CURSOR_BRIDGE_API_KEY?.trim()) return process.env.CURSOR_BRIDGE_API_KEY.trim();
+  const saved = loadProviders().find(p => p.cursorProxy);
+  if (saved?.cursorApiKey?.trim()) return saved.cursorApiKey.trim();
+  return null;
+}
+
+/** Build fetch options with the cursor proxy auth header if a key is available. */
+function cursorProxyFetchOpts(): RequestInit {
+  const key = resolveCursorProxyKey();
+  return key ? { headers: { Authorization: `Bearer ${key}` } } : {};
+}
+
 /**
  * Health check: GET /health on the proxy. Returns true if proxy is reachable.
+ * Passes the stored API key so the /health endpoint doesn't return 401.
  */
 export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
   const url = `${baseUrl.replace(/\/$/, "")}/health`;
   try {
-    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000) });
+    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000), ...cursorProxyFetchOpts() });
     return res.ok;
   } catch {
     return false;
@@ -323,7 +338,7 @@ export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promi
 export async function fetchCursorModels(baseUrl = PROXY_DEFAULT_URL): Promise<string[]> {
   const url = `${baseUrl.replace(/\/$/, "")}/v1/models`;
   try {
-    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5_000) });
+    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5_000), ...cursorProxyFetchOpts() });
     if (!res.ok) return [];
     const json = await res.json() as { data?: Array<{ id: string; name?: string }> };
     return (json.data || []).map(m => m.id).filter(Boolean);
@@ -381,15 +396,16 @@ async function fetchLiveCursorModels(): Promise<string[]> {
  */
 async function verifyCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
   const url = baseUrl.replace(/\/$/, "");
+  const opts = cursorProxyFetchOpts();
   // /health is the most reliable proxy identity check — works even when
   // /v1/models fails due to agent subprocess crash (macOS segfault).
   try {
-    const res = await fetch(`${url}/health`, { method: "GET", signal: AbortSignal.timeout(3_000) });
+    const res = await fetch(`${url}/health`, { method: "GET", signal: AbortSignal.timeout(3_000), ...opts });
     if (res.ok) return true;
   } catch {}
   // Fallback: check /v1/models response shape
   try {
-    const res = await fetch(`${url}/v1/models`, { method: "GET", signal: AbortSignal.timeout(3_000) });
+    const res = await fetch(`${url}/v1/models`, { method: "GET", signal: AbortSignal.timeout(3_000), ...opts });
     if (!res.ok) return false;
     const json = await res.json() as any;
     return Array.isArray(json?.data);
