@@ -5,6 +5,7 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { ask, select } from "./cli.js";
+import { getBearerToken, clearTokenCache } from "./auth.js";
 
 // ── Types ──
 
@@ -22,6 +23,8 @@ export interface ProviderConfig {
   keyEnv?: string;
   /** Inline API key. Stored plaintext in providers.json (mode 0600). */
   key?: string;
+  /** When true, use JWT token auth instead of raw API keys. The bearer token is embedded in a short-lived JWT. */
+  useJWT?: boolean;
 }
 
 // ── Store ──
@@ -45,6 +48,7 @@ export function saveProvider(p: ProviderConfig): void {
   mkdirSync(join(homedir(), ".claude", "claude-overnight"), { recursive: true });
   writeFileSync(STORE_PATH, JSON.stringify({ providers: all }, null, 2), "utf-8");
   try { chmodSync(STORE_PATH, 0o600); } catch {}
+  clearTokenCache();
 }
 
 export function deleteProvider(id: string): void {
@@ -52,6 +56,7 @@ export function deleteProvider(id: string): void {
   if (!existsSync(STORE_PATH)) return;
   writeFileSync(STORE_PATH, JSON.stringify({ providers: all }, null, 2), "utf-8");
   try { chmodSync(STORE_PATH, 0o600); } catch {}
+  clearTokenCache();
 }
 
 function isValidProvider(p: any): p is ProviderConfig {
@@ -80,7 +85,13 @@ export function envFor(p: ProviderConfig): Record<string, string> {
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) base[k] = v;
   base.ANTHROPIC_BASE_URL = p.baseURL;
-  base.ANTHROPIC_AUTH_TOKEN = key;
+
+  if (p.useJWT) {
+    base.ANTHROPIC_AUTH_TOKEN = getBearerToken(p.id, p.model, key, p.baseURL);
+  } else {
+    base.ANTHROPIC_AUTH_TOKEN = key;
+  }
+
   delete base.ANTHROPIC_API_KEY;
   return base;
 }
@@ -176,12 +187,20 @@ async function promptNewProvider(): Promise<ProviderConfig | null> {
     if (!process.env[envName]) {
       console.log(chalk.yellow(`\n  ⚠ ${envName} is not set in the current shell  -- you'll need to export it before running.`));
     }
-    return { id, displayName, baseURL, model, keyEnv: envName };
+    const useJWT = await select(`  ${chalk.cyan("Auth method")}:`, [
+      { name: "JWT tokens", value: "jwt", hint: "short-lived tokens, raw keys never passed to agents" },
+      { name: "Raw API key", value: "raw", hint: "key sent directly with every request" },
+    ]);
+    return { id, displayName, baseURL, model, keyEnv: envName, useJWT: useJWT === "jwt" };
   }
 
   const key = await ask(`\n  ${chalk.cyan("API key")}: `);
   if (!key) return null;
-  return { id, displayName, baseURL, model, key };
+  const useJWT = await select(`  ${chalk.cyan("Auth method")}:`, [
+    { name: "JWT tokens", value: "jwt", hint: "short-lived tokens, raw keys never passed to agents" },
+    { name: "Raw API key", value: "raw", hint: "key sent directly with every request" },
+  ]);
+  return { id, displayName, baseURL, model, key, useJWT: useJWT === "jwt" };
 }
 
 function slugify(s: string): string {

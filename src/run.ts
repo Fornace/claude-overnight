@@ -13,7 +13,8 @@ import type { LiveConfig, RunInfo, SteeringContext } from "./ui.js";
 import type { PlannerLog } from "./planner-query.js";
 import { renderSummary } from "./render.js";
 import { fmtTokens } from "./render.js";
-import { isAuthError, selectKey, ask } from "./cli.js";
+import { isJWTAuthError } from "./auth.js";
+import { selectKey, ask } from "./cli.js";
 import {
   readRunMemory, writeStatus, writeGoalUpdate, saveRunState,
   saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone,
@@ -396,7 +397,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     display.resume();
     try { await swarm.run(); }
     catch (err: unknown) {
-      if (isAuthError(err)) { display.stop(); restore(); console.error(chalk.red(`\n  Authentication failed  -- check your API key or run: claude auth\n`)); process.exit(1); }
+      if (isJWTAuthError(err)) { display.stop(); restore(); console.error(chalk.red(`\n  Authentication failed  -- check your API key or run: claude auth\n`)); process.exit(1); }
       // Swarm crashed mid-execution  -- save partial results before propagating.
       // The pre-swarm saveRunState already preserved currentTasks for resume.
       // Also save the wave session with whatever agents completed.

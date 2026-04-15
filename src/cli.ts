@@ -29,14 +29,13 @@ export function parseCliFlags(argv: string[]) {
   return { flags, positional };
 }
 
-// ── Auth error detection ──
+// ── Auth error detection (re-exported from auth module for backward compatibility) ──
 
-const AUTH_PATTERNS = ["unauthorized", "forbidden", "invalid_api_key", "authentication"];
+import { isJWTAuthError } from "./auth.js";
 
-export function isAuthError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return AUTH_PATTERNS.some((p) => msg.toLowerCase().includes(p));
-}
+/** @deprecated Use isJWTAuthError from auth.ts instead. */
+export const isAuthError = isJWTAuthError;
+export { isJWTAuthError };
 
 // ── Fetch models via SDK ──
 
