@@ -675,9 +675,15 @@ async function main() {
       await ensureCursorProxyRunning();
     }
 
-    process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}...`)}\n`);
+    process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}…`)}\n`);
     const results = await Promise.all(
-      pending.map(async ([role, p]) => ({ role, provider: p, result: await preflightProvider(p, cwd) })),
+      pending.map(async ([role, p]) => ({
+        role,
+        provider: p,
+        result: await preflightProvider(p, cwd, 20_000, {
+          onProgress: (msg) => process.stdout.write(chalk.dim(`    ${msg}\n`)),
+        }),
+      })),
     );
     for (const { role, provider, result } of results) {
       if (!result.ok) {

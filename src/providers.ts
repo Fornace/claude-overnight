@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync } from "fs";
+import { createRequire } from "node:module";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { execSync, spawn } from "child_process";
@@ -14,6 +15,19 @@ import {
   KNOWN_CURSOR_MODEL_IDS,
   cursorModelHint,
 } from "./cursor-models.js";
+
+/** Run the installed package CLI with `node` (avoids npx/npm invoking extra tooling on macOS). */
+function resolveCursorComposerCli(): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkgJson = require.resolve("cursor-composer-in-claude/package.json");
+    const root = dirname(pkgJson);
+    const cli = join(root, "dist", "cli.js");
+    return existsSync(cli) ? cli : null;
+  } catch {
+    return null;
+  }
+}
 
 // ── Types ──
 
@@ -250,9 +264,22 @@ function normalizeBaseURL(raw: string): string {
  * if the key is wrong or the endpoint is unreachable. Timeout is aggressive
  * so misconfig doesn't delay the main run.
  */
-export async function preflightProvider(p: ProviderConfig, cwd: string, timeoutMs = 20_000): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function preflightProvider(
+  p: ProviderConfig,
+  cwd: string,
+  timeoutMs = 20_000,
+  opts?: { onProgress?: (msg: string) => void },
+): Promise<{ ok: true } | { ok: false; error: string }> {
   let env: Record<string, string>;
   try { env = envFor(p); } catch (err: any) { return { ok: false, error: err.message }; }
+
+  // Show what we're checking
+  const keyInfo = p.cursorProxy
+    ? `proxy auth`
+    : p.keyEnv
+      ? `env ${p.keyEnv}`
+      : "stored key";
+  opts?.onProgress?.(`checking ${p.model} (${keyInfo})…`);
 
   let pq: ReturnType<typeof query> | undefined;
   try {
@@ -269,19 +296,31 @@ export async function preflightProvider(p: ProviderConfig, cwd: string, timeoutM
       },
     });
     const stream = pq;
+
+    // Progress ticker during the wait
+    let elapsed = 0;
+    const PROGRESS_INTERVAL_MS = 3_000;
+    const progressTimer = setInterval(() => {
+      elapsed += PROGRESS_INTERVAL_MS;
+      opts?.onProgress?.(`still waiting… (${(elapsed / 1000).toFixed(1)}s)`);
+    }, PROGRESS_INTERVAL_MS);
+
     const consume = (async (): Promise<{ ok: true } | { ok: false; error: string }> => {
       for await (const msg of stream) {
         if (msg.type === "result") {
+          clearInterval(progressTimer);
           if ((msg as any).subtype !== "success") {
             return { ok: false, error: String((msg as any).result || (msg as any).subtype || "unknown error").slice(0, 200) };
           }
           return { ok: true };
         }
       }
+      clearInterval(progressTimer);
       return { ok: false, error: "no result received" };
     })();
     const timeout = new Promise<{ ok: false; error: string }>((resolve) => {
       setTimeout(() => {
+        clearInterval(progressTimer);
         try { stream.interrupt().catch(() => stream.close()); } catch {}
         resolve({ ok: false, error: `timeout after ${Math.round(timeoutMs / 1000)}s` });
       }, timeoutMs);
@@ -522,23 +561,59 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     }
   } catch {}
 
+  // Resolve the API key source for logging
+  const apiKeyEnv = process.env.CURSOR_BRIDGE_API_KEY;
+  const apiKeyStored = loadProviders().find(p => p.cursorProxy)?.cursorApiKey;
+  const keySource = apiKeyEnv ? "env CURSOR_BRIDGE_API_KEY" : (apiKeyStored ? "providers.json (stored)" : "none — using 'unused'");
+
+  // Log the installed proxy version
+  let proxyVersion = "unknown";
+  try {
+    const pkgPath = execSync("node -e \"try{console.log(require('cursor-composer-in-claude/package.json').version)}catch(e){}\" 2>/dev/null", {
+      timeout: 3_000, encoding: "utf-8", shell: "bash",
+    }).trim();
+    if (pkgPath) proxyVersion = pkgPath;
+  } catch {
+    // Fallback: try resolving from npx cache location
+    try {
+      const out = execSync("npm ls cursor-composer-in-claude --depth=0 2>/dev/null | grep cursor-composer", {
+        timeout: 5_000, encoding: "utf-8", shell: "bash",
+      }).trim();
+      const verMatch = out.match(/@(\d+\.\d+\.\d+)/);
+      if (verMatch) proxyVersion = verMatch[1];
+    } catch {}
+  }
+
+  console.log(chalk.dim(`  cursor-composer-in-claude v${proxyVersion}`));
+  console.log(chalk.dim(`  API key: ${keySource}`));
+  console.log(chalk.dim(`  CI=true (skips Cursor agent keychain probe on startup)`));
+  console.log(chalk.dim(`  CURSOR_SKIP_KEYCHAIN=1 (proxy-side keychain access disabled)`));
+  if (sysNode) console.log(chalk.dim(`  System node: ${sysNode}`));
+  if (agentJs) console.log(chalk.dim(`  Agent script: ${agentJs}`));
+
+  const composerCli = resolveCursorComposerCli();
+  if (!composerCli) {
+    console.log(chalk.yellow(`  ⚠ cursor-composer-in-claude is not installed (missing from node_modules). Run: npm install`));
+    return false;
+  }
+  console.log(chalk.dim(`  Command: ${process.execPath} ${composerCli}`));
+
   const proxyEnv: Record<string, string> = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([, v]) => v !== undefined)
     ) as Record<string, string>,
-    CURSOR_BRIDGE_API_KEY: process.env.CURSOR_BRIDGE_API_KEY
-      || loadProviders().find(p => p.cursorProxy)?.cursorApiKey
-      || "unused",
+    CI: "true",
+    CURSOR_BRIDGE_API_KEY: apiKeyEnv || apiKeyStored || "unused",
     CURSOR_SKIP_KEYCHAIN: "1",
   };
   if (sysNode && agentJs) {
     proxyEnv.CURSOR_AGENT_NODE = sysNode;
     proxyEnv.CURSOR_AGENT_SCRIPT = agentJs;
-    console.log(chalk.dim(`  Using system node for agent subprocess: ${sysNode}`));
   }
 
   try {
-    const child = spawn("npx", ["cursor-composer-in-claude"], {
+    console.log(chalk.dim(`  Spawning proxy…`));
+    const child = spawn(process.execPath, [composerCli], {
       detached: true,
       stdio: "ignore",
       env: proxyEnv,
@@ -546,16 +621,23 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
 
     child.unref(); // let it outlive this process
 
-    // Wait up to 15s for the proxy to become healthy
-    for (let i = 0; i < 30; i++) {
-      await new Promise(r => setTimeout(r, 500));
+    // Wait up to 15s for the proxy to become healthy, showing progress
+    const HEALTH_POLL_MS = 500;
+    const HEALTH_MAX_POLLS = 30;
+    for (let i = 0; i < HEALTH_MAX_POLLS; i++) {
+      await new Promise(r => setTimeout(r, HEALTH_POLL_MS));
+      const elapsed = ((i + 1) * HEALTH_POLL_MS / 1000).toFixed(1);
       if (await healthCheckCursorProxy(baseUrl)) {
-        console.log(chalk.green(`  ✓ Proxy started (PID ${child.pid}) and healthy`));
+        console.log(chalk.green(`  ✓ Proxy started (PID ${child.pid}) and healthy after ${elapsed}s`));
         return true;
+      }
+      // Show a dot every 2s to indicate we're still waiting
+      if ((i + 1) % 4 === 0) {
+        process.stdout.write(chalk.dim(`  · still waiting… (${elapsed}s)\n`));
       }
     }
 
-    console.log(chalk.yellow(`  ⚠ Proxy process spawned but not responding after 15s`));
+    console.log(chalk.yellow(`  ⚠ Proxy process spawned (PID ${child.pid}) but not responding after 15s`));
     console.log(chalk.dim(`  It may still be initializing. You can check with: curl ${baseUrl}/health`));
     return false;
   } catch (err: any) {
