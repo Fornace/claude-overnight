@@ -467,91 +467,84 @@ export async function setupCursorProxy(): Promise<boolean> {
 
   const steps = setupSteps();
 
-  for (const step of steps) {
-    if (step.check()) {
-      console.log(chalk.green(`  ✓ ${step.successMsg}`));
-      continue;
-    }
-
-    console.log(chalk.yellow(`\n  ${step.label} not found`));
-    const choice = await selectKey(`  Set up ${step.label}:`, [
+  // ── Step 1: Cursor CLI ──
+  const cliStep = steps[0];
+  if (cliStep.check()) {
+    console.log(chalk.green(`  ✓ ${cliStep.successMsg}`));
+  } else {
+    console.log(chalk.yellow(`\n  ${cliStep.label} not found`));
+    const choice = await selectKey(`  Set up ${cliStep.label}:`, [
       { key: "a", desc: "uto (run command)" },
       { key: "m", desc: "anual (show command)" },
       { key: "s", desc: "kip (I'll handle it)" },
     ]);
-
     if (choice === "a") {
-      if (step.label === "Cursor API key") {
-        if (await promptAndSaveCursorKey()) {
-          console.log(chalk.green(`  ✓ ${step.successMsg}`));
-        }
-      } else if (step.label === "cursor-api-proxy server") {
-        // Don't auto-start the proxy server here — it blocks. Just verify it's installable.
-        console.log(chalk.dim(`  Install check: ${step.autoCmd} --help`));
-        try {
-          execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 30_000 });
-          console.log(chalk.green(`  ✓ cursor-api-proxy installed`));
-          console.log(chalk.yellow(`  → Start it in another terminal: ${chalk.bold("npx cursor-api-proxy")}`));
-          const ready = await selectKey(`  Is the proxy running now?`, [
-            { key: "y", desc: "es" },
-            { key: "n", desc: "ot yet" },
-          ]);
-          if (ready === "y") {
-            if (await healthCheckCursorProxy()) {
-              console.log(chalk.green(`  ✓ Proxy connected`));
-              return true;
-            }
-          }
-        } catch {
-          console.log(chalk.red("  cursor-api-proxy not installed. Install with: npm install -g cursor-api-proxy"));
-        }
-      } else {
-        console.log(chalk.dim(`  Running: ${step.autoCmd}`));
-        try {
-          execSync(step.autoCmd, { stdio: "inherit", timeout: 60_000 });
-          console.log(chalk.green(`  ✓ ${step.successMsg}`));
-        } catch {
-          console.log(chalk.yellow("  Command failed — try manual mode"));
-        }
+      console.log(chalk.dim(`  Running: ${cliStep.autoCmd}`));
+      try {
+        execSync(cliStep.autoCmd, { stdio: "inherit", timeout: 60_000 });
+        console.log(chalk.green(`  ✓ ${cliStep.successMsg}`));
+      } catch {
+        console.log(chalk.yellow("  Command failed — try manual mode"));
       }
     } else if (choice === "m") {
-      if (step.label === "Cursor API key") {
-        console.log(chalk.cyan(`\n  1. Open: https://cursor.com/dashboard/integrations`));
-        console.log(chalk.cyan(`  2. Scroll to "API Keys" at the bottom of the page`));
-        console.log(chalk.cyan(`  3. Copy your API key and paste it below\n`));
-        if (await promptAndSaveCursorKey()) {
-          console.log(chalk.green(`  ✓ ${step.successMsg}`));
-        }
-      } else {
-        console.log(chalk.cyan(`\n  Run this command:`));
-        console.log(chalk.white(`    ${step.manualCmd}`));
-        if (step.label === "cursor-api-proxy server") {
-          console.log(chalk.yellow(`    Then start the proxy: ${chalk.bold("npx cursor-api-proxy")}`));
-        }
-      }
-      console.log();
-      const done = await selectKey(`  Done?`, [
-        { key: "y", desc: "es" },
-        { key: "n", desc: "ot yet" },
-      ]);
-      if (done === "y" && step.label === "cursor-api-proxy server") {
-        if (await healthCheckCursorProxy()) {
-          console.log(chalk.green(`  ✓ Proxy connected`));
-          return true;
-        }
-      }
+      console.log(chalk.cyan(`\n  Run this command:`));
+      console.log(chalk.white(`    ${cliStep.manualCmd}\n`));
     } else {
-      console.log(chalk.dim(`  Skipped: ${step.label}`));
+      console.log(chalk.dim(`  Skipped: ${cliStep.label}`));
     }
   }
 
-  // Final health check
-  if (await healthCheckCursorProxy()) {
-    console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
-    return true;
+  // ── Step 2: API key ──
+  const keyStep = steps[1];
+  if (keyStep.check()) {
+    console.log(chalk.green(`  ✓ ${keyStep.successMsg}`));
+  } else {
+    console.log(chalk.yellow(`\n  ${keyStep.label} not configured`));
+    console.log(chalk.cyan(`  1. Open: https://cursor.com/dashboard/integrations`));
+    console.log(chalk.cyan(`  2. Scroll to "API Keys" at the bottom of the page`));
+    console.log(chalk.cyan(`  3. Copy your API key and paste it below\n`));
+    if (await promptAndSaveCursorKey()) {
+      console.log(chalk.green(`  ✓ ${keyStep.successMsg}`));
+    } else {
+      console.log(chalk.yellow("  No API key — the proxy won't authenticate without one."));
+    }
   }
-  console.log(chalk.yellow("\n  Proxy not reachable yet. You can start it later and add it via 'Cursor' in the model picker."));
-  return false;
+
+  // ── Step 3: Proxy server ──
+  const proxyStep = steps[2];
+  if (proxyStep.check()) {
+    console.log(chalk.green(`  ✓ ${proxyStep.successMsg}`));
+  } else {
+    console.log(chalk.yellow(`\n  ${proxyStep.label} not found`));
+    console.log(chalk.dim(`  Install check:`));
+    try {
+      execSync("npx cursor-api-proxy --help", { stdio: "pipe", timeout: 15_000 });
+      console.log(chalk.green(`  ✓ cursor-api-proxy is installed`));
+    } catch {
+      console.log(chalk.cyan(`    ${chalk.white("Install with:")} ${chalk.bold("npm install -g cursor-api-proxy")}`));
+    }
+  }
+
+  // Wait for the proxy to be reachable (retry loop)
+  for (;;) {
+    if (await healthCheckCursorProxy()) {
+      console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
+      return true;
+    }
+
+    console.log(chalk.yellow(`\n  Proxy not reachable at ${PROXY_DEFAULT_URL}`));
+    console.log(chalk.dim(`  Make sure it's started in another terminal:`));
+    console.log(chalk.white(`    ${chalk.bold("npx cursor-api-proxy")}`));
+
+    const choice = await selectKey(`  Ready to check again?`, [
+      { key: "r", desc: "etry" },
+      { key: "c", desc: "ancel" },
+    ]);
+    if (choice === "c") {
+      console.log(chalk.dim("\n  No worries — start the proxy later and pick 'Cursor' in the model picker."));
+      return false;
+    }
+  }
 }
 
 // ── Cursor model picker sub-flow ──
