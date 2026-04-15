@@ -392,15 +392,23 @@ export class Swarm {
       const cap = this.usageCap;
       const capExceeded = cap != null && cap < 1 && this.rateLimitUtilization >= cap;
       const rejected = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now();
-      if (!capExceeded && !rejected) break;
+      // Proactive: check per-window rejections even when rateLimitResetsAt isn't set
+      const windowRejected = this.windowRejectedReset();
+      // Proactive: near-critical utilization (no cap set but API is clearly strained)
+      const nearCritical = cap == null && this.rateLimitUtilization >= 0.95;
+      if (!capExceeded && !rejected && !windowRejected && !nearCritical) break;
 
       const fallbackMs = Math.min(300_000, 60_000 * (1 + consecutiveWaits * 2));
-      const waitMs = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now()
-        ? Math.max(5000, this.rateLimitResetsAt - Date.now())
-        : fallbackMs;
+      const waitMs = (rejected || windowRejected)
+        ? Math.max(5000, (windowRejected ?? this.rateLimitResetsAt!) - Date.now())
+        : nearCritical
+          ? 30_000 * (1 + consecutiveWaits)
+          : fallbackMs;
       const reason = capExceeded
         ? `Usage at ${Math.round(this.rateLimitUtilization * 100)}% (cap ${Math.round(cap! * 100)}%)`
-        : `Rate limited${this.windowTag()}`;
+        : nearCritical
+          ? `Near-critical utilization ${Math.round(this.rateLimitUtilization * 100)}%`
+          : `Rate limited${this.windowTag()}`;
       this.log(-1, `${reason}  -- waiting ${Math.ceil(waitMs / 1000)}s then retrying ([r] to retry now)`);
       this.rateLimitPaused++;
       await this.rateLimitSleep(waitMs);
@@ -411,6 +419,17 @@ export class Swarm {
       this.checkStall();
       if (this.aborted || this.cappedOut) return;
     }
+  }
+
+  /** Returns the nearest future resetsAt from any rejected window, or undefined. */
+  private windowRejectedReset(): number | undefined {
+    let nearest: number | undefined;
+    for (const w of this.rateLimitWindows.values()) {
+      if (w.status === "rejected" && w.resetsAt && w.resetsAt > Date.now()) {
+        if (!nearest || w.resetsAt < nearest) nearest = w.resetsAt;
+      }
+    }
+    return nearest;
   }
 
   // ── Agent execution ──

@@ -82,6 +82,54 @@ let _plannerRateLimitInfo: PlannerRateLimitInfo = {
 };
 export function getPlannerRateLimitInfo(): PlannerRateLimitInfo { return _plannerRateLimitInfo; }
 
+// ── Proactive throttle: wait before making API calls when utilization is high ──
+
+/**
+ * Proactive rate-limit gate. Called before each planner/steering query to
+ * prevent hammering the API when we're already near a limit.
+ *
+ * Levels:
+ *   - rejected -> wait until resetsAt (or 60s fallback)
+ *   - utilization >= 90% -> wait 30s with exponential backoff
+ *   - utilization >= 75% -> brief 5s cooldown
+ *   - utilization < 75% -> pass through immediately
+ */
+async function throttlePlanner(
+  onLog: PlannerLog,
+  aborted: () => boolean,
+): Promise<void> {
+  const MAX_BACKOFF = 3;
+  for (let backoff = 0; backoff <= MAX_BACKOFF; backoff++) {
+    if (aborted()) return;
+
+    const rl = _plannerRateLimitInfo;
+    const rejected = rl.resetsAt && rl.resetsAt > Date.now();
+    const highUtil = rl.utilization >= 0.9;
+    const elevatedUtil = rl.utilization >= 0.75;
+
+    if (!rejected && !highUtil && !elevatedUtil) return;
+
+    const waitMs = rejected
+      ? Math.max(5000, rl.resetsAt! - Date.now())
+      : highUtil
+        ? 30_000 * (1 + backoff)
+        : 5000;
+
+    const reason = rejected ? "Rate limited" : `Utilization ${Math.round(rl.utilization * 100)}%`;
+    onLog(`${reason}  -- waiting ${Math.ceil(waitMs / 1000)}s before query${backoff > 0 ? ` (backoff ${backoff})` : ""}`, "event");
+    await new Promise((r) => setTimeout(r, waitMs));
+
+    if (aborted()) return;
+    // After a wait, clear the rejected flag so we don't loop forever if
+    // the SDK stopped sending updates.
+    if (rejected && rl.resetsAt && rl.resetsAt <= Date.now()) {
+      rl.resetsAt = undefined;
+      rl.utilization = 0;
+    }
+  }
+  // Exhausted backoffs — proceed anyway, the retry loop will catch a rejection.
+}
+
 // ── Query execution ──
 
 const NUDGE_MS = 15 * 60 * 1000;
@@ -98,8 +146,11 @@ export async function runPlannerQuery(
 
   let currentPrompt = prompt;
   let currentOpts = opts;
+  let aborted = false;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
+      // Proactive throttle: wait if utilization is already high
+      await throttlePlanner(onLog, () => aborted);
       return await runPlannerQueryOnce(currentPrompt, currentOpts, onLog);
     } catch (err: any) {
       if (err instanceof NudgeError) {
@@ -121,6 +172,7 @@ export async function runPlannerQuery(
       throw err;
     }
   }
+  aborted = true;
   throw new Error("Planner query failed after retries");
 }
 
