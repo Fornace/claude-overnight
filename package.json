@@ -1,7 +1,7 @@
 {
   "name": "claude-overnight",
-  "version": "1.17.3",
-  "description": "Background lane for your Claude Max plan. Parallel Claude Agent SDK sessions in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Opus/Sonnet/Haiku + Cursor API Proxy + Qwen/OpenRouter.",
+  "version": "1.18.0",
+  "description": "Background lane for your Claude Max plan. Parallel Claude Agent SDK sessions in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Provider-agnostic model catalog with capability-based planning.",
   "type": "module",
   "bin": {
     "claude-overnight": "dist/bin.js"

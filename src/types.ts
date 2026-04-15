@@ -6,7 +6,7 @@ export interface Task {
   prompt: string;
   /** Working directory the agent operates in; defaults to the swarm's cwd. */
   cwd?: string;
-  /** Claude model override for this specific task (e.g. "sonnet", "opus"). */
+  /** Model override for this specific task (resolved via provider config). */
   model?: string;
   /** When true, skip worktree isolation  -- run in the real project directory with env files, dependencies, and local config. */
   noWorktree?: boolean;

@@ -1,12 +1,19 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { ask, select, selectKey } from "./cli.js";
 import { getBearerToken, clearTokenCache } from "./auth.js";
+import { DEFAULT_MODEL } from "./models.js";
+import {
+  CURSOR_PRIORITY_MODELS,
+  CURSOR_KNOWN_MODELS,
+  KNOWN_CURSOR_MODEL_IDS,
+  cursorModelHint,
+} from "./cursor-models.js";
 
 // ── Types ──
 
@@ -140,8 +147,8 @@ export async function pickModel(
     // entry so the user isn't trapped if they cancel the Other… form.
     if (anthropicModels.length === 0) {
       items.push({
-        name: "claude-sonnet-4-6",
-        value: { kind: "anthropic", model: { value: "claude-sonnet-4-6", displayName: "claude-sonnet-4-6", description: "default (model list unavailable)" } as ModelInfo },
+        name: DEFAULT_MODEL,
+        value: { kind: "anthropic", model: { value: DEFAULT_MODEL, displayName: DEFAULT_MODEL, description: "default (model list unavailable)" } as ModelInfo },
         hint: "default  -- Anthropic model list unavailable",
       });
     }
@@ -326,21 +333,45 @@ export async function fetchCursorModels(baseUrl = PROXY_DEFAULT_URL): Promise<st
 }
 
 /**
- * Known Cursor model recommendations — short hints to guide users.
+ * Try to fetch live Cursor model IDs. Falls back to an empty array — the
+ * caller merges with known constants, so the picker always has content.
+ *
+ * NOTE: `agent --list-models` segfaults with its bundled Node.js binary
+ * (exit 139). We work around this by running with the system `node` instead.
  */
-const CURSOR_MODEL_HINTS: Record<string, string> = {
-  "auto": "fast — delegates to best available model",
-  "composer": "Cursor Composer — good for focused tasks",
-  "composer-2": "Cursor Composer 2 — latest, strongest Cursor model",
-};
+async function fetchLiveCursorModels(): Promise<string[]> {
+  // Try the proxy first (works when the bundled node doesn't crash)
+  const proxyModels = await fetchCursorModels();
+  if (proxyModels.length > 0) return proxyModels;
 
-function cursorModelHint(modelId: string): string {
-  const m = modelId.toLowerCase();
-  if (CURSOR_MODEL_HINTS[m]) return CURSOR_MODEL_HINTS[m];
-  if (m.includes("opus")) return "Opus-tier Cursor model";
-  if (m.includes("sonnet")) return "Sonnet-tier Cursor model";
-  if (m.includes("haiku")) return "Haiku-tier Cursor model (fast)";
-  return "Cursor model";
+  // Fallback: run the cursor-agent CLI with system node
+  // Find the agent binary via command -v (alias-safe), then locate its index.js.
+  try {
+    // command -v handles symlinks and doesn't expand shell aliases
+    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
+      timeout: 3_000, encoding: "utf-8", shell: "bash",
+    }).trim();
+    if (!agentPath) return [];
+
+    // Resolve the directory (realpathSync handles symlinks like agent → cursor-agent)
+    const dir = dirname(realpathSync(agentPath));
+    // The bundled index.js lives in the same directory as the agent script
+    const indexPath = `${dir}/index.js`;
+    const raw = execSync(`node "${indexPath}" --list-models 2>/dev/null`, {
+      timeout: 10_000, encoding: "utf-8",
+    });
+    // Strip ANSI escape codes (cursor uses \x1B[2K\r etc.)
+    const out = raw.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+    // Parse lines like "composer-2-fast - Composer 2 Fast"
+    const ids: string[] = [];
+    for (const line of out.split("\n")) {
+      const match = line.match(/^([A-Za-z0-9][A-Za-z0-9._:/-]*)\s+-\s+/);
+      if (match) ids.push(match[1]);
+    }
+    return ids;
+  } catch {}
+
+  return [];
 }
 
 // ── Cursor Proxy Setup Guide ──
@@ -525,6 +556,43 @@ export async function setupCursorProxy(): Promise<boolean> {
 
 // ── Cursor model picker sub-flow ──
 
+interface CursorPickerItem {
+  id: string;
+  name: string;
+  hint: string;
+}
+
+/**
+ * Build the full list of cursor model picker items. Priority models go first,
+ * then known models, then any extra live models we fetched. If there are more
+ * than a handful extras, they get a "more..." sub-menu.
+ */
+async function buildCursorPicker(): Promise<{ top: CursorPickerItem[]; more: CursorPickerItem[] }> {
+  const liveIds = await fetchLiveCursorModels();
+  const extra = new Set<string>();
+  for (const id of liveIds) {
+    if (!KNOWN_CURSOR_MODEL_IDS.has(id)) extra.add(id);
+  }
+
+  const top: CursorPickerItem[] = [
+    ...CURSOR_PRIORITY_MODELS.map(m => ({ id: m.id, name: m.label, hint: m.hint })),
+    ...CURSOR_KNOWN_MODELS.map(m => ({ id: m.id, name: m.label, hint: m.hint })),
+  ];
+
+  // Only a few extras? show them inline. Otherwise defer to "more...".
+  const MORE_THRESHOLD = 6;
+  const more: CursorPickerItem[] = [...extra].sort().map(id => ({
+    id,
+    name: id,
+    hint: cursorModelHint(id),
+  }));
+
+  if (more.length <= MORE_THRESHOLD) {
+    return { top: [...top, ...more], more: [] };
+  }
+  return { top, more };
+}
+
 async function pickCursorModel(): Promise<ModelPick | null> {
   console.log(chalk.dim("\n  Cursor API Proxy Models"));
   console.log(chalk.dim("  " + "─".repeat(40)));
@@ -556,32 +624,45 @@ async function pickCursorModel(): Promise<ModelPick | null> {
     }
   }
 
-  // Fetch live models
-  const modelIds = await fetchCursorModels();
-  if (modelIds.length === 0) {
-    console.log(chalk.yellow("  No models returned from proxy"));
-    return null;
+  const { top, more } = await buildCursorPicker();
+
+  // If there are more models available, add a "more…" entry
+  const items: Array<{ name: string; value: string; hint?: string }> = top.map(m => ({
+    name: m.name,
+    value: m.id,
+    hint: m.hint,
+  }));
+
+  let hasMore = more.length > 0;
+  if (hasMore) {
+    items.push({ name: chalk.gray("more…"), value: "__more__", hint: `${more.length} additional models` });
   }
 
-  const picked = await select("  Select a Cursor model:", modelIds.map(id => ({
-    name: id,
-    value: id,
-    hint: cursorModelHint(id),
-  })), 0);
+  const picked = await select("  Select a Cursor model:", items, 0);
 
+  // Handle "more…" sub-menu
+  if (picked === "__more__") {
+    const moreItems = more.map(m => ({ name: m.name, value: m.id, hint: m.hint }));
+    const morePicked = await select("  More Cursor models:", moreItems, 0);
+    return saveCursorPick(morePicked);
+  }
+
+  return saveCursorPick(picked);
+}
+
+function saveCursorPick(modelId: string): ModelPick {
   const existingKey = loadProviders().find(p => p.id === CURSOR_KEY_PROVIDER_ID)?.cursorApiKey;
   const provider: ProviderConfig = {
-    id: `cursor-${picked}`,
-    displayName: `Cursor: ${picked}`,
+    id: `cursor-${modelId}`,
+    displayName: `Cursor: ${modelId}`,
     baseURL: PROXY_DEFAULT_URL,
-    model: picked,
+    model: modelId,
     cursorProxy: true,
     ...(existingKey ? { cursorApiKey: existingKey } : {}),
   };
   saveProvider(provider);
   console.log(chalk.green(`  ✓ Saved as provider: ${provider.displayName}`));
-
-  return { model: picked, providerId: provider.id, provider };
+  return { model: modelId, providerId: provider.id, provider };
 }
 
 // ── Env resolver for planner/executor roles ──

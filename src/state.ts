@@ -4,6 +4,7 @@ import { join } from "path";
 import chalk from "chalk";
 import type { Task, RunState, BranchRecord, AgentState, RunMemory, WaveSummary } from "./types.js";
 import { forceMergeOverlay } from "./merge.js";
+import { FALLBACK_MODEL } from "./models.js";
 
 // ── File I/O helpers ──
 
@@ -250,7 +251,7 @@ export function backfillOrphanedPlans(rootDir: string, filterCwd: string): numbe
           id: d,
           objective: `(recovered pre-1.11.7 plan · ${taskCount} tasks)`,
           budget: taskCount, remaining: taskCount,
-          workerModel: "claude-opus-4-6", plannerModel: "claude-opus-4-6",
+          workerModel: FALLBACK_MODEL, plannerModel: FALLBACK_MODEL,
           concurrency: 5, permissionMode: "bypassPermissions",
           flex: false, useWorktrees: true, mergeStrategy: "yolo",
           allowExtraUsage: false,

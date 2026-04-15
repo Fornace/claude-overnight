@@ -9,7 +9,8 @@ const VERSION = pkg.version as string;
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
-import { detectModelTier, setPlannerEnvResolver } from "./planner-query.js";
+import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
+import { setPlannerEnvResolver } from "./planner-query.js";
 import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider } from "./providers.js";
 import type { ProviderConfig } from "./providers.js";
 import { RunDisplay } from "./ui.js";
@@ -77,7 +78,6 @@ async function promptResumeOverrides(
 
   // ── Interactive review ──
   const fmtSummary = () => {
-    const tier = detectModelTier(state.workerModel);
     const remaining = Math.max(1, state.remaining);
     const capStr = state.usageCap != null ? `${Math.round(state.usageCap * 100)}%` : "unlimited";
     const extraStr = state.allowExtraUsage
@@ -86,7 +86,7 @@ async function promptResumeOverrides(
     console.log();
     console.log(`  ${chalk.dim("Resume settings")}`);
     console.log(`  ${chalk.dim("─".repeat(40))}`);
-    console.log(`  ${chalk.dim("model      ")}${chalk.white(state.workerModel)} ${chalk.dim(`(${tier})`)}`);
+    console.log(`  ${chalk.dim("model      ")}${chalk.white(state.workerModel)} ${chalk.dim(`(${formatContextWindow(state.workerModel)} context)`)}`);
     console.log(`  ${chalk.dim("remaining  ")}${chalk.white(String(remaining))} ${chalk.dim("sessions")}`);
     console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
     console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
@@ -561,9 +561,9 @@ async function main() {
     }
 
     const parts: string[] = [];
-    if (fastModel) parts.push(`${detectModelTier(plannerModel)} → ${detectModelTier(workerModel)} + ${detectModelTier(fastModel)}`);
-    else if (workerModel !== plannerModel) parts.push(`${detectModelTier(workerModel)} → ${detectModelTier(plannerModel)}`);
-    else parts.push(detectModelTier(workerModel));
+    if (fastModel) parts.push(`${modelDisplayName(plannerModel)} → ${modelDisplayName(workerModel)} + ${modelDisplayName(fastModel)}`);
+    else if (workerModel !== plannerModel) parts.push(`${modelDisplayName(workerModel)} → ${modelDisplayName(plannerModel)}`);
+    else parts.push(modelDisplayName(workerModel));
     parts.push(`budget ${budget}`, `${concurrency}×`);
     if (budget > 2) parts.push("flex");
     if (usageCap != null) parts.push(`cap ${Math.round(usageCap * 100)}%`);
@@ -590,7 +590,7 @@ async function main() {
     const defaultModel = activeProvider?.model
       ?? models[0]?.value
       ?? savedForCLI.find(p => p !== activeProvider)?.model
-      ?? "claude-sonnet-4-6";
+      ?? DEFAULT_MODEL;
     workerModel = cliFlags.model ?? fileCfg?.model ?? defaultModel;
     plannerModel = activeProvider?.model ?? models[0]?.value ?? workerModel;
     // Auto-resolve a saved custom provider if --model matches its id or model id.

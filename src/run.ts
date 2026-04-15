@@ -522,9 +522,12 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   // Post-run final review: comprehensive review of the entire diff before shipping.
   if (flex && remaining > 0 && waveNum > 0) {
     const finalReview = await runPostRunReview(
-      objective || "", cwd, plannerModel, permissionMode,
-      remaining, usageCap, cfg.allowExtraUsage, cfg.extraUsageBudget,
-      accCost, envForModel, waveMerge, useWorktrees,
+      objective || "", {
+        cwd, plannerModel, permissionMode, concurrency,
+        remaining, usageCap, allowExtraUsage: cfg.allowExtraUsage,
+        extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: accCost,
+        envForModel, mergeStrategy: waveMerge, useWorktrees,
+      },
     );
     if (finalReview) {
       accCost += finalReview.costUsd;
@@ -614,7 +617,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   if (lastAborted || accCompleted === 0) process.exit(2);
 }
 
-// ── Post-wave review: a single review agent inspects the consolidated diff ──
+// ── Review helpers: post-wave and post-run quality gates ──
 
 interface ReviewOpts {
   cwd: string;
@@ -639,122 +642,61 @@ interface ReviewResult {
   failed: number;
 }
 
-const POST_WAVE_REVIEW_PROMPT = `You are reviewing all changes made in the most recent wave of agent work.
-
-Run \`git diff\` to see what changed. Review for:
-
-1. **Missed reuse**: Did any agent write something that already exists elsewhere? Find existing utilities and suggest replacements.
+function reviewPrompt(scope: "wave" | "run", objective?: string): string {
+  const scopeLine = scope === "wave"
+    ? "You are reviewing all changes made in the most recent wave of agent work."
+    : `You are the final quality gate before this autonomous run completes.\n\nThe objective was: ${objective || "improve the codebase"}`;
+  const diffCmd = scope === "wave"
+    ? "Run `git diff` to see what changed."
+    : "Run `git diff main` (or `git diff HEAD` if on the same branch) to see ALL changes made during this run.";
+  const checks = scope === "wave"
+    ? `1. **Missed reuse**: Did any agent write something that already exists elsewhere? Find existing utilities and suggest replacements.
 2. **Quality issues**: Redundant state, copy-paste variations, leaky abstractions, stringly-typed code where enums exist, unnecessary JSX nesting, comments that narrate what the code does.
 3. **Efficiency problems**: Redundant computations, sequential operations that could be parallel, hot-path bloat, recurring no-op updates, TOCTOU patterns, memory leaks.
-4. **Merge conflicts or inconsistencies**: Changes that work against each other or break existing patterns.
-
-Fix issues directly. Delete and simplify rather than add. If the code is already clean, skip.
-
-No need to explain your changes  -- just fix them.`;
-
-async function runPostWaveReview(opts: ReviewOpts): Promise<ReviewResult | null> {
-  const reviewTask: Task = {
-    id: "post-wave-review",
-    prompt: POST_WAVE_REVIEW_PROMPT,
-    noWorktree: false,
-  };
-
-  const reviewSwarm = new Swarm({
-    tasks: [reviewTask],
-    concurrency: 1,
-    cwd: opts.cwd,
-    model: opts.plannerModel,
-    permissionMode: opts.permissionMode,
-    useWorktrees: opts.useWorktrees,
-    mergeStrategy: opts.mergeStrategy,
-    usageCap: opts.usageCap,
-    allowExtraUsage: opts.allowExtraUsage,
-    extraUsageBudget: opts.extraUsageBudget,
-    baseCostUsd: opts.baseCostUsd,
-    envForModel: opts.envForModel,
-  });
-
-  try {
-    await reviewSwarm.run();
-    return {
-      costUsd: reviewSwarm.totalCostUsd,
-      inputTokens: reviewSwarm.totalInputTokens,
-      outputTokens: reviewSwarm.totalOutputTokens,
-      completed: reviewSwarm.completed,
-      failed: reviewSwarm.failed,
-    };
-  } catch (err: unknown) {
-    // Non-fatal  -- review is advisory, don't crash the run
-    return null;
-  }
-}
-
-// ── Post-run final review: comprehensive review of the entire diff ──
-
-const POST_RUN_REVIEW_PROMPT = `You are the final quality gate before this autonomous run completes.
-
-The objective was: {{OBJECTIVE}}
-
-Run \`git diff main\` (or \`git diff HEAD\` if on the same branch) to see ALL changes made during this run. Review comprehensively:
-
-1. **Architecture coherence**: Do the changes form a coherent whole, or are they a patchwork of independent edits that don't fit together?
+4. **Merge conflicts or inconsistencies**: Changes that work against each other or break existing patterns.`
+    : `1. **Architecture coherence**: Do the changes form a coherent whole, or are they a patchwork of independent edits that don't fit together?
 2. **Missed reuse**: Any new code that duplicates existing functionality?
 3. **Quality**: Redundant state, copy-paste variations, leaky abstractions, stringly-typed code, unnecessary nesting, narrative comments.
 4. **Efficiency**: N+1 patterns, redundant computations, hot-path bloat, missing cleanup, unbounded data structures.
 5. **Consistency**: Do all changes follow the project's existing patterns, conventions, and design system?
-6. **Build and test**: Run the build and any existing tests. Fix any breakage.
+6. **Build and test**: Run the build and any existing tests. Fix any breakage.`;
+  const close = scope === "wave"
+    ? "Fix issues directly. Delete and simplify rather than add. If the code is already clean, skip."
+    : "Fix issues directly. Delete and simplify. If the codebase is clean and the build passes, say so.";
 
-Fix issues directly. Delete and simplify. If the codebase is clean and the build passes, say so.
+  return `${scopeLine}
+
+${diffCmd} Review for:
+
+${checks}
+
+${close}
 
 No need to explain your changes  -- just fix them.`;
+}
+
+async function runReview(opts: ReviewOpts, scope: "wave" | "run", objective?: string): Promise<ReviewResult | null> {
+  const swarm = new Swarm({
+    tasks: [{ id: `${scope}-review`, prompt: reviewPrompt(scope, objective), noWorktree: false }],
+    concurrency: 1, cwd: opts.cwd, model: opts.plannerModel, permissionMode: opts.permissionMode,
+    useWorktrees: opts.useWorktrees, mergeStrategy: opts.mergeStrategy, usageCap: opts.usageCap,
+    allowExtraUsage: opts.allowExtraUsage, extraUsageBudget: opts.extraUsageBudget,
+    baseCostUsd: opts.baseCostUsd, envForModel: opts.envForModel,
+  });
+  try {
+    await swarm.run();
+    return { costUsd: swarm.totalCostUsd, inputTokens: swarm.totalInputTokens, outputTokens: swarm.totalOutputTokens, completed: swarm.completed, failed: swarm.failed };
+  } catch { return null; }
+}
+
+async function runPostWaveReview(opts: ReviewOpts): Promise<ReviewResult | null> {
+  return runReview(opts, "wave");
+}
 
 async function runPostRunReview(
-  objective: string,
-  cwd: string,
-  plannerModel: string,
-  permissionMode: PermMode,
-  remaining: number,
-  usageCap: number | undefined,
-  allowExtraUsage: boolean,
-  extraUsageBudget: number | undefined,
-  baseCostUsd: number,
-  envForModel: ((model?: string) => Record<string, string> | undefined) | undefined,
-  mergeStrategy: MergeStrategy,
-  useWorktrees: boolean,
+  objective: string, opts: ReviewOpts,
 ): Promise<ReviewResult | null> {
-  const reviewTask: Task = {
-    id: "post-run-review",
-    prompt: POST_RUN_REVIEW_PROMPT.replace("{{OBJECTIVE}}", objective || "improve the codebase"),
-    noWorktree: false,
-  };
-
-  const reviewSwarm = new Swarm({
-    tasks: [reviewTask],
-    concurrency: 1,
-    cwd,
-    model: plannerModel,
-    permissionMode,
-    useWorktrees,
-    mergeStrategy,
-    usageCap,
-    allowExtraUsage,
-    extraUsageBudget,
-    baseCostUsd,
-    envForModel,
-  });
-
-  try {
-    await reviewSwarm.run();
-    return {
-      costUsd: reviewSwarm.totalCostUsd,
-      inputTokens: reviewSwarm.totalInputTokens,
-      outputTokens: reviewSwarm.totalOutputTokens,
-      completed: reviewSwarm.completed,
-      failed: reviewSwarm.failed,
-    };
-  } catch (err: unknown) {
-    return null;
-  }
+  return runReview(opts, "run", objective);
 }
 
 async function promptBudgetExtension(ctx: {

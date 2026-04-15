@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import type { Task, PermMode } from "./types.js";
-import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess, detectModelTier, modelCapabilityBlock } from "./planner-query.js";
+import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./planner-query.js";
+import { contextConstraintNote } from "./models.js";
 
 // Resilience: if the planner query throws but the agent already wrote valid
 // tasks to `outFile` (via its Write tool), salvage them instead of discarding
@@ -25,7 +26,7 @@ export function salvageFromFile(outFile: string | undefined, budget: number | un
 export const DESIGN_THINKING = `
 HOW TO THINK ABOUT EVERY TASK:
 
-Start from the user's job. What is someone hiring this product to do? "I need to send money abroad cheaply"  -- not "I need a currency conversion API." Every decision  -- what to build, how fast it responds, what happens on error  -- flows from the job.
+Start from the user's job. What is someone hiring this product to do? "I need to send money abroad cheaply"  -- not "I need a currency conversion API." Every decision  -- what to build, how fast it needs to respond, what happens on error  -- flows from the job.
 
 The experience IS the product. A 200ms server response is not a "performance metric"  -- it's the difference between an app that feels alive and one that feels broken. A loading state is not "polish"  -- it's the user knowing the app heard them. An error message is not "error handling"  -- it's the app being honest. There is no line between backend and UX. The server, the API, the database query, the render  -- they're all one experience the user either trusts or doesn't.
 
@@ -54,30 +55,34 @@ const THEMES_SCHEMA = {
   },
 };
 
-// ── Budget + model aware prompt strategy ──
+// ── Budget breakpoints for prompt strategy ──
+
+const BUDGET_FOCUSED = 10; // ≤ this → surgical, file-specific tasks
+const BUDGET_SUBSTANTIAL = 30; // ≤ this → mission-level, autonomous agents
+
+// ── Context-aware prompt strategy ──
 
 function plannerPrompt(objective: string, workerModel: string, budget?: number, concurrency?: number, flexNote?: string): string {
-  const b = budget ?? 10;
-  const tier = detectModelTier(workerModel);
-  const capability = modelCapabilityBlock(workerModel);
+  const b = budget ?? BUDGET_FOCUSED;
+  const constraint = contextConstraintNote(workerModel);
   const concLine = concurrency
     ? `\n- ${concurrency} agents run in parallel  -- tasks that run concurrently must touch DIFFERENT files to avoid merge conflicts`
     : "";
   const flexLine = flexNote ? `\n\n${flexNote}` : "";
 
-  if (tier === "haiku") {
+  if (b <= BUDGET_FOCUSED) {
     return `You are a task coordinator for a parallel agent system. Analyze this codebase and break the following objective into independent tasks.
 
 Objective: ${objective}
 
-AGENT CAPABILITY: ${capability}
+${constraint}
 
 Requirements:
 - Target exactly ~${b} tasks
 - Each task MUST be independent  -- no task depends on another
 - Each task should target specific files/areas to avoid merge conflicts
 - Be specific: mention exact file paths, function names, what to change
-- Keep tasks focused: one concrete change per task  -- Haiku agents work best with clear, scoped instructions${concLine}${flexLine}
+- Keep tasks focused: one concrete change per task${concLine}${flexLine}
 
 Respond with ONLY a JSON object (no markdown fences):
 {
@@ -88,44 +93,18 @@ Respond with ONLY a JSON object (no markdown fences):
 }`;
   }
 
-  const smallThreshold = tier === "opus" ? 5 : 15;
-  const mediumThreshold = tier === "opus" ? 30 : 50;
-
-  if (b <= smallThreshold) {
-    return `You are a task coordinator for a parallel agent system. Analyze this codebase and break the following objective into independent tasks.
-
-Objective: ${objective}
-
-AGENT CAPABILITY: ${capability}
-
-Requirements:
-- Each task MUST be independent  -- no task depends on another
-- Each task should target specific files/areas to avoid merge conflicts
-- Be specific: mention exact file paths, function names, what to change
-- Keep tasks focused: one logical change per task
-- Target exactly ~${b} tasks${concLine}${flexLine}
-
-Respond with ONLY a JSON object (no markdown fences):
-{
-  "tasks": [
-    { "prompt": "In src/foo.ts, refactor the bar() function to..." },
-    { "prompt": "Add unit tests for the baz module in test/baz.test.ts..." }
-  ]
-}`;
-  }
-
-  if (b <= mediumThreshold) {
+  if (b <= BUDGET_SUBSTANTIAL) {
     return `You are a task coordinator for a parallel agent system with ${b} agent sessions available.
 
 Objective: ${objective}
 
-AGENT CAPABILITY: ${capability}
+${constraint}
 
 Do NOT over-specify. Give each agent a MISSION, not step-by-step instructions. Let agents make their own decisions about implementation details.
 
 Requirements:
 - Target exactly ~${b} tasks
-- Each task should be a substantial piece of work (5-30 minutes of agent time)
+- Each task should be a substantial piece of work
 - Each task MUST be independent  -- no task depends on another
 - Tasks that run concurrently must touch DIFFERENT files/areas to avoid merge conflicts
 - Give agents scope and autonomy: "Design and implement X" not "In file Y, add function Z"
@@ -145,7 +124,7 @@ Respond with ONLY a JSON object (no markdown fences):
 
 Objective: ${objective}
 
-AGENT CAPABILITY: ${capability}
+${constraint}
 
 With ${b} sessions, you should think BIG:
 - Full feature implementations spanning multiple files
@@ -161,7 +140,7 @@ With ${b} sessions, you should think BIG:
 
 Requirements:
 - Target exactly ~${b} tasks
-- Each task should be substantial: 10-30 minutes of autonomous agent work
+- Each task should be substantial: significant autonomous agent work
 - Each task MUST be independent  -- no task depends on another
 - Tasks that run concurrently must target DIFFERENT files/areas to avoid merge conflicts
 - Give agents missions with full autonomy: "Own the entire X subsystem" not "edit line 42 of Y.ts"
@@ -273,7 +252,7 @@ export async function orchestrate(
   permissionMode: PermMode, budget: number, concurrency: number,
   onLog: (text: string) => void, flexNote?: string, outFile?: string,
 ): Promise<Task[]> {
-  const capability = modelCapabilityBlock(workerModel);
+  const constraint = contextConstraintNote(workerModel);
   const flexLine = flexNote ? `\n\n${flexNote}` : "";
   const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
 
@@ -285,7 +264,7 @@ Your architects explored the codebase and found:
 
 ${designDocs}
 
-AGENT CAPABILITY: ${capability}
+${constraint}
 ${DESIGN_THINKING}
 Create exactly ~${budget} concrete execution tasks based on these findings.
 
@@ -333,7 +312,7 @@ export async function refinePlan(
 ): Promise<Task[]> {
   onLog("Refining plan...");
   const prev = previousTasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n");
-  const capability = modelCapabilityBlock(workerModel);
+  const constraint = contextConstraintNote(workerModel);
   const b = budget ?? 10;
   const scaleNote = b > 50 ? `This is a LARGE budget (${b} sessions). Think big  -- missions, not micro-tasks.`
     : b > 15 ? `Each of the ${b} sessions is a capable AI agent. Give substantial missions, not trivial edits.`
@@ -347,7 +326,7 @@ ${prev}
 
 The user wants changes: ${feedback}
 
-AGENT CAPABILITY: ${capability}
+${constraint}
 
 ${scaleNote} ${concurrency} agents run in parallel. Update the plan accordingly. Keep tasks independent and targeting different files/areas.
 

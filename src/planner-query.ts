@@ -3,8 +3,6 @@ import { readFileSync } from "fs";
 import { NudgeError } from "./types.js";
 import type { Task, PermMode, RateLimitWindow } from "./types.js";
 
-// ── Types ──
-
 /**
  * Logging callback used by planner/steering queries.
  * `kind` distinguishes ephemeral status updates (heartbeat ticker) from
@@ -40,38 +38,6 @@ export function setPlannerEnvResolver(fn: ((model?: string) => Record<string, st
   _envResolver = fn;
 }
 
-// ── Model tier detection ──
-
-export type ModelTier = "opus" | "sonnet" | "haiku" | "unknown";
-
-export function detectModelTier(model: string): ModelTier {
-  const m = model.toLowerCase();
-  if (m === "default" || m.includes("opus")) return "opus";
-  if (m.includes("sonnet")) return "sonnet";
-  if (m.includes("haiku")) return "haiku";
-  // Cursor API Proxy models
-  if (m === "auto") return "unknown";
-  if (m.startsWith("composer")) return "sonnet";
-  return "unknown";
-}
-
-export function modelCapabilityBlock(model: string): string {
-  switch (detectModelTier(model)) {
-    case "opus":
-      return `Each agent runs Claude Opus with 1M context  -- a powerhouse. It can own entire epics, do deep codebase research, make architectural decisions, implement complex multi-file systems end-to-end, use browser tools for analysis, and deliver expert-level work. These agents can work for 30+ minutes on the most complex tasks. Do NOT waste them on trivial edits  -- give them ownership and autonomy.`;
-    case "sonnet":
-      return `Each agent runs Claude Sonnet  -- capable of substantial implementation, refactoring, testing, and design work. Can work autonomously for 10-20 minutes on complex tasks. Give agents meaningful scope  -- not just single-line edits.`;
-    case "haiku":
-      return `Each agent runs Claude Haiku  -- fast and efficient, best for focused, well-specified tasks. Be explicit about files, functions, and expected changes. Keep each task scoped to a clear, concrete deliverable.`;
-    default:
-      // Cursor API Proxy or unknown model — generic but mention Cursor context
-      if (model.toLowerCase().startsWith("composer") || model.toLowerCase() === "auto") {
-        return `Each agent runs a Cursor model with full codebase access. Capable of focused implementation work. Be explicit about files, functions, and expected changes.`;
-      }
-      return `Each agent has full codebase access and can work autonomously.`;
-  }
-}
-
 // ── Rate limit tracking ──
 
 const RATE_LIMIT_PATTERNS = ["rate", "limit", "overloaded", "429", "hit your limit", "too many"];
@@ -89,7 +55,7 @@ let _plannerRateLimitInfo: PlannerRateLimitInfo = {
 };
 export function getPlannerRateLimitInfo(): PlannerRateLimitInfo { return _plannerRateLimitInfo; }
 
-// ── Proactive throttle: wait before making API calls when utilization is high ──
+// ── Proactive rate-limit gate ──
 
 /**
  * Proactive rate-limit gate. Called before each planner/steering query to

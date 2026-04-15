@@ -1,5 +1,6 @@
 import type { Task, PermMode, SteerResult, RunMemory, WaveSummary } from "./types.js";
-import { runPlannerQuery, attemptJsonParse, postProcess, modelCapabilityBlock, type PlannerLog } from "./planner-query.js";
+import { runPlannerQuery, attemptJsonParse, postProcess, type PlannerLog } from "./planner-query.js";
+import { contextConstraintNote } from "./models.js";
 import { DESIGN_THINKING } from "./planner.js";
 
 const STEER_SCHEMA = {
@@ -38,7 +39,7 @@ export async function steerWave(
   onLog: PlannerLog,
   runMemory?: RunMemory,
 ): Promise<SteerResult> {
-  const capability = modelCapabilityBlock(workerModel);
+  const constraint = contextConstraintNote(workerModel);
 
   const recentWaves = history.slice(-3);
   const recentText = recentWaves.length > 0 ? recentWaves.map(w => {
@@ -70,7 +71,7 @@ Recent waves:
 ${recentText}
 ${designBlock}${reflectionBlock}${verificationBlock}
 Remaining budget: ${remainingBudget} agent sessions. ${concurrency} agents run in parallel  -- tasks must touch DIFFERENT files.
-${capability}
+${constraint}
 ${DESIGN_THINKING}
 Total waves completed: ${history.length}
 
