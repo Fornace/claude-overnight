@@ -514,6 +514,34 @@ function patchProxyEnvJs(proxyDir: string): boolean {
 }
 
 /**
+ * Patch the proxy's token-cache.js to skip the macOS keychain read.
+ *
+ * The proxy calls `security find-generic-password -s "cursor-access-token" -w`
+ * after every agent run to cache tokens for its multi-account pool feature.
+ * This triggers a macOS keychain popup even though the key is not needed for
+ * auth (the cursor-agent subprocess handles its own auth). We neutralize it.
+ *
+ * Safe to call repeatedly — the patch is idempotent.
+ */
+function patchProxyTokenCacheJs(proxyDir: string): boolean {
+  const tcJs = join(proxyDir, "dist", "lib", "token-cache.js");
+  if (!existsSync(tcJs)) return false;
+  const src = readFileSync(tcJs, "utf-8");
+
+  // Check if already patched
+  if (src.includes("/* claude-overnight patch: skip keychain */")) return true;
+
+  const patch = `\n/* claude-overnight patch: skip keychain */\n` +
+    `return undefined;`;
+
+  // Replace the execSync call inside readKeychainToken
+  const target = 'const t = execSync(\'security find-generic-password -s "cursor-access-token" -w\'';
+  if (!src.includes(target)) return false;
+  writeFileSync(tcJs, src.replace(target, patch + "\n// " + target), "utf-8");
+  return true;
+}
+
+/**
  * Find the cursor-api-proxy package directory (npx cache or global install).
  */
 function findProxyPackageDir(): string | null {
@@ -565,8 +593,22 @@ export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forc
   const url = new URL(baseUrl);
   const port = parseInt(url.port, 10) || 80;
 
+  // Always patch the npx cache on startup so proxy skips keychain reads.
+  // Idempotent — safe to call on every run.
+  const proxyDir = findProxyPackageDir();
+  if (proxyDir) patchProxyTokenCacheJs(proxyDir);
+
   // Already healthy?
-  if (await healthCheckCursorProxy(baseUrl)) return true;
+  if (await healthCheckCursorProxy(baseUrl)) {
+    // Proxy was running before the patch — restart it to load the patched token-cache.js.
+    console.log(chalk.dim(`  Proxy already running — restarting to pick up keychain patch…`));
+    const killedPid = killProcessOnPort(port, url.hostname);
+    if (killedPid) {
+      await new Promise(r => setTimeout(r, 500));
+      return startProxyProcess(baseUrl, url, port);
+    }
+    return true;
+  }
 
   // Something bound the port — verify it's actually the cursor proxy
   if (await isPortInUse(port, url.hostname)) {
