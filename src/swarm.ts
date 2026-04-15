@@ -54,7 +54,7 @@ export interface SwarmConfig {
   baseCostUsd?: number;
   /** Per-task env overrides: given a model id, return the env to pass to `query()` (or undefined for Anthropic default). */
   envForModel?: (model?: string) => Record<string, string> | undefined;
-  /** When true, the run uses cursor-api-proxy. The swarm will attempt to restart it if it crashes mid-run. */
+  /** When true, the run uses cursor-composer-in-claude. The swarm will attempt to restart it if it crashes mid-run. */
   cursorProxy?: boolean;
 }
 

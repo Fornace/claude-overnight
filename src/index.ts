@@ -226,7 +226,7 @@ async function main() {
     const proxyUp = await healthCheckCursorProxy();
     if (!proxyUp) {
       console.warn(chalk.yellow(`\n  ⚠ ${savedCursorProviders.length} Cursor provider(s) saved but proxy is not running at ${PROXY_DEFAULT_URL}`));
-      console.warn(chalk.yellow(`    Start it: npx @claude-overnight/cursor-api-proxy`));
+      console.warn(chalk.yellow(`    Start it: npx cursor-composer-in-claude`));
       console.warn(chalk.dim(`    (Continuing — you can still use Anthropic models)\n`));
     }
   }
@@ -683,7 +683,7 @@ async function main() {
       if (!result.ok) {
         console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
         if (isCursorProxyProvider(provider)) {
-          console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed. Start it: npx @claude-overnight/cursor-api-proxy`));
+          console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed. Start it: npx cursor-composer-in-claude`));
         } else {
           console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));
         }

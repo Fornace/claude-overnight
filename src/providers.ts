@@ -33,9 +33,9 @@ export interface ProviderConfig {
   key?: string;
   /** When true, use JWT token auth instead of raw API keys. The bearer token is embedded in a short-lived JWT. */
   useJWT?: boolean;
-  /** When true, this provider routes through cursor-api-proxy (special env/health-check handling). */
+  /** When true, this provider routes through cursor-composer-in-claude (special env/health-check handling). */
   cursorProxy?: boolean;
-  /** API key for cursor-api-proxy. Stored in providers.json (0600), used as fallback when CURSOR_BRIDGE_API_KEY env is not set. */
+  /** API key for cursor-composer-in-claude. Stored in providers.json (0600), used as fallback when CURSOR_BRIDGE_API_KEY env is not set. */
   cursorApiKey?: string;
 }
 
@@ -298,12 +298,12 @@ export async function preflightProvider(p: ProviderConfig, cwd: string, timeoutM
 
 export const PROXY_DEFAULT_URL = "http://127.0.0.1:8765";
 
-/** Check if a provider routes through cursor-api-proxy. */
+/** Check if a provider routes through cursor-composer-in-claude. */
 export function isCursorProxyProvider(p: ProviderConfig): boolean {
   return p.cursorProxy === true || p.baseURL === PROXY_DEFAULT_URL;
 }
 
-/** Resolve the cursor-api-proxy API key from env or providers.json. */
+/** Resolve the cursor-composer-in-claude API key from env or providers.json. */
 function resolveCursorProxyKey(): string | null {
   if (process.env.CURSOR_BRIDGE_API_KEY?.trim()) return process.env.CURSOR_BRIDGE_API_KEY.trim();
   const saved = loadProviders().find(p => p.cursorProxy);
@@ -390,7 +390,7 @@ async function fetchLiveCursorModels(): Promise<string[]> {
 }
 
 /**
- * Verify something is actually cursor-api-proxy (not just any HTTP service on the port).
+ * Verify something is actually cursor-composer-in-claude (not just any HTTP service on the port).
  * Tries /health first (proxy identity), then falls back to /v1/models shape check.
  * Returns true if it looks like the proxy.
  */
@@ -450,7 +450,7 @@ async function isPortInUse(port: number, host = "127.0.0.1"): Promise<boolean> {
 }
 
 /**
- * Auto-start the cursor-api-proxy as a detached background process.
+ * Auto-start the cursor-composer-in-claude as a detached background process.
  *
  * Passes CURSOR_AGENT_NODE/SCRIPT so the fork uses system Node.js for the
  * agent subprocess (avoids segfaults with --list-models on macOS).
@@ -485,7 +485,7 @@ export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forc
 
     // Stale process on the port — kill it if forceRestart, or try automatically
     if (!forceRestart) {
-      console.log(chalk.yellow(`  ⚠ Something is on port ${port} but it's not cursor-api-proxy — killing stale process…`));
+      console.log(chalk.yellow(`  ⚠ Something is on port ${port} but it's not cursor-composer-in-claude — killing stale process…`));
     }
     const killedPid = killProcessOnPort(port, url.hostname);
     if (killedPid) {
@@ -538,7 +538,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
   }
 
   try {
-    const child = spawn("npx", ["@claude-overnight/cursor-api-proxy"], {
+    const child = spawn("npx", ["cursor-composer-in-claude"], {
       detached: true,
       stdio: "ignore",
       env: proxyEnv,
@@ -596,13 +596,13 @@ function setupSteps(): SetupStep[] {
       successMsg: "Cursor API key configured",
     },
     {
-      label: "cursor-api-proxy server",
+      label: "cursor-composer-in-claude server",
       check: () => {
-        try { execSync("npx @claude-overnight/cursor-api-proxy --help", { stdio: "pipe", timeout: 10_000 }); return true; } catch { return false; }
+        try { execSync("npx cursor-composer-in-claude --help", { stdio: "pipe", timeout: 10_000 }); return true; } catch { return false; }
       },
-      autoCmd: "npx @claude-overnight/cursor-api-proxy",
-      manualCmd: "npx @claude-overnight/cursor-api-proxy",
-      successMsg: "cursor-api-proxy available",
+      autoCmd: "npx cursor-composer-in-claude",
+      manualCmd: "npx cursor-composer-in-claude",
+      successMsg: "cursor-composer-in-claude available",
     },
   ];
 }
@@ -646,14 +646,14 @@ async function promptAndSaveCursorKey(): Promise<boolean> {
 }
 
 /**
- * Full install + configure flow for cursor-api-proxy.
+ * Full install + configure flow for cursor-composer-in-claude.
  * Walks through CLI install, API key config, and proxy start.
  * Only needed when the quick auto-start (`ensureCursorProxyRunning`) fails —
  * e.g. npx can't find the package or the user has no API key yet.
  * Returns true when proxy is running and healthy.
  */
 export async function setupCursorProxy(): Promise<boolean> {
-  console.log(chalk.dim("\n  Configure cursor-api-proxy"));
+  console.log(chalk.dim("\n  Configure cursor-composer-in-claude"));
   console.log(chalk.dim("  " + "─".repeat(40)));
   console.log(chalk.dim("  We need three things: Cursor CLI, an API key, and the proxy server.\n"));
 
@@ -716,21 +716,21 @@ export async function setupCursorProxy(): Promise<boolean> {
     if (choice === "a") {
       console.log(chalk.dim(`  Checking install…`));
       try {
-        execSync("npx @claude-overnight/cursor-api-proxy --help", { stdio: "pipe", timeout: 15_000 });
-        console.log(chalk.green(`  ✓ cursor-api-proxy is installed`));
+        execSync("npx cursor-composer-in-claude --help", { stdio: "pipe", timeout: 15_000 });
+        console.log(chalk.green(`  ✓ cursor-composer-in-claude is installed`));
       } catch {
         console.log(chalk.dim(`  Installing…`));
         try {
-          execSync("npm install -g @claude-overnight/cursor-api-proxy", { stdio: "inherit", timeout: 120_000 });
+          execSync("npm install -g cursor-composer-in-claude", { stdio: "inherit", timeout: 120_000 });
           console.log(chalk.green(`  ✓ Installed`));
         } catch {
-          console.log(chalk.yellow("  Install failed — try manual: npm install -g @claude-overnight/cursor-api-proxy"));
+          console.log(chalk.yellow("  Install failed — try manual: npm install -g cursor-composer-in-claude"));
           return false;
         }
       }
     } else if (choice === "m") {
-      console.log(chalk.cyan(`\n  Install:  ${chalk.bold("npm install -g @claude-overnight/cursor-api-proxy")}`));
-      console.log(chalk.cyan(`  Start:    ${chalk.bold("npx @claude-overnight/cursor-api-proxy")}\n`));
+      console.log(chalk.cyan(`\n  Install:  ${chalk.bold("npm install -g cursor-composer-in-claude")}`));
+      console.log(chalk.cyan(`  Start:    ${chalk.bold("npx cursor-composer-in-claude")}\n`));
       const ok = await selectKey(`  Started it?`, [
         { key: "r", desc: "eady" },
         { key: "c", desc: "ancel" },
@@ -747,7 +747,7 @@ export async function setupCursorProxy(): Promise<boolean> {
 
   // Auto-start failed or not responding — offer manual fallback
   console.log(chalk.yellow(`\n  Couldn't start the proxy automatically. Start it manually:`));
-  console.log(chalk.white(`    ${chalk.bold("npx @claude-overnight/cursor-api-proxy")}`));
+  console.log(chalk.white(`    ${chalk.bold("npx cursor-composer-in-claude")}`));
   for (;;) {
     const choice = await selectKey(`  Proxy started?`, [
       { key: "r", desc: "etry (re-attempt auto-start + kill stale)" },
