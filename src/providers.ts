@@ -392,6 +392,25 @@ async function verifyCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> 
 }
 
 /**
+ * Kill whatever process is bound to the given port. Uses `lsof` on macOS /
+ * `fuser` on Linux. Returns the PID that was killed, or null if nothing found
+ * or permission denied.
+ */
+function killProcessOnPort(port: number, host = "127.0.0.1"): number | null {
+  try {
+    // macOS / BSD: lsof -ti :PORT gives just the PID
+    const pid = execSync(`lsof -ti :${port} 2>/dev/null`, {
+      timeout: 5_000, encoding: "utf-8",
+    }).trim().split("\n")[0];
+    if (!pid || !/^\d+$/.test(pid)) return null;
+    execSync(`kill -9 ${pid} 2>/dev/null`, { timeout: 5_000 });
+    return parseInt(pid, 10);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check whether something is already listening on the proxy port.
  * Returns true if any process bound the port (another instance, Cursor CLI, etc.).
  */
@@ -514,9 +533,12 @@ function findProxyPackageDir(): string | null {
  *  - Proxy not running → spawns `npx cursor-api-proxy` detached, waits for health
  *  - Spawn fails (not installed) → returns false, caller falls back to manual instructions
  *
+ * When `forceRestart` is true and a stale process is on the port, it will be
+ * killed and the proxy restarted.
+ *
  * Returns true when the proxy is reachable at PROXY_DEFAULT_URL.
  */
-export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
+export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forceRestart = false): Promise<boolean> {
   const url = new URL(baseUrl);
   const port = parseInt(url.port, 10) || 80;
 
@@ -530,12 +552,29 @@ export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL): Pro
       console.log(chalk.dim(`  Proxy verified at port ${port}`));
       return true;
     }
+
+    // Stale process on the port — kill it if forceRestart, otherwise warn
+    if (forceRestart) {
+      const killedPid = killProcessOnPort(port, url.hostname);
+      if (killedPid) {
+        console.log(chalk.green(`  ✓ Killed stale process PID ${killedPid} on port ${port}`));
+        // Wait a moment for the port to be released
+        await new Promise(r => setTimeout(r, 500));
+        // Now try starting the proxy
+        return startProxyProcess(baseUrl, url, port);
+      }
+    }
     console.log(chalk.yellow(`  ⚠ Something is on port ${port} but it's not cursor-api-proxy`));
     console.log(chalk.dim(`  Skip auto-start. If this is unexpected, stop the service or pick a different port.`));
     return false;
   }
 
   // Port is free — auto-start the proxy
+  return startProxyProcess(baseUrl, url, port);
+}
+
+/** Spawn the proxy process and wait for it to become healthy. */
+async function startProxyProcess(baseUrl: string, url: URL, port: number): Promise<boolean> {
   console.log(chalk.yellow(`\n  Proxy not running at ${baseUrl} — starting it for you…`));
 
   // Resolve system node and agent index.js so the proxy doesn't use the
@@ -857,11 +896,19 @@ async function pickCursorModel(): Promise<ModelPick | null> {
     } else {
       console.log(chalk.yellow("  Proxy is not running at " + PROXY_DEFAULT_URL));
       const choice = await selectKey(`  How to proceed?`, [
+        { key: "k", desc: "ill stale process on port and restart (Recommended)" },
         { key: "i", desc: "nstall + configure (CLI, API key, server)" },
         { key: "r", desc: "etry (I started it manually)" },
         { key: "c", desc: "ancel" },
       ]);
-      if (choice === "s") {
+      if (choice === "k") {
+        const ok = await ensureCursorProxyRunning(PROXY_DEFAULT_URL, true);
+        if (!ok) {
+          console.log(chalk.yellow("  Could not kill the process or restart proxy — try install or cancel."));
+          return null;
+        }
+        // Proxy is up now
+      } else if (choice === "i") {
         const ok = await setupCursorProxy();
         if (!ok) return null;
       } else if (choice === "r") {
