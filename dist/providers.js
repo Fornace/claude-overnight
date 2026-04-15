@@ -617,12 +617,21 @@ async function startProxyProcess(baseUrl, url, port) {
     catch {
         cliResolved = composerCli;
     }
+    const bridgeKey = apiKeyEnv || apiKeyStored || "unused";
     const proxyEnv = {
         ...Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)),
         CI: "true",
-        CURSOR_BRIDGE_API_KEY: apiKeyEnv || apiKeyStored || "unused",
+        CURSOR_BRIDGE_API_KEY: bridgeKey,
         CURSOR_SKIP_KEYCHAIN: "1",
     };
+    // cursor-composer-in-claude passes CURSOR_API_KEY / CURSOR_AUTH_TOKEN to the agent only from
+    // these vars — not from CURSOR_BRIDGE_API_KEY. Without them the Cursor CLI falls back to
+    // login/keychain (macOS dialogs, "cursor-user", hangs under preflight).
+    const explicitAgentKey = process.env.CURSOR_API_KEY?.trim() || process.env.CURSOR_AUTH_TOKEN?.trim();
+    if (!explicitAgentKey && bridgeKey !== "unused") {
+        proxyEnv.CURSOR_API_KEY = bridgeKey;
+        proxyEnv.CURSOR_AUTH_TOKEN = bridgeKey;
+    }
     if (sysNode && agentJs) {
         proxyEnv.CURSOR_AGENT_NODE = sysNode;
         proxyEnv.CURSOR_AGENT_SCRIPT = agentJs;
@@ -635,8 +644,13 @@ async function startProxyProcess(baseUrl, url, port) {
             cliPath: cliResolved,
             nodeExec: process.execPath,
             apiKey: keySource,
+            agentCursorKey: explicitAgentKey ? "env CURSOR_API_KEY or CURSOR_AUTH_TOKEN" : (bridgeKey === "unused" ? "none" : "mirrored from bridge key"),
             agentPaths: sysNode && agentJs ? { node: sysNode, script: agentJs } : undefined,
-            childEnv: { CI: proxyEnv.CI, CURSOR_SKIP_KEYCHAIN: proxyEnv.CURSOR_SKIP_KEYCHAIN },
+            childEnv: {
+                CI: proxyEnv.CI,
+                CURSOR_SKIP_KEYCHAIN: proxyEnv.CURSOR_SKIP_KEYCHAIN,
+                CURSOR_API_KEY: proxyEnv.CURSOR_API_KEY ? "(set)" : "(unset)",
+            },
         },
     })));
     try {

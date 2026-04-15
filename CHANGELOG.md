@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.24.7
+
+- **Cursor proxy:** When auto-starting the bundled proxy, mirror the bridge API key into **`CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN`** for the child process when those are unset (same token the Cursor agent expects; `CURSOR_BRIDGE_API_KEY` alone only gated HTTP).
+- **Dependency:** `cursor-composer-in-claude` **0.7.8** — bridge key fallback for agent token in `loadBridgeConfig` (headless / macOS keychain avoidance).
+- **Install:** Publish **`cursor-composer-in-claude@0.7.8`** to npm before a clean `npm ci` / install from the registry; until then use `npm install ../cursor-composer-in-claude` from a sibling checkout or install from the local package tarball.
+
 ## 1.24.6
 
 - **Cursor proxy:** Only kill **TCP listeners** on the proxy port (`lsof -sTCP:LISTEN`), not clients, so restarting a stale proxy no longer SIGKILLs the claude-overnight process.
