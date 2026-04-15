@@ -161,6 +161,9 @@ async function promptResumeOverrides(
 }
 
 async function main() {
+  // Prevent macOS keychain popups from the Cursor CLI agent subprocess.
+  process.env.CURSOR_SKIP_KEYCHAIN ??= "1";
+
   const argv = process.argv.slice(2);
 
   if (argv.includes("-v") || argv.includes("--version")) {

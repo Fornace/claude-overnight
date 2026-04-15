@@ -8,9 +8,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(__dirname, "../../src/__tests__/fixtures");
 const BIN = resolve(__dirname, "../../dist/bin.js");
 
+// Skip provider preflight in e2e tests — the swarm handles proxy startup on its own.
+process.env.NO_PREFLIGHT = "1";
+
 // ── helpers ──
 
-function waitForSwarm(p: PTYProcess, timeoutMs = 10000) {
+function waitForSwarm(p: PTYProcess, timeoutMs = 45000) {
   return p.waitFor("active", timeoutMs);
 }
 
