@@ -3,7 +3,7 @@ name: claude-overnight
 description: >
   Understand, install, and inspect claude-overnight runs — a CLI that
   launches parallel Claude agents in git worktrees with thinking waves,
-  multi-wave steering, and crash-safe resume. Use when the user mentions
+  multi-wave steering, three-layer review, and crash-safe resume. Use when the user mentions
   claude-overnight, a `.claude-overnight/` folder, an "overnight" or
   "swarm" run, or asks to check status / resume / continue a
   multi-phase plan. Not for Vercel Workflow DevKit.
@@ -12,6 +12,11 @@ description: >
 # What it is
 
 `claude-overnight` is a CLI (npm: `claude-overnight`, bin: `claude-overnight`) that takes an objective + budget and launches many Claude agent sessions in parallel, each in an isolated git worktree. It's a local multi-session orchestrator built on top of the Claude Agent SDK — not itself an agent harness, but a layer that plans, dispatches, and steers many sessions that run on the SDK's harness. A "thinking wave" of architect sessions explores the codebase, an orchestrator synthesizes concrete tasks, executor waves run them in parallel, and steering decides between more execution, reflection, or declaring done. Rate limits, crashes, and usage caps are all resumable — nothing is lost.
+
+**Three-layer review system** runs on every wave:
+1. **Per-agent self-review** — after each agent finishes, the same session continues via SDK session resume (continue mechanism) with a follow-up prompt to review and simplify its own `git diff`. The agent's full context stays warm — no initial context bloat.
+2. **Post-wave review** — after each wave (flex mode), a dedicated review agent inspects the consolidated diff for issues individual agents blind-spotted.
+3. **Post-run final gate** — before shipping, a comprehensive review runs against the full `git diff main`.
 
 Repo: https://github.com/Fornace/claude-overnight
 
