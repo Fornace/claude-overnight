@@ -393,12 +393,10 @@ const CURSOR_KEY_PROVIDER_ID = "cursor";
 function saveCursorApiKey(key: string): void {
   const existing = loadProviders().filter(p => p.cursorProxy);
   if (existing.length > 0) {
-    // Update the first cursor proxy provider with the key
     const p = existing[0];
     p.cursorApiKey = key;
     saveProvider(p);
   } else {
-    // Create a sentinel provider so the key persists
     const sentinel: ProviderConfig = {
       id: CURSOR_KEY_PROVIDER_ID,
       displayName: "Cursor (API key)",
@@ -409,6 +407,21 @@ function saveCursorApiKey(key: string): void {
     };
     saveProvider(sentinel);
   }
+}
+
+/** Prompt the user for a Cursor API key and persist it. Returns true if saved. */
+async function promptAndSaveCursorKey(): Promise<boolean> {
+  console.log(chalk.dim(`  Get your API key from https://cursor.com/dashboard/integrations`));
+  console.log(chalk.dim(`  (Scroll to the "API Keys" section at the bottom of the page)\n`));
+  const key = await ask(`  ${chalk.cyan("API key")}: `);
+  if (key && key.trim()) {
+    const trimmed = key.trim();
+    process.env.CURSOR_BRIDGE_API_KEY = trimmed;
+    saveCursorApiKey(trimmed);
+    return true;
+  }
+  console.log(chalk.yellow("  No key provided — skipped"));
+  return false;
 }
 
 /**
@@ -438,16 +451,8 @@ export async function setupCursorProxy(): Promise<boolean> {
 
     if (choice === "a") {
       if (step.label === "Cursor API key") {
-        console.log(chalk.dim(`  Get your API key from https://cursor.com/dashboard/integrations`));
-        console.log(chalk.dim(`  (Scroll to the "API Keys" section at the bottom of the page)\n`));
-        const key = await ask(`  ${chalk.cyan("API key")}: `);
-        if (key && key.trim()) {
-          const trimmed = key.trim();
-          process.env.CURSOR_BRIDGE_API_KEY = trimmed;
-          saveCursorApiKey(trimmed);
+        if (await promptAndSaveCursorKey()) {
           console.log(chalk.green(`  ✓ ${step.successMsg}`));
-        } else {
-          console.log(chalk.yellow("  No key provided — skipped"));
         }
       } else if (step.label === "cursor-api-proxy server") {
         // Don't auto-start the proxy server here — it blocks. Just verify it's installable.
@@ -483,14 +488,8 @@ export async function setupCursorProxy(): Promise<boolean> {
         console.log(chalk.cyan(`\n  1. Open: https://cursor.com/dashboard/integrations`));
         console.log(chalk.cyan(`  2. Scroll to "API Keys" at the bottom of the page`));
         console.log(chalk.cyan(`  3. Copy your API key and paste it below\n`));
-        const key = await ask(`  ${chalk.cyan("API key")}: `);
-        if (key && key.trim()) {
-          const trimmed = key.trim();
-          process.env.CURSOR_BRIDGE_API_KEY = trimmed;
-          saveCursorApiKey(trimmed);
+        if (await promptAndSaveCursorKey()) {
           console.log(chalk.green(`  ✓ ${step.successMsg}`));
-        } else {
-          console.log(chalk.yellow("  No key provided — skipped"));
         }
       } else {
         console.log(chalk.cyan(`\n  Run this command:`));
@@ -570,8 +569,7 @@ async function pickCursorModel(): Promise<ModelPick | null> {
     hint: cursorModelHint(id),
   })), 0);
 
-  // Save as a cursor proxy provider, inheriting any previously saved API key
-  const existingKey = loadProviders().find(p => p.cursorApiKey)?.cursorApiKey;
+  const existingKey = loadProviders().find(p => p.id === CURSOR_KEY_PROVIDER_ID)?.cursorApiKey;
   const provider: ProviderConfig = {
     id: `cursor-${picked}`,
     displayName: `Cursor: ${picked}`,
