@@ -2,10 +2,8 @@
 import { readFileSync, existsSync, readdirSync, mkdirSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { createRequire } from "module";
 import chalk from "chalk";
-const pkg = createRequire(import.meta.url)("../package.json");
-const VERSION = pkg.version as string;
+import { VERSION } from "./_version.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
