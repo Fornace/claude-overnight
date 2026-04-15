@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpath
 import { createRequire } from "node:module";
 import { homedir } from "os";
 import { join, dirname } from "path";
+import { fileURLToPath } from "node:url";
 import { execSync, spawn } from "child_process";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -9,6 +10,7 @@ import { ask, select, selectKey } from "./cli.js";
 import { getBearerToken, clearTokenCache } from "./auth.js";
 import { DEFAULT_MODEL } from "./models.js";
 import { CURSOR_PRIORITY_MODELS, CURSOR_KNOWN_MODELS, KNOWN_CURSOR_MODEL_IDS, cursorModelHint, } from "./cursor-models.js";
+import { VERSION } from "./_version.js";
 /** Run the installed package CLI with `node` (avoids npx/npm invoking extra tooling on macOS). */
 function resolveCursorComposerCli() {
     try {
@@ -21,6 +23,31 @@ function resolveCursorComposerCli() {
     catch {
         return null;
     }
+}
+/** Version from the dependency bundled with claude-overnight (not `npx` cache). */
+function getEmbeddedComposerProxyVersion() {
+    try {
+        const require = createRequire(import.meta.url);
+        const pkgJsonPath = require.resolve("cursor-composer-in-claude/package.json");
+        const j = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+        return typeof j.version === "string" ? j.version : null;
+    }
+    catch {
+        return null;
+    }
+}
+/** Directory containing this package's `package.json` (works for global and local installs). */
+function getClaudeOvernightInstallRoot() {
+    return dirname(dirname(fileURLToPath(import.meta.url)));
+}
+/**
+ * Shell command to run the same bundled proxy CLI we spawn in-process (never `npx`/global).
+ */
+export function bundledComposerProxyShellCommand() {
+    const cli = resolveCursorComposerCli();
+    if (!cli)
+        return null;
+    return `node "${cli}"`;
 }
 // ── Store ──
 const STORE_PATH = join(homedir(), ".claude", "claude-overnight", "providers.json");
@@ -84,6 +111,9 @@ export function envFor(p) {
         const key = process.env.CURSOR_BRIDGE_API_KEY || p.cursorApiKey;
         base.ANTHROPIC_AUTH_TOKEN = key || "unused";
         delete base.ANTHROPIC_API_KEY;
+        // SDK replaces env for subprocesses — force these so nothing inherits a bad CI / skip flag.
+        base.CI = "true";
+        base.CURSOR_SKIP_KEYCHAIN = "1";
         return base;
     }
     const key = resolveKey(p);
@@ -321,6 +351,57 @@ export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL) {
         return false;
     }
 }
+/** GET /health JSON — used to detect stale `npx` proxies older than this package's dependency. */
+async function getCursorProxyHealthInfo(baseUrl = PROXY_DEFAULT_URL) {
+    try {
+        const url = `${baseUrl.replace(/\/$/, "")}/health`;
+        const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000), ...cursorProxyFetchOpts() });
+        if (!res.ok)
+            return null;
+        const json = (await res.json());
+        return {
+            ok: json.ok,
+            version: typeof json.version === "string" ? json.version : undefined,
+        };
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * If something is listening and we cannot prove it is this install's bundled
+ * `cursor-composer-in-claude` (version mismatch or missing `/health.version`),
+ * kill the listener and start the bundled CLI. Avoids stale global/`npx` proxies.
+ */
+async function maybeRestartStaleProxy(baseUrl, url, port) {
+    const embedded = getEmbeddedComposerProxyVersion();
+    const info = await getCursorProxyHealthInfo(baseUrl);
+    const runningV = info?.version;
+    if (!embedded) {
+        console.log(chalk.dim(JSON.stringify({
+            claudeOvernight: VERSION,
+            cursorComposerExpected: null,
+            cursorComposerRunning: runningV ?? "unknown",
+        })));
+        return true;
+    }
+    const trusted = Boolean(runningV && runningV === embedded);
+    if (trusted) {
+        console.log(chalk.dim(JSON.stringify({
+            claudeOvernight: VERSION,
+            cursorComposerExpected: embedded,
+            cursorComposerRunning: runningV,
+        })));
+        return true;
+    }
+    const reason = !runningV
+        ? `proxy does not report a version in /health — replacing with bundled v${embedded}`
+        : `running proxy is v${runningV} but this install bundles cursor-composer-in-claude v${embedded}`;
+    console.log(chalk.yellow(`  ⚠ ${reason} — restarting…`));
+    killProcessOnPort(port, url.hostname);
+    await new Promise(r => setTimeout(r, 500));
+    return startProxyProcess(baseUrl, url, port);
+}
 /**
  * Fetch available Cursor models via GET /v1/models on the proxy.
  * Returns model IDs like ["auto", "composer", "composer-2", "opus-4.6", ...].
@@ -401,22 +482,23 @@ async function verifyCursorProxy(baseUrl = PROXY_DEFAULT_URL) {
         const res = await fetch(`${url}/v1/models`, { method: "GET", signal: AbortSignal.timeout(3_000), ...opts });
         if (!res.ok)
             return false;
-        const json = await res.json();
-        return Array.isArray(json?.data);
+        const json = (await res.json());
+        return Array.isArray(json["data"]);
     }
     catch {
         return false;
     }
 }
 /**
- * Kill whatever process is bound to the given port. Uses `lsof` on macOS /
- * `fuser` on Linux. Returns the PID that was killed, or null if nothing found
- * or permission denied.
+ * Kill whatever process is listening on the given port.
+ * Uses `lsof` with TCP LISTEN only — plain `lsof -ti :PORT` also matches
+ * *clients* whose remote peer is that port, so the first PID can be the
+ * caller (e.g. claude-overnight) and `kill -9` would suicide the CLI.
  */
 function killProcessOnPort(port, host = "127.0.0.1") {
     try {
-        // macOS / BSD: lsof -ti :PORT gives just the PID
-        const pid = execSync(`lsof -ti :${port} 2>/dev/null`, {
+        // `-sTCP:LISTEN` is required: `lsof -ti :PORT` includes ESTABLISHED clients to localhost:PORT.
+        const pid = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null`, {
             timeout: 5_000, encoding: "utf-8",
         }).trim().split("\n")[0];
         if (!pid || !/^\d+$/.test(pid))
@@ -456,24 +538,30 @@ async function isPortInUse(port, host = "127.0.0.1") {
  *  - Proxy not running → spawns detached, waits for health
  *  - Spawn fails → returns false, caller falls back to manual instructions
  *
- * When `forceRestart` is true and a stale process is on the port, it will be
- * killed and the proxy restarted.
+ * When `forceRestart` is true, any listener on the port is killed and the
+ * bundled proxy is spawned (same as a version mismatch).
  *
  * Returns true when the proxy is reachable at PROXY_DEFAULT_URL.
  */
 export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forceRestart = false) {
     const url = new URL(baseUrl);
     const port = parseInt(url.port, 10) || 80;
+    if (forceRestart && resolveCursorComposerCli()) {
+        console.log(chalk.dim(`  Replacing listener on port ${port} with bundled cursor-composer-in-claude…`));
+        killProcessOnPort(port, url.hostname);
+        await new Promise(r => setTimeout(r, 500));
+        return startProxyProcess(baseUrl, url, port);
+    }
     // Already healthy?
     if (await healthCheckCursorProxy(baseUrl)) {
-        return true;
+        return await maybeRestartStaleProxy(baseUrl, url, port);
     }
     // Something bound the port — verify it's actually the cursor proxy
     if (await isPortInUse(port, url.hostname)) {
         const isProxy = await verifyCursorProxy(baseUrl);
         if (isProxy) {
             console.log(chalk.dim(`  Proxy verified at port ${port}`));
-            return true;
+            return await maybeRestartStaleProxy(baseUrl, url, port);
         }
         // Stale process on the port — kill it if forceRestart, or try automatically
         if (!forceRestart) {
@@ -516,41 +604,19 @@ async function startProxyProcess(baseUrl, url, port) {
     const apiKeyEnv = process.env.CURSOR_BRIDGE_API_KEY;
     const apiKeyStored = loadProviders().find(p => p.cursorProxy)?.cursorApiKey;
     const keySource = apiKeyEnv ? "env CURSOR_BRIDGE_API_KEY" : (apiKeyStored ? "providers.json (stored)" : "none — using 'unused'");
-    // Log the installed proxy version
-    let proxyVersion = "unknown";
-    try {
-        const pkgPath = execSync("node -e \"try{console.log(require('cursor-composer-in-claude/package.json').version)}catch(e){}\" 2>/dev/null", {
-            timeout: 3_000, encoding: "utf-8", shell: "bash",
-        }).trim();
-        if (pkgPath)
-            proxyVersion = pkgPath;
-    }
-    catch {
-        // Fallback: try resolving from npx cache location
-        try {
-            const out = execSync("npm ls cursor-composer-in-claude --depth=0 2>/dev/null | grep cursor-composer", {
-                timeout: 5_000, encoding: "utf-8", shell: "bash",
-            }).trim();
-            const verMatch = out.match(/@(\d+\.\d+\.\d+)/);
-            if (verMatch)
-                proxyVersion = verMatch[1];
-        }
-        catch { }
-    }
-    console.log(chalk.dim(`  cursor-composer-in-claude v${proxyVersion}`));
-    console.log(chalk.dim(`  API key: ${keySource}`));
-    console.log(chalk.dim(`  CI=true (skips Cursor agent keychain probe on startup)`));
-    console.log(chalk.dim(`  CURSOR_SKIP_KEYCHAIN=1 (proxy-side keychain access disabled)`));
-    if (sysNode)
-        console.log(chalk.dim(`  System node: ${sysNode}`));
-    if (agentJs)
-        console.log(chalk.dim(`  Agent script: ${agentJs}`));
+    const proxyVersion = getEmbeddedComposerProxyVersion() ?? "unknown";
     const composerCli = resolveCursorComposerCli();
     if (!composerCli) {
         console.log(chalk.yellow(`  ⚠ cursor-composer-in-claude is not installed (missing from node_modules). Run: npm install`));
         return false;
     }
-    console.log(chalk.dim(`  Command: ${process.execPath} ${composerCli}`));
+    let cliResolved;
+    try {
+        cliResolved = realpathSync(composerCli);
+    }
+    catch {
+        cliResolved = composerCli;
+    }
     const proxyEnv = {
         ...Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)),
         CI: "true",
@@ -561,6 +627,18 @@ async function startProxyProcess(baseUrl, url, port) {
         proxyEnv.CURSOR_AGENT_NODE = sysNode;
         proxyEnv.CURSOR_AGENT_SCRIPT = agentJs;
     }
+    console.log(chalk.dim(JSON.stringify({
+        claudeOvernight: VERSION,
+        spawnProxy: {
+            pkg: "cursor-composer-in-claude",
+            version: proxyVersion,
+            cliPath: cliResolved,
+            nodeExec: process.execPath,
+            apiKey: keySource,
+            agentPaths: sysNode && agentJs ? { node: sysNode, script: agentJs } : undefined,
+            childEnv: { CI: proxyEnv.CI, CURSOR_SKIP_KEYCHAIN: proxyEnv.CURSOR_SKIP_KEYCHAIN },
+        },
+    })));
     try {
         console.log(chalk.dim(`  Spawning proxy…`));
         const child = spawn(process.execPath, [composerCli], {
@@ -593,6 +671,18 @@ async function startProxyProcess(baseUrl, url, port) {
         return false;
     }
 }
+function tryBundledComposerHelp() {
+    const cli = resolveCursorComposerCli();
+    if (!cli)
+        return false;
+    try {
+        execSync(`node "${cli}" --help`, { stdio: "pipe", timeout: 10_000 });
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 function setupSteps() {
     return [
         {
@@ -621,19 +711,11 @@ function setupSteps() {
             successMsg: "Cursor API key configured",
         },
         {
-            label: "cursor-composer-in-claude server",
-            check: () => {
-                try {
-                    execSync("npx cursor-composer-in-claude --help", { stdio: "pipe", timeout: 10_000 });
-                    return true;
-                }
-                catch {
-                    return false;
-                }
-            },
-            autoCmd: "npx cursor-composer-in-claude",
-            manualCmd: "npx cursor-composer-in-claude",
-            successMsg: "cursor-composer-in-claude available",
+            label: "cursor-composer-in-claude (bundled dependency)",
+            check: () => tryBundledComposerHelp(),
+            autoCmd: "npm install",
+            manualCmd: "npm install",
+            successMsg: "Bundled proxy package installed",
         },
     ];
 }
@@ -677,7 +759,7 @@ async function promptAndSaveCursorKey() {
  * Full install + configure flow for cursor-composer-in-claude.
  * Walks through CLI install, API key config, and proxy start.
  * Only needed when the quick auto-start (`ensureCursorProxyRunning`) fails —
- * e.g. npx can't find the package or the user has no API key yet.
+ * e.g. dependencies not installed or the user has no API key yet.
  * Returns true when proxy is running and healthy.
  */
 export async function setupCursorProxy() {
@@ -732,40 +814,41 @@ export async function setupCursorProxy() {
             console.log(chalk.yellow("  No API key — the proxy won't authenticate without one."));
         }
     }
-    // ── Step 3: Proxy server — auto-start if needed ──
+    // ── Step 3: Bundled proxy dependency ──
     const proxyStep = steps[2];
+    const installRoot = getClaudeOvernightInstallRoot();
     if (proxyStep.check()) {
         console.log(chalk.green(`  ✓ ${proxyStep.successMsg}`));
     }
     else {
-        console.log(chalk.yellow(`\n  ${proxyStep.label} not installed`));
-        const choice = await selectKey(`  Install and start it?`, [
-            { key: "a", desc: "uto (install + start)" },
+        console.log(chalk.yellow(`\n  ${proxyStep.label} missing under node_modules`));
+        const choice = await selectKey(`  Run npm install in this claude-overnight install?`, [
+            { key: "a", desc: "uto (npm install)" },
             { key: "m", desc: "anual (show commands)" },
             { key: "s", desc: "kip (I'll handle it)" },
         ]);
         if (choice === "a") {
-            console.log(chalk.dim(`  Checking install…`));
+            console.log(chalk.dim(`  Running: npm install in ${installRoot}`));
             try {
-                execSync("npx cursor-composer-in-claude --help", { stdio: "pipe", timeout: 15_000 });
-                console.log(chalk.green(`  ✓ cursor-composer-in-claude is installed`));
+                execSync("npm install", { cwd: installRoot, stdio: "inherit", timeout: 180_000 });
             }
             catch {
-                console.log(chalk.dim(`  Installing…`));
-                try {
-                    execSync("npm install -g cursor-composer-in-claude", { stdio: "inherit", timeout: 120_000 });
-                    console.log(chalk.green(`  ✓ Installed`));
-                }
-                catch {
-                    console.log(chalk.yellow("  Install failed — try manual: npm install -g cursor-composer-in-claude"));
-                    return false;
-                }
+                console.log(chalk.yellow("  npm install failed."));
+                return false;
             }
+            if (!tryBundledComposerHelp()) {
+                console.log(chalk.yellow("  cursor-composer-in-claude still missing after npm install."));
+                return false;
+            }
+            console.log(chalk.green(`  ✓ ${proxyStep.successMsg}`));
         }
         else if (choice === "m") {
-            console.log(chalk.cyan(`\n  Install:  ${chalk.bold("npm install -g cursor-composer-in-claude")}`));
-            console.log(chalk.cyan(`  Start:    ${chalk.bold("npx cursor-composer-in-claude")}\n`));
-            const ok = await selectKey(`  Started it?`, [
+            console.log(chalk.cyan(`\n  From ${chalk.bold(installRoot)}:`));
+            console.log(chalk.white(`    ${chalk.bold("npm install")}`));
+            const cmd = bundledComposerProxyShellCommand();
+            if (cmd)
+                console.log(chalk.white(`    ${chalk.bold(cmd)}\n`));
+            const ok = await selectKey(`  Done?`, [
                 { key: "r", desc: "eady" },
                 { key: "c", desc: "ancel" },
             ]);
@@ -777,12 +860,14 @@ export async function setupCursorProxy() {
             return false;
         }
     }
-    // Auto-start the proxy (detached background process)
+    // Auto-start the proxy (detached — only the bundled CLI)
     if (await ensureCursorProxyRunning())
         return true;
-    // Auto-start failed or not responding — offer manual fallback
-    console.log(chalk.yellow(`\n  Couldn't start the proxy automatically. Start it manually:`));
-    console.log(chalk.white(`    ${chalk.bold("npx cursor-composer-in-claude")}`));
+    const manual = bundledComposerProxyShellCommand();
+    console.log(chalk.yellow(`\n  Couldn't start the proxy automatically.`));
+    console.log(chalk.cyan(`  Ensure dependencies: ${chalk.bold(`cd "${installRoot}" && npm install`)}`));
+    if (manual)
+        console.log(chalk.cyan(`  Start bundled proxy: ${chalk.bold(manual)}`));
     for (;;) {
         const choice = await selectKey(`  Proxy started?`, [
             { key: "r", desc: "etry (re-attempt auto-start + kill stale)" },

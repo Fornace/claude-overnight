@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.24.6
+
+- **Cursor proxy:** Only kill **TCP listeners** on the proxy port (`lsof -sTCP:LISTEN`), not clients, so restarting a stale proxy no longer SIGKILLs the claude-overnight process.
+- **Bundled proxy:** Replace any listener whose `/health` version is missing or differs from `node_modules/cursor-composer-in-claude`. `ensureCursorProxyRunning(..., true)` now force-restarts. Setup and user messages use the bundled `node …/cli.js` path and `npm install` in this package — no `npx` / global install for the proxy.
+
+## 1.24.5
+
+- **Dependency:** `cursor-composer-in-claude` **0.7.7** (exact pin). Proxy startup logs + forced `CI`; overnight restarts a stale proxy on `:8765` when its `/health` version differs from the bundled package, and forces `CI` / `CURSOR_SKIP_KEYCHAIN` on Cursor provider env.
+
 ## 1.24.4
 
 - **Dependency:** `cursor-composer-in-claude` **^0.7.6** (proxy forces `CI=true` on every agent spawn alongside keychain skip — fixes macOS keychain prompts when the proxy was not started with `CI`).

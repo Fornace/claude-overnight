@@ -9,7 +9,7 @@ import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
 import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
 import { setPlannerEnvResolver } from "./planner-query.js";
-import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, ensureCursorProxyRunning } from "./providers.js";
+import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, ensureCursorProxyRunning, bundledComposerProxyShellCommand, } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
 import { executeRun } from "./run.js";
@@ -223,7 +223,10 @@ async function main() {
         const proxyUp = await healthCheckCursorProxy();
         if (!proxyUp) {
             console.warn(chalk.yellow(`\n  ⚠ ${savedCursorProviders.length} Cursor provider(s) saved but proxy is not running at ${PROXY_DEFAULT_URL}`));
-            console.warn(chalk.yellow(`    Start it: npx cursor-composer-in-claude`));
+            {
+                const cmd = bundledComposerProxyShellCommand();
+                console.warn(chalk.yellow(cmd ? `    Start bundled proxy: ${cmd}` : `    Run npm install where claude-overnight is installed, then retry`));
+            }
             console.warn(chalk.dim(`    (Continuing — you can still use Anthropic models)\n`));
         }
     }
@@ -776,7 +779,10 @@ async function main() {
             if (!result.ok) {
                 console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
                 if (isCursorProxyProvider(provider)) {
-                    console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed. Start it: npx cursor-composer-in-claude`));
+                    {
+                        const cmd = bundledComposerProxyShellCommand();
+                        console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed or timed out (e.g. keychain/UI). Retry, or start the bundled proxy: ${cmd ?? "npm install in the claude-overnight package, then re-run"}`));
+                    }
                 }
                 else {
                     console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));

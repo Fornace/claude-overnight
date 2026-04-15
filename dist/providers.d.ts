@@ -1,5 +1,9 @@
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 /**
+ * Shell command to run the same bundled proxy CLI we spawn in-process (never `npx`/global).
+ */
+export declare function bundledComposerProxyShellCommand(): string | null;
+/**
  * A non-Anthropic model provider reachable via an Anthropic-compatible endpoint
  * (e.g. DashScope for Qwen, OpenRouter, a local proxy). Stored user-level so a
  * key configured once works across every repo.
@@ -80,8 +84,8 @@ export declare function fetchCursorModels(baseUrl?: string): Promise<string[]>;
  *  - Proxy not running → spawns detached, waits for health
  *  - Spawn fails → returns false, caller falls back to manual instructions
  *
- * When `forceRestart` is true and a stale process is on the port, it will be
- * killed and the proxy restarted.
+ * When `forceRestart` is true, any listener on the port is killed and the
+ * bundled proxy is spawned (same as a version mismatch).
  *
  * Returns true when the proxy is reachable at PROXY_DEFAULT_URL.
  */
@@ -90,7 +94,7 @@ export declare function ensureCursorProxyRunning(baseUrl?: string, forceRestart?
  * Full install + configure flow for cursor-composer-in-claude.
  * Walks through CLI install, API key config, and proxy start.
  * Only needed when the quick auto-start (`ensureCursorProxyRunning`) fails —
- * e.g. npx can't find the package or the user has no API key yet.
+ * e.g. dependencies not installed or the user has no API key yet.
  * Returns true when proxy is running and healthy.
  */
 export declare function setupCursorProxy(): Promise<boolean>;

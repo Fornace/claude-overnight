@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.24.4",
+  "version": "1.24.6",
   "description": "Background lane for your Claude Max plan. Parallel Claude Agent SDK sessions in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Provider-agnostic model catalog with capability-based planning.",
   "type": "module",
   "bin": {
@@ -16,7 +16,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.92",
     "chalk": "^5.4.1",
-    "cursor-composer-in-claude": "^0.7.6",
+    "cursor-composer-in-claude": "0.7.7",
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
