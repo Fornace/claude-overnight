@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync } from "fs";
 import { NudgeError } from "./types.js";
+import { writeTranscriptEvent } from "./transcripts.js";
 // ── Shared env resolver (set once at run start, used by every planner query) ──
 //
 // Swarm and planner calls share a model→env map so a custom provider configured
@@ -63,6 +64,22 @@ async function throttlePlanner(onLog, aborted) {
     }
     // Exhausted backoffs — proceed anyway, the retry loop will catch a rejection.
 }
+/**
+ * Pick a short, human-readable target for a tool invocation (Read/Grep/Bash/…).
+ * Prefers explicit file paths; falls back to the first few tokens of a shell
+ * command. Returns `""` when the input has no useful identifier.
+ */
+function extractToolTarget(input) {
+    if (!input)
+        return "";
+    const p = input.path ?? input.file_path ?? input.pattern;
+    if (typeof p === "string" && p)
+        return p;
+    if (typeof input.command === "string" && input.command) {
+        return input.command.split(" ").slice(0, 3).join(" ");
+    }
+    return "";
+}
 // ── Query execution ──
 const NUDGE_MS = 15 * 60 * 1000;
 const HARD_TIMEOUT_MS = 30 * 60 * 1000;
@@ -110,6 +127,17 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
     const startedAt = Date.now();
     const isResume = !!opts.resumeSessionId;
     const envOverride = _envResolver?.(opts.model);
+    const tname = opts.transcriptName;
+    if (tname) {
+        writeTranscriptEvent(tname, {
+            kind: "session_start",
+            model: opts.model,
+            isResume,
+            resumeSessionId: opts.resumeSessionId,
+            promptPreview: prompt.slice(0, 2000),
+            promptBytes: prompt.length,
+        });
+    }
     const pq = query({
         prompt,
         options: {
@@ -167,6 +195,18 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
         };
         timer = setTimeout(check, timeoutMs);
     });
+    // Tool-use blocks can arrive in two shapes:
+    //  (a) content_block_start carries the full `input` (native Anthropic non-partial)
+    //  (b) content_block_start carries `input: {}` and the JSON is streamed via
+    //      input_json_delta frames (Anthropic streaming spec, cursor-composer-in-claude v0.9+).
+    // Track the open tool block so we can re-log with the enriched target once
+    // the input arrives, and write a complete transcript entry on block stop.
+    let pendingTool = null;
+    const logTool = (name, input) => {
+        const target = extractToolTarget(input);
+        lastLogText = target ? `${name} ${target}` : name;
+        onLog(target ? `${name} → ${target}` : name, "event");
+    };
     const consume = async () => {
         for await (const msg of pq) {
             lastActivity = Date.now();
@@ -178,21 +218,34 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
                     const cb = ev.content_block;
                     if (cb?.type === "tool_use") {
                         toolCount++;
-                        const toolName = cb.name;
-                        const input = cb.input;
-                        // Enrich event with target file/path for readability
-                        const target = input?.path ?? input?.file_path ?? input?.command
-                            ? (typeof input?.command === "string" ? input.command.split(" ").slice(0, 3).join(" ") : "")
-                            : "";
-                        lastLogText = target ? `${toolName} ${target}` : toolName;
-                        onLog(target ? `${toolName} → ${target}` : toolName, "event");
+                        const input = (cb.input ?? {});
+                        const hasInput = Object.keys(input).length > 0;
+                        pendingTool = {
+                            index: ev.index ?? 0,
+                            name: cb.name,
+                            id: cb.id,
+                            input,
+                            buf: "",
+                            logged: hasInput,
+                        };
+                        if (hasInput) {
+                            logTool(cb.name, input);
+                            if (tname)
+                                writeTranscriptEvent(tname, { kind: "tool_use", tool: cb.name, input });
+                        }
                     }
                     else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
                         lastLogText = "thinking…";
+                        if (tname)
+                            writeTranscriptEvent(tname, { kind: "thinking_start" });
                     }
                 }
                 if (ev?.type === "content_block_delta") {
                     const delta = ev.delta;
+                    if (delta?.type === "input_json_delta" && pendingTool && typeof delta.partial_json === "string") {
+                        pendingTool.buf += delta.partial_json;
+                        continue;
+                    }
                     // thinking_delta carries reasoning text under `delta.thinking`;
                     // text_delta carries final-answer text under `delta.text`.
                     const raw = delta?.type === "text_delta" ? delta.text
@@ -202,7 +255,23 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
                         const snippet = raw.trim().replace(/[{}"\\,[\]]+/g, " ").replace(/\s+/g, " ").trim();
                         if (snippet.length > 5)
                             lastLogText = snippet.slice(-60);
+                        if (tname)
+                            writeTranscriptEvent(tname, { kind: delta.type, text: raw });
                     }
+                }
+                if (ev?.type === "content_block_stop" && pendingTool) {
+                    if (!pendingTool.logged && pendingTool.buf) {
+                        try {
+                            pendingTool.input = JSON.parse(pendingTool.buf);
+                        }
+                        catch { }
+                    }
+                    if (!pendingTool.logged) {
+                        logTool(pendingTool.name, pendingTool.input);
+                        if (tname)
+                            writeTranscriptEvent(tname, { kind: "tool_use", tool: pendingTool.name, input: pendingTool.input });
+                    }
+                    pendingTool = null;
                 }
             }
             if (msg.type === "rate_limit_event") {
@@ -222,6 +291,15 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
                             resetsAt: info.resetsAt,
                         });
                     }
+                    if (tname)
+                        writeTranscriptEvent(tname, {
+                            kind: "rate_limit",
+                            utilization: info.utilization ?? 0,
+                            status: info.status,
+                            rateLimitType: info.rateLimitType,
+                            resetsAt: info.resetsAt,
+                            isUsingOverage: !!info.isUsingOverage,
+                        });
                 }
             }
             if (msg.type === "result") {
@@ -234,8 +312,27 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
                 if (msg.subtype === "success") {
                     structuredOutput = r.structured_output;
                     resultText = r.result || "";
+                    if (tname)
+                        writeTranscriptEvent(tname, {
+                            kind: "result",
+                            subtype: "success",
+                            costUsd,
+                            durationMs: Date.now() - startedAt,
+                            toolCount,
+                            resultPreview: typeof resultText === "string" ? resultText.slice(0, 4000) : undefined,
+                            hasStructuredOutput: structuredOutput != null,
+                        });
                 }
                 else {
+                    if (tname)
+                        writeTranscriptEvent(tname, {
+                            kind: "result",
+                            subtype: msg.subtype,
+                            costUsd,
+                            durationMs: Date.now() - startedAt,
+                            toolCount,
+                            error: r.result,
+                        });
                     throw new Error(`Planner failed: ${r.result || msg.subtype}`);
                 }
             }
@@ -243,6 +340,16 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
     };
     try {
         await Promise.race([consume(), watchdog]);
+    }
+    catch (err) {
+        if (tname)
+            writeTranscriptEvent(tname, {
+                kind: "error",
+                message: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - startedAt,
+                toolCount,
+            });
+        throw err;
     }
     finally {
         clearTimeout(timer);

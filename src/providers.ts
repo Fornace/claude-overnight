@@ -1353,7 +1353,7 @@ function saveCursorPick(modelId: string): ModelPick {
   return { model: modelId, providerId: provider.id, provider };
 }
 
-// ── Env resolver for planner/executor roles ──
+// ── Env resolver for planner/worker/fast roles ──
 
 export type EnvResolver = (model?: string) => Record<string, string> | undefined;
 

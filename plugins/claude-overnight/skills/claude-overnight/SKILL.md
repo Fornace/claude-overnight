@@ -11,7 +11,7 @@ description: >
 
 # What it is
 
-`claude-overnight` is a CLI (npm: `claude-overnight`, bin: `claude-overnight`) that takes an objective + budget and launches many Claude agent sessions in parallel, each in an isolated git worktree. It's a local multi-session orchestrator built on top of the Claude Agent SDK  -- not itself an agent harness, but a layer that plans, dispatches, and steers many sessions that run on the SDK's harness. A "thinking wave" of architect sessions explores the codebase, an orchestrator synthesizes concrete tasks, executor waves run them in parallel, and steering decides between more execution, reflection, or declaring done. Rate limits, crashes, and usage caps are all resumable  -- nothing is lost.
+`claude-overnight` is a CLI (npm: `claude-overnight`, bin: `claude-overnight`) that takes an objective + budget and launches many Claude agent sessions in parallel, each in an isolated git worktree. It's a local multi-session orchestrator built on top of the Claude Agent SDK  -- not itself an agent harness, but a layer that plans, dispatches, and steers many sessions that run on the SDK's harness. Three roles are picked independently: **planner** (thinks, steers, reviews), **worker** (runs the tasks), and an optional **fast** model (quick well-scoped edits verified by the worker next wave). A "thinking wave" of architect sessions explores the codebase, an orchestrator synthesizes concrete tasks, worker waves run them in parallel, and steering decides between more work, reflection, or declaring done. Rate limits, crashes, and usage caps are all resumable  -- nothing is lost.
 
 **Three-layer review system** runs on every wave:
 1. **Per-agent self-review**  -- after each agent finishes, the same session continues via SDK session resume (continue mechanism) with a follow-up prompt to review and simplify its own `git diff`. The agent's full context stays warm  -- no initial context bloat.
@@ -55,16 +55,20 @@ Every run lives at `<repo>/.claude-overnight/runs/<ISO-timestamp>/`:
 
 | File / dir           | What it tells you                                                                 |
 |----------------------|-----------------------------------------------------------------------------------|
-| `run.json`           | Machine state: objective, model, budget, cost, waves done, branches, done flag.   |
+| `run.json`           | Machine state: objective, planner/worker/fast models, budget, cost, waves done, branches, done flag. |
 | `status.md`          | **Living project snapshot**, rewritten by steering every wave. First line = short status. |
 | `goal.md`            | Evolving "north star"  -- what the run currently thinks "amazing" means.            |
+| `themes.md`          | The thinking-wave research angles picked for this objective (human-readable).     |
 | `milestones/*.md`    | Strategic snapshots archived ~every 5 waves. Long-term memory of the run.         |
 | `designs/*.md`       | Architect outputs from the thinking wave. Deleted once the objective is complete. |
+| `tasks.json`         | The execution plan written by the orchestrator.                                   |
+| `steering/wave-N-attempt-M.json` | Steering decision per wave: done flag, reasoning, status/goal updates.   |
+| `transcripts/*.ndjson` | Crash-safe NDJSON stream for every planner/steering query: `themes`, `orchestrate`, `plan`, `steer-wave-N-attempt-M`. Each line = one event (session_start, tool_use, text_delta, thinking_delta, rate_limit, result, error). Use `jq -c '.kind' <file>` to get a quick shape; read full objects to reconstruct what the planner was doing. Survives process crashes because writes are append-only. |
 | `sessions/wave-N.json` | Per-wave agent records: prompt, status, cost, files changed, branch, error.    |
 
 The newest subfolder under `runs/` is the current/last run. A run that never reached "done" is **resumable**  -- `run.json` will not be marked complete and `designs/` may still be present.
 
-To assess status of a run from scratch, read in this order: `goal.md` → `status.md` → newest file in `milestones/` → newest `sessions/wave-*.json` → `run.json`. Five reads and you know exactly where it stands.
+To assess status of a run from scratch, read in this order: `goal.md` → `status.md` → newest file in `milestones/` → newest `sessions/wave-*.json` → `run.json`. Five reads and you know exactly where it stands. If the run died during planning (no `sessions/` yet), read `themes.md` + the newest `transcripts/*.ndjson` instead — they show exactly what the planner was doing when it crashed.
 
 **Durable run history (committed, survives cleanup):** `claude-overnight.log.md` at the repo root is updated on every run with a block per run ID  -- original objective, start/finish times, cost, outcome, branch. If the user asks "what was my prompt" or "what did last night's run do" and `.claude-overnight/runs/` is empty, this file is the canonical recovery path.
 

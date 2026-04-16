@@ -165,6 +165,7 @@ export async function planTasks(
   objective: string, cwd: string, plannerModel: string, workerModel: string,
   permissionMode: PermMode, budget: number | undefined, concurrency: number,
   onLog: (text: string) => void, flexNote?: string, outFile?: string,
+  transcriptName: string = "plan",
 ): Promise<Task[]> {
   onLog("Analyzing codebase...");
   const prompt = plannerPrompt(objective, workerModel, budget, concurrency, flexNote);
@@ -173,7 +174,7 @@ export async function planTasks(
   try {
     resultText = await runPlannerQuery(
       prompt + fileInstruction,
-      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog,
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName }, onLog,
     );
   } catch (err: any) {
     const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
@@ -184,7 +185,7 @@ export async function planTasks(
     onLog("Retrying...");
     return runPlannerQuery(
       `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog,
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog,
     );
   }, onLog, outFile);
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
@@ -199,6 +200,7 @@ export async function planTasks(
 export async function identifyThemes(
   objective: string, count: number, cwd: string, model: string, permissionMode: PermMode,
   onLog: (text: string) => void = () => {},
+  transcriptName: string = "themes",
 ): Promise<string[]> {
   const resultText = await runPlannerQuery(
     `You are picking ${count} research angles for architects who will deeply explore a codebase next.
@@ -210,7 +212,7 @@ Then pick ${count} angles that carve up THIS specific codebase orthogonally. Pre
 Objective: ${objective}
 
 Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
-    { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA }, onLog,
+    { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA, transcriptName }, onLog,
   );
   const parsed = attemptJsonParse(resultText);
   if (parsed?.themes && Array.isArray(parsed.themes)) return parsed.themes.slice(0, count);
@@ -259,6 +261,7 @@ export async function orchestrate(
   objective: string, designDocs: string, cwd: string, plannerModel: string, workerModel: string,
   permissionMode: PermMode, budget: number, concurrency: number,
   onLog: (text: string) => void, flexNote?: string, outFile?: string,
+  transcriptName: string = "orchestrate",
 ): Promise<Task[]> {
   const constraint = contextConstraintNote(workerModel);
   const flexLine = flexNote ? `\n\n${flexNote}` : "";
@@ -291,7 +294,7 @@ Respond with ONLY a JSON object (no markdown fences):
   onLog("Synthesizing...");
   let resultText: string;
   try {
-    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog);
+    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName }, onLog);
   } catch (err: any) {
     const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
     if (salvaged) return salvaged;
@@ -301,7 +304,7 @@ Respond with ONLY a JSON object (no markdown fences):
     onLog("Retrying...");
     return runPlannerQuery(
       `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog,
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog,
     );
   }, onLog, outFile);
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
@@ -317,6 +320,7 @@ export async function refinePlan(
   objective: string, previousTasks: Task[], feedback: string, cwd: string,
   plannerModel: string, workerModel: string, permissionMode: PermMode,
   budget: number | undefined, concurrency: number, onLog: (text: string) => void,
+  transcriptName: string = "refine",
 ): Promise<Task[]> {
   onLog("Refining plan...");
   const prev = previousTasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n");
@@ -341,12 +345,12 @@ ${scaleNote} ${concurrency} agents run in parallel. Update the plan accordingly.
 Respond with ONLY a JSON object (no markdown):
 {"tasks":[{"prompt":"..."}]}`;
 
-  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog);
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName }, onLog);
   const parsed = await extractTaskJson(resultText, async () => {
     onLog("Retrying...");
     return runPlannerQuery(
       `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA }, onLog,
+      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog,
     );
   }, onLog);
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({

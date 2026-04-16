@@ -72,6 +72,10 @@ export class Swarm {
     worktreeBase;
     activeQueries = new Set();
     cleanedUp = false;
+    // Per-agent open tool_use block: cursor-composer-in-claude v0.9 opens the block
+    // with empty `input` and streams the real payload via `input_json_delta`, so we
+    // need to wait for content_block_stop before we can log the file/path target.
+    pendingTools = new WeakMap();
     logFile;
     model;
     usageCap;
@@ -700,6 +704,16 @@ export class Swarm {
         return `Agent ${agent.id} ${verb}: ${m}m ${s}s, ${agent.toolCalls} tools${files}`;
     }
     // ── Message handler ──
+    /** Log a tool invocation with a short target extracted from its input. */
+    logToolUse(agent, name, input) {
+        const p = input.path ?? input.file_path ?? input.pattern;
+        const target = typeof p === "string" && p
+            ? p
+            : typeof input.command === "string" && input.command
+                ? input.command.split(" ").slice(0, 3).join(" ")
+                : "";
+        this.log(agent.id, target ? `${name} \u2192 ${target}` : name);
+    }
     handleMsg(agent, msg) {
         // Any message that isn't a rate-limit event counts as real progress and
         // resets the stall watchdog + clears the per-agent blocked flag.
@@ -730,9 +744,11 @@ export class Swarm {
                     if (cb?.type === "tool_use") {
                         agent.currentTool = cb.name;
                         agent.toolCalls++;
-                        const input = cb.input;
-                        const target = input?.path ?? input?.file_path ?? (typeof input?.command === "string" ? input.command.split(" ").slice(0, 3).join(" ") : "");
-                        this.log(agent.id, target ? `${cb.name} \u2192 ${target}` : cb.name);
+                        const input = (cb.input ?? {});
+                        const hasInput = Object.keys(input).length > 0;
+                        this.pendingTools.set(agent, { name: cb.name, input, buf: "", logged: hasInput });
+                        if (hasInput)
+                            this.logToolUse(agent, cb.name, input);
                     }
                     else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
                         agent.lastText = "thinking…";
@@ -740,6 +756,11 @@ export class Swarm {
                 }
                 else if (ev.type === "content_block_delta") {
                     const delta = ev.delta;
+                    const pending = this.pendingTools.get(agent);
+                    if (delta?.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
+                        pending.buf += delta.partial_json;
+                        break;
+                    }
                     // thinking_delta: `delta.thinking`; text_delta: `delta.text`.
                     const raw = delta?.type === "text_delta" ? delta.text
                         : delta?.type === "thinking_delta" ? delta.thinking
@@ -749,6 +770,20 @@ export class Swarm {
                         if (t)
                             agent.lastText = t.slice(-80);
                     }
+                }
+                else if (ev.type === "content_block_stop") {
+                    const pending = this.pendingTools.get(agent);
+                    if (pending && !pending.logged) {
+                        if (pending.buf) {
+                            try {
+                                pending.input = JSON.parse(pending.buf);
+                            }
+                            catch { }
+                        }
+                        this.logToolUse(agent, pending.name, pending.input);
+                        pending.logged = true;
+                    }
+                    this.pendingTools.delete(agent);
                 }
                 break;
             }

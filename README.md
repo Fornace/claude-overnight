@@ -4,14 +4,14 @@ Parallel Claude agents in isolated git worktrees. Set a usage cap so your intera
 
 Hand it an objective and a session budget, walk away, review the diff when the run ends. Every agent runs in its own worktree on its own branch — a misbehaving agent can't trash your working tree. Unmerged branches are preserved for manual review, never discarded.
 
-Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Pair any planner (Opus, Sonnet) with any executor — Anthropic, Cursor, Qwen, OpenRouter, or any Anthropic-compatible endpoint.
+Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — every session runs on the SDK's agent harness. Three roles, each picked independently: **planner** (thinks, steers, reviews), **worker** (runs the tasks), and an optional **fast** model (quick well-scoped edits, verified by the worker next wave). Pair any planner (Opus, Sonnet) with any worker — Anthropic, Cursor, Qwen, OpenRouter, or any Anthropic-compatible endpoint.
 
 ## Run on Qwen 3.6 Plus
 
-Hit your Claude Max plan limits? Running on a tight budget? Qwen 3.6 Plus via Alibaba Cloud's DashScope gateway is a drop-in executor that speaks the Anthropic Messages API  -- same client, same flow, pennies per run.
+Hit your Claude Max plan limits? Running on a tight budget? Qwen 3.6 Plus via Alibaba Cloud's DashScope gateway is a drop-in worker that speaks the Anthropic Messages API  -- same client, same flow, pennies per run.
 
 1. **Get an API key.** Sign up at [Alibaba Cloud](https://account.alibabacloud.com/login/login.htm?oauth_callback=https%3A%2F%2Fmodelstudio.console.alibabacloud.com%2Fap-southeast-1%3Ftab%3Ddashboard%23%2Fapi-key&clearRedirectCookie=1)  -- the link takes you straight to the API key dashboard.
-2. **Configure the provider.** Run `claude-overnight`, choose `Other…` on the executor step, and fill in:
+2. **Configure the provider.** Run `claude-overnight`, choose `Other…` on the worker step, and fill in:
 
    | Field | Value |
    |---|---|
@@ -20,7 +20,7 @@ Hit your Claude Max plan limits? Running on a tight budget? Qwen 3.6 Plus via Al
    | Model id | `qwen3.6-plus` |
    | API key | your DashScope key |
 
-3. That's it. Planner runs on Sonnet (or Opus), executor runs on Qwen.
+3. That's it. Planner runs on Sonnet (or Opus), worker runs on Qwen.
 
 Or set it via env directly:
 
@@ -33,7 +33,7 @@ claude-overnight
 
 ## Run via Cursor API Proxy
 
-Use Cursor's model gateway as an executor -- `auto` (delegates to best available), `composer`, or `composer-2` models. Runs locally through a proxy that speaks the Anthropic Messages API, so it's a drop-in replacement for any other provider.
+Use Cursor's model gateway as a worker -- `auto` (delegates to best available), `composer`, or `composer-2` models. Runs locally through a proxy that speaks the Anthropic Messages API, so it's a drop-in replacement for any other provider.
 
 ### macOS: Cursor agent shell patch
 
@@ -130,7 +130,7 @@ claude-overnight
   ● Opus  -- Opus 4.6 · Most capable
   ○ Sonnet  -- Sonnet 4.6 · Best for everyday tasks
 
-⑤ Executor model (what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…):
+⑤ Worker model (what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…):
   ● Sonnet  -- Sonnet 4.6 · Best for everyday tasks
   ○ Opus  -- Opus 4.6 · Most capable
   ○ Other… · custom OpenAI/Anthropic-compatible endpoint
@@ -211,9 +211,15 @@ Every run gets its own folder in `.claude-overnight/runs/`. Nothing is ever over
 .claude-overnight/
   runs/
     2026-04-04T18-52-49/     ← run A (done, $200, 200 tasks)
-      run.json, status.md, goal.md, milestones/, sessions/
-    2026-04-05T10-30-00/     ← run B (crashed)
-      run.json, sessions/
+      run.json          ← full resume state (models, budget, wave history)
+      status.md, goal.md, themes.md
+      designs/          ← per-focus research docs from the thinking wave
+      tasks.json        ← the plan the swarm is executing
+      transcripts/      ← NDJSON per planner query: themes, orchestrate, steer-wave-N, ...
+      steering/         ← steering decisions per wave
+      milestones/, sessions/
+    2026-04-05T10-30-00/     ← run B (crashed mid-planning)
+      run.json, transcripts/themes.ndjson   ← see exactly what the planner was doing
 ```
 
 Any run that stops before the steering system declares the objective complete  -- capped at usage limit, Ctrl+C, crash, rate limit timeout, steering failure  -- is automatically resumable:
@@ -242,6 +248,20 @@ If the thinking phase succeeds but orchestration crashes, the next run detects t
 ```
 
 **Knowledge carries forward**  -- new runs inherit knowledge from completed previous runs. Thinking sessions and steering see what past runs built. Run 2 knows run 1 already built the auth system.
+
+### Transcripts and streaming
+
+Every planner/steering query streams through the Agent SDK with `includePartialMessages: true`, so tool calls, thinking, and text deltas are captured as they happen. Each query also appends an NDJSON transcript under `runs/<ts>/transcripts/<name>.ndjson` — so if the planner crashes mid-think you still have the forensic trail (prompt preview, every tool use, every text/thinking delta, rate-limit events, and the final result or error). `themes.md` is also written as a human-readable summary right after the thinking wave.
+
+Not every provider delivers the same streaming granularity:
+
+| Provider | Tool-use events | Thinking deltas | Text deltas |
+| --- | --- | --- | --- |
+| Anthropic (direct) | ✓ | ✓ | ✓ |
+| Cursor proxy (`cursor-composer-in-claude`) | — | — | ✓ (final answer only) |
+| Qwen / OpenRouter / custom Anthropic-compatible | depends on upstream | depends | usually ✓ |
+
+When a provider doesn't stream partials (or the model is a reasoning model on the Cursor proxy — the proxy suppresses the thinking phase and only emits the final answer), the ticker shows elapsed time with no live text, then the completed result lands in one go. The UI, transcripts, and the resume flow all behave identically either way — streaming is used when available, never required.
 
 Add `.claude-overnight/` to your `.gitignore` (with the trailing slash  -- see below).
 
@@ -289,7 +309,7 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 |---|---|---|
 | `--budget=N` | `10` | Total agent sessions |
 | `--concurrency=N` | `5` | Parallel agents |
-| `--model=NAME` | prompted | Worker model  -- interactive picks planner + executor separately; `Other…` adds Qwen / OpenRouter / any Anthropic-compat endpoint. In non-interactive mode, a saved provider's model id is auto-resolved to the provider. |
+| `--model=NAME` | prompted | Worker model  -- interactive picks planner + worker separately; `Other…` adds Qwen / OpenRouter / any Anthropic-compat endpoint. In non-interactive mode, a saved provider's model id is auto-resolved to the provider. |
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
 | `--allow-extra-usage` | off | Allow extra/overage usage (billed separately) |
 | `--extra-usage-budget=N` |  -- | Max $ for extra usage (implies --allow-extra-usage) |
@@ -313,12 +333,12 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 
 ## Custom providers (Qwen, OpenRouter, any Anthropic-compatible endpoint)
 
-Planner and executor are picked separately  -- pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of execution.
+Planner, worker, and optional fast model are each picked separately  -- pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of work.
 
-From the interactive picker, choose `Other…` on the planner or executor step:
+From the interactive picker, choose `Other…` on the planner, worker, or fast step:
 
 ```
-⑤ Executor model (what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…):
+⑤ Worker model (what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…):
   ○ Sonnet
   ○ Opus
   ● Other…
@@ -333,9 +353,9 @@ From the interactive picker, choose `Other…` on the planner or executor step:
 
 Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (mode 0600) and show up automatically in every repo. No per-project config.
 
-**How routing works.** Each `query()` gets its own env override (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`)  -- planner queries use the planner provider, executor queries use the executor provider. No global shell env, no proxy daemon, no `process.env` pollution between calls.
+**How routing works.** Each `query()` gets its own env override (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`)  -- planner queries use the planner provider, worker queries use the worker provider, fast queries use the fast provider. No global shell env, no proxy daemon, no `process.env` pollution between calls.
 
-**Pre-flight.** Before the swarm starts, each custom provider is pinged with a 1-turn auth check. Bad keys fail fast with `✗ executor preflight failed: ...` instead of N scattered mid-run errors.
+**Pre-flight.** Before the swarm starts, each custom provider is pinged with a 1-turn auth check. Bad keys fail fast with `✗ worker preflight failed: ...` instead of N scattered mid-run errors.
 
 **Resume.** Provider ids are persisted in `run.json` and rehydrated on resume. If you deleted a provider between runs, resume refuses to start and tells you exactly which id is missing.
 

@@ -38,6 +38,7 @@ export async function steerWave(
   concurrency: number,
   onLog: PlannerLog,
   runMemory?: RunMemory,
+  transcriptName: string = "steer",
 ): Promise<SteerResult> {
   const constraint = contextConstraintNote(workerModel);
 
@@ -133,7 +134,7 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
 
   onLog("Assessing...", "status");
   onLog(`Reading codebase  -- wave ${history.length + 1}`, "event");
-  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA }, onLog);
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName }, onLog);
 
   const parsed = await (async () => {
     const first = attemptJsonParse(resultText);
@@ -142,7 +143,7 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
     const snippet = resultText.length > 2000 ? resultText.slice(0, 1000) + "\n...\n" + resultText.slice(-800) : resultText;
     const retryText = await runPlannerQuery(
       `Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`,
-      { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA },
+      { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName: `${transcriptName}-retry` },
       onLog,
     );
     const retryParsed = attemptJsonParse(retryText);

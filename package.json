@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.25.19",
+  "version": "1.25.20",
   "description": "Parallel Claude agents in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Provider-agnostic model catalog (Anthropic, Cursor, OpenAI, Gemini, DeepSeek, Llama, Qwen) with capability-based task scoping.",
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.92",
     "chalk": "^5.4.1",
-    "cursor-composer-in-claude": "0.8.0",
+    "cursor-composer-in-claude": "0.9.0",
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {

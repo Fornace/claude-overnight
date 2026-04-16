@@ -23,6 +23,8 @@ export interface PlannerOpts {
         type: "json_schema";
         schema: Record<string, unknown>;
     };
+    /** When set, stream events are appended to <runDir>/transcripts/<name>.ndjson */
+    transcriptName?: string;
 }
 export declare function setPlannerEnvResolver(fn: ((model?: string) => Record<string, string> | undefined) | undefined): void;
 export declare function getTotalPlannerCost(): number;

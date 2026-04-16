@@ -67,6 +67,7 @@ export declare class Swarm {
     private worktreeBase?;
     private activeQueries;
     private cleanedUp;
+    private pendingTools;
     logFile?: string;
     readonly model: string | undefined;
     usageCap: number | undefined;
@@ -116,5 +117,7 @@ export declare class Swarm {
     private windowRejectedReset;
     private runAgent;
     private agentSummary;
+    /** Log a tool invocation with a short target extracted from its input. */
+    private logToolUse;
     private handleMsg;
 }

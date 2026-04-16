@@ -23,7 +23,7 @@ const STEER_SCHEMA = {
         required: ["done", "tasks", "reasoning", "statusUpdate", "estimatedSessionsRemaining"],
     },
 };
-export async function steerWave(objective, history, remainingBudget, cwd, plannerModel, workerModel, fastModel, permissionMode, concurrency, onLog, runMemory) {
+export async function steerWave(objective, history, remainingBudget, cwd, plannerModel, workerModel, fastModel, permissionMode, concurrency, onLog, runMemory, transcriptName = "steer") {
     const constraint = contextConstraintNote(workerModel);
     const recentWaves = history.slice(-3);
     const recentText = recentWaves.length > 0 ? recentWaves.map(w => {
@@ -114,14 +114,14 @@ Set "noWorktree": true for verify/user-test tasks  -- they need the real project
 If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSessionsRemaining": 0, "tasks": []}`;
     onLog("Assessing...", "status");
     onLog(`Reading codebase  -- wave ${history.length + 1}`, "event");
-    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA }, onLog);
+    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName }, onLog);
     const parsed = await (async () => {
         const first = attemptJsonParse(resultText);
         if (first)
             return first;
         onLog(`Steering parse failed (${resultText.length} chars). Asking model to fix...`, "event");
         const snippet = resultText.length > 2000 ? resultText.slice(0, 1000) + "\n...\n" + resultText.slice(-800) : resultText;
-        const retryText = await runPlannerQuery(`Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA }, onLog);
+        const retryText = await runPlannerQuery(`Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog);
         const retryParsed = attemptJsonParse(retryText);
         if (retryParsed)
             return retryParsed;

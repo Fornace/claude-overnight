@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync, readdirSync, mkdirSync } from "fs";
+import { readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
@@ -9,6 +9,7 @@ import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
 import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
 import { setPlannerEnvResolver } from "./planner-query.js";
+import { setTranscriptRunDir } from "./transcripts.js";
 import {
   pickModel,
   loadProviders,
@@ -94,10 +95,17 @@ async function promptResumeOverrides(
     const extraStr = state.allowExtraUsage
       ? (state.extraUsageBudget ? `$${state.extraUsageBudget}` : "unlimited")
       : "off";
+    const modelLine = (label: string, m: string | undefined) =>
+      m ? `  ${chalk.dim(label.padEnd(11))}${chalk.white(m)} ${chalk.dim(`(${formatContextWindow(m)} context)`)}` : null;
     console.log();
     console.log(`  ${chalk.dim("Resume settings")}`);
     console.log(`  ${chalk.dim("─".repeat(40))}`);
-    console.log(`  ${chalk.dim("model      ")}${chalk.white(state.workerModel)} ${chalk.dim(`(${formatContextWindow(state.workerModel)} context)`)}`);
+    const lines = [
+      modelLine("planner", state.plannerModel),
+      modelLine("worker", state.workerModel),
+      modelLine("fast", state.fastModel),
+    ].filter(Boolean) as string[];
+    for (const l of lines) console.log(l);
     console.log(`  ${chalk.dim("remaining  ")}${chalk.white(String(remaining))} ${chalk.dim("sessions")}`);
     console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
     console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
@@ -204,7 +212,7 @@ async function main() {
     --dry-run              Show planned tasks without running them
     --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
-    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + executor separately  -- supports 'Other…' for Qwen / OpenRouter / etc.)")}
+    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + worker separately  -- supports 'Other…' for Qwen / OpenRouter / etc.)")}
     --fast-model=NAME      Fast model for quick tasks ${chalk.dim("(optional  -- checked by worker model in next wave)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
@@ -438,11 +446,14 @@ async function main() {
             const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${remainingBudget}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
             console.log(chalk.cyan(`\n  ◆ Re-orchestrating plan from existing designs...\n`));
             process.stdout.write("\x1B[?25l");
+            // Route transcripts into the resumed run so this call's events
+            // land alongside the prior run's planning trail.
+            setTranscriptRunDir(resumeRunDir);
             try {
               const orchTasks = await orchestrate(
                 resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel,
                 resumeState.permissionMode, orchBudget, resumeState.concurrency, makeProgressLog(),
-                flexNote, join(resumeRunDir, "tasks.json"),
+                flexNote, join(resumeRunDir, "tasks.json"), "orchestrate-resume",
               );
               resumeState.currentTasks = orchTasks;
               process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${orchTasks.length} tasks`)}\n`);
@@ -539,7 +550,7 @@ async function main() {
     try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
     const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering  -- use your strongest)")}:`, models);
     plannerModel = plannerPick.model; plannerProvider = plannerPick.provider;
-    const workerPick = await pickModel(`${chalk.cyan("⑤")} Executor model ${chalk.dim("(what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models);
+    const workerPick = await pickModel(`${chalk.cyan("⑤")} Worker model ${chalk.dim("(what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models);
     workerModel = workerPick.model; workerProvider = workerPick.provider;
 
     // ⑤b Optional fast model for quick tasks that will be verified
@@ -701,7 +712,7 @@ async function main() {
     const seen = new Set<string>();
     const all: Array<[string, ProviderConfig | undefined]> = [
       ["planner", plannerProvider],
-      ["executor", workerProvider],
+      ["worker", workerProvider],
       ["fast", fastProvider],
     ];
     const pending: Array<[string, ProviderConfig]> = [];
@@ -780,6 +791,10 @@ async function main() {
   const orphanedDir = !resuming ? findOrphanedDesigns(rootDir) : null;
   const runDir = resuming && resumeRunDir ? resumeRunDir : (orphanedDir ?? createRunDir(rootDir));
   if (resuming && resumeRunDir) updateLatestSymlink(rootDir, resumeRunDir);
+  // Route all planner/steering stream events to <runDir>/transcripts/*.ndjson
+  // so crashes during planning leave a forensic trail and resumes can inspect
+  // what the planner was doing mid-flight. See src/transcripts.ts.
+  setTranscriptRunDir(runDir);
   const previousKnowledge = readPreviousRunKnowledge(rootDir);
 
   const needsPlan = tasks.length === 0 && (!resuming || replanFromScratch);
@@ -794,8 +809,9 @@ async function main() {
       saveRunState(runDir, {
         id: runDir.split(/[/\\]/).pop() ?? "",
         objective, budget: budget ?? 10, remaining: budget ?? 10,
-        workerModel, plannerModel,
+        workerModel, plannerModel, fastModel,
         workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
+        fastProviderId: fastProvider?.id,
         concurrency, permissionMode,
         usageCap, allowExtraUsage, extraUsageBudget,
         flex, useWorktrees, mergeStrategy,
@@ -819,7 +835,19 @@ async function main() {
 
     try {
       if (useThinking) {
-        let themes = await identifyThemes(objective!, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog());
+        // Persist themes as a Markdown doc so a planning-phase crash leaves a
+        // readable record (and a future resume can skip identifyThemes).
+        const saveThemesMd = (list: string[]) => {
+          try {
+            writeFileSync(
+              join(runDir, "themes.md"),
+              `# Themes\n\n**Objective:** ${objective}\n\n${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n`,
+              "utf-8",
+            );
+          } catch {}
+        };
+        let themes = await identifyThemes(objective!, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog(), "themes");
+        saveThemesMd(themes);
         process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`);
         planRestore();
         let reviewing = true;
@@ -832,7 +860,11 @@ async function main() {
             const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
             if (!feedback) continue;
             process.stdout.write("\x1B[?25l");
-            try { themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog()); process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`); }
+            try {
+              themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog(), "themes-refine");
+              saveThemesMd(themes);
+              process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`);
+            }
             catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
             planRestore();
           } else if (action === "c") {
@@ -885,8 +917,9 @@ async function main() {
               saveRunState(runDir, {
                 id: runDir.split(/[/\\]/).pop() ?? "",
                 objective: objective!, budget: budget ?? 10, remaining: (budget ?? 10) - thinkingUsed,
-                workerModel, plannerModel,
+                workerModel, plannerModel, fastModel,
                 workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
+                fastProviderId: fastProvider?.id,
                 concurrency, permissionMode,
                 usageCap, allowExtraUsage, extraUsageBudget,
                 flex, useWorktrees, mergeStrategy,

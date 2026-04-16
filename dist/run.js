@@ -272,7 +272,7 @@ export async function executeRun(cfg) {
                 const appliedGuidance = memory.userGuidance;
                 if (appliedGuidance)
                     display.appendSteeringEvent(`User directives applied: ${appliedGuidance.slice(0, 80)}`);
-                const steer = await steerWave(objective, waveHistory, remaining, cwd, plannerModel, workerModel, fastModel, permissionMode, concurrency, steeringLog, memory);
+                const steer = await steerWave(objective, waveHistory, remaining, cwd, plannerModel, workerModel, fastModel, permissionMode, concurrency, steeringLog, memory, `steer-wave-${waveNum}-attempt-${steerAttempts}`);
                 accCost += getTotalPlannerCost() - plannerCostBefore;
                 syncRunInfo();
                 if (steer.statusUpdate)
