@@ -1,3 +1,4 @@
 node_modules/
 .claude-overnight/
 .vercel
+.DS_Store

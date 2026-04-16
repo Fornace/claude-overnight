@@ -1,0 +1,11 @@
+---
+description: Cursor proxy + macOS Keychain / preflight smoke
+globs: src/providers.ts,src/index.ts,docs/CURSOR_PROXY_MACOS_DISCOVERY.md
+---
+
+# Cursor keychain / ACP
+
+- **Authoritative write-up:** `docs/CURSOR_PROXY_MACOS_DISCOVERY.md` (chat-only temp `HOME` vs Keychain, `USE_ACP`, `composer-2` vs `composer-2-fast`, verification matrix).
+- Bundled **cursor-composer-in-claude** uses ACP `authenticate` with `methodId: "cursor_login"` unless `acpSkipAuthenticate` is true (`loadBridgeConfig`). That RPC can trigger macOS Keychain for **`cursor-user`** even when `CURSOR_SKIP_KEYCHAIN=1` on the agent env.
+- **Mitigation in claude-overnight:** **`CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE=1`**, **`CURSOR_BRIDGE_USE_ACP=1`**, **`CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`** (default chat-only isolation fakes `HOME` and can still cause Keychain timeouts with a User API key), plus **`CURSOR_API_KEY`** / **`CURSOR_AUTH_TOKEN`** injected into the proxy spawn.
+- **Regression:** `npm run matrix:cursor-proxy`; preflight smoke when changing proxy env (macOS).
