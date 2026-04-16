@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync, openSync, statSync, readSync, closeSync } from "fs";
 import { createRequire } from "node:module";
 import { homedir } from "os";
 import { join, dirname } from "path";
@@ -440,6 +440,56 @@ async function preflightCursorProxyViaHttp(
 
 export const PROXY_DEFAULT_URL = "http://127.0.0.1:8765";
 
+/** Directory cursor-composer-in-claude uses for its own sessions.log (see env.js). */
+function cursorProxyLogDir(): string {
+  return join(homedir(), ".cursor-api-proxy");
+}
+
+/** File we write the proxy child's stdout+stderr to (so agent errors aren't lost to stdio:ignore). */
+export function cursorProxyOutLogPath(): string {
+  return join(cursorProxyLogDir(), "proxy.out.log");
+}
+
+/** cursor-composer-in-claude's default sessions log (request trace + ERROR lines). */
+export function cursorProxySessionsLogPath(): string {
+  return join(cursorProxyLogDir(), "sessions.log");
+}
+
+function tailFile(path: string, maxLines: number, maxBytes = 32_768): string | null {
+  try {
+    const st = statSync(path);
+    const size = st.size;
+    const start = size > maxBytes ? size - maxBytes : 0;
+    const buf = Buffer.alloc(size - start);
+    const fd = openSync(path, "r");
+    try {
+      readSync(fd, buf, 0, buf.length, start);
+    } finally {
+      try { closeSync(fd); } catch {}
+    }
+    const text = buf.toString("utf8");
+    const lines = text.split("\n").filter(Boolean);
+    return lines.slice(-maxLines).join("\n");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the tail of both proxy logs for diagnostics. Returns a human-readable
+ * block with file paths + last lines, or null if neither log exists.
+ */
+export function readCursorProxyLogTail(linesPerFile = 20): string | null {
+  const out = cursorProxyOutLogPath();
+  const sess = cursorProxySessionsLogPath();
+  const parts: string[] = [];
+  const outTail = tailFile(out, linesPerFile);
+  if (outTail) parts.push(`── ${out} (last ${linesPerFile} lines) ──\n${outTail}`);
+  const sessTail = tailFile(sess, linesPerFile);
+  if (sessTail) parts.push(`── ${sess} (last ${linesPerFile} lines) ──\n${sessTail}`);
+  return parts.length ? parts.join("\n\n") : null;
+}
+
 /** Check if a provider routes through cursor-composer-in-claude. */
 export function isCursorProxyProvider(p: ProviderConfig): boolean {
   return p.cursorProxy === true || p.baseURL === PROXY_DEFAULT_URL;
@@ -877,10 +927,15 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
   })));
 
   try {
-    console.log(chalk.dim(`  Spawning proxy…`));
+    // Capture proxy stdout+stderr to a log file — stdio:"ignore" was hiding
+    // agent stderr so "cursor_cli_error" responses had no actionable context.
+    const logPath = cursorProxyOutLogPath();
+    try { mkdirSync(dirname(logPath), { recursive: true }); } catch {}
+    const logFd = openSync(logPath, "a");
+    console.log(chalk.dim(`  Spawning proxy… ${chalk.dim(`(logs: ${logPath})`)}`));
     const child = spawn(process.execPath, [composerCli], {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", logFd, logFd],
       env: proxyEnv,
     });
 

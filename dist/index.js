@@ -9,7 +9,7 @@ import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
 import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
 import { setPlannerEnvResolver } from "./planner-query.js";
-import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, ensureCursorProxyRunning, bundledComposerProxyShellCommand, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, } from "./providers.js";
+import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, readCursorProxyLogTail, ensureCursorProxyRunning, bundledComposerProxyShellCommand, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
 import { executeRun } from "./run.js";
@@ -823,10 +823,14 @@ async function main() {
             if (!result.ok) {
                 console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
                 if (isCursorProxyProvider(provider)) {
-                    {
-                        const cmd = bundledComposerProxyShellCommand();
-                        console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed or timed out (e.g. keychain/UI). Retry, or start the bundled proxy: ${cmd ?? "npm install in the claude-overnight package, then re-run"}`));
+                    const tail = readCursorProxyLogTail(25);
+                    if (tail) {
+                        console.error(chalk.yellow(`  ── proxy log tail (agent stderr + sessions) ──`));
+                        for (const line of tail.split("\n"))
+                            console.error(chalk.dim(`    ${line}`));
                     }
+                    const cmd = bundledComposerProxyShellCommand();
+                    console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed or timed out (e.g. keychain/UI). Retry, or start the bundled proxy: ${cmd ?? "npm install in the claude-overnight package, then re-run"}`));
                 }
                 else {
                     console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));

@@ -60,6 +60,15 @@ export declare function preflightProvider(p: ProviderConfig, cwd: string, timeou
     error: string;
 }>;
 export declare const PROXY_DEFAULT_URL = "http://127.0.0.1:8765";
+/** File we write the proxy child's stdout+stderr to (so agent errors aren't lost to stdio:ignore). */
+export declare function cursorProxyOutLogPath(): string;
+/** cursor-composer-in-claude's default sessions log (request trace + ERROR lines). */
+export declare function cursorProxySessionsLogPath(): string;
+/**
+ * Read the tail of both proxy logs for diagnostics. Returns a human-readable
+ * block with file paths + last lines, or null if neither log exists.
+ */
+export declare function readCursorProxyLogTail(linesPerFile?: number): string | null;
 /** Check if a provider routes through cursor-composer-in-claude. */
 export declare function isCursorProxyProvider(p: ProviderConfig): boolean;
 /** True if ~/.zshrc / ~/.zprofile contain the `run_cursor_agent` workaround (see README). */
