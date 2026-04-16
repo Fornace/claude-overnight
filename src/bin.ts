@@ -15,6 +15,34 @@ process.env.CURSOR_SKIP_KEYCHAIN = "1";
 const argv = process.argv.slice(2);
 const quiet = argv.includes("-h") || argv.includes("--help") || argv.includes("-v") || argv.includes("--version");
 
+// Auto-update: check npm at most once every 4 hours, install and re-exec if newer.
+// Skipped in non-TTY (CI/pipe) mode, on --help/--version, and if CLAUDE_OVERNIGHT_UPDATED is set.
+if (process.stdout.isTTY && !quiet && !process.env.CLAUDE_OVERNIGHT_UPDATED) {
+  const UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000;
+  const { homedir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const tsFile = join(homedir(), ".claude-overnight-update-ts");
+  let shouldCheck = true;
+  try { shouldCheck = Date.now() - parseInt(readFileSync(tsFile, "utf-8").trim(), 10) > UPDATE_INTERVAL_MS; } catch {}
+  if (shouldCheck) {
+    try {
+      writeFileSync(tsFile, String(Date.now())); // stamp first so failures don't re-trigger
+      const { execFileSync, spawnSync } = await import("node:child_process");
+      const latest = execFileSync("npm", ["show", "claude-overnight", "version"], { encoding: "utf-8", timeout: 6000 }).trim();
+      const { VERSION } = await import("./_version.js");
+      if (latest !== VERSION) {
+        process.stdout.write(`\r\x1b[2K  🌙  claude-overnight \x1b[33m${VERSION} → ${latest}\x1b[0m  updating…\n`);
+        execFileSync("npm", ["i", "-g", `claude-overnight@${latest}`], { stdio: "inherit", timeout: 60000 });
+        const r = spawnSync(process.argv[0], process.argv.slice(1), {
+          stdio: "inherit", env: { ...process.env, CLAUDE_OVERNIGHT_UPDATED: "1" },
+        });
+        process.exit(r.status ?? 0);
+      }
+    } catch {} // silent — never block startup for a failed update check
+  }
+}
+
 if (!quiet && process.stdout.isTTY) {
   const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   let i = 0;

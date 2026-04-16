@@ -191,13 +191,15 @@ export function renderUnifiedFrame(params) {
     return [...header, ...content, ...footer].join("\n");
 }
 export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRows) {
+    const allDone = swarm.agents.length > 0 && swarm.agents.every(a => a.status !== "running");
+    const doneTag = allDone && !swarm.aborted ? chalk.green("COMPLETE") : "";
     const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
     const pausedTag = swarm.paused ? chalk.yellow("PAUSED") : "";
     const stallTag = swarm.stallLevel >= 3 ? chalk.red("STALL") : swarm.stallLevel > 0 ? chalk.yellow(`STALL L${swarm.stallLevel}`) : "";
     const phaseLabel = swarm.phase === "planning" ? chalk.magenta("PLANNING")
         : swarm.phase === "merging" ? chalk.yellow("MERGING")
             : swarm.rateLimitPaused > 0 ? chalk.yellow("COOLING") : "";
-    const phase = [phaseLabel, pausedTag, stallTag, stoppingTag].filter(Boolean).join(" ");
+    const phase = [phaseLabel, doneTag, pausedTag, stallTag, stoppingTag].filter(Boolean).join(" ");
     const waveUsed = swarm.completed + swarm.failed;
     const running = swarm.agents.filter(a => a.status === "running");
     const finished = swarm.agents.filter(a => a.status !== "running");
@@ -261,6 +263,11 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
             // Event log (undecorated)
             const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
             const eventRows = [chalk.gray("  \u2500\u2500\u2500 Events " + "\u2500".repeat(Math.min(ww - 16, 90)))];
+            // All-done indicator: visible immediately when swarm finishes, before summary / steering
+            if (allDone && swarm.phase !== "done") {
+                eventRows.push(chalk.dim("  (all tasks done \u2014 processing)"));
+                eventRows.push("");
+            }
             const logN = Math.min(12, swarm.logs.length);
             for (const entry of swarm.logs.slice(-logN)) {
                 const t = new Date(entry.time).toLocaleTimeString("en", { hour12: false });
