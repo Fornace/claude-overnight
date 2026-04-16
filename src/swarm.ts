@@ -707,12 +707,18 @@ export class Swarm {
             const input = cb.input as Record<string, unknown> | undefined;
             const target = input?.path ?? input?.file_path ?? (typeof input?.command === "string" ? input.command.split(" ").slice(0, 3).join(" ") : "");
             this.log(agent.id, target ? `${cb.name} \u2192 ${target}` : cb.name);
+          } else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
+            agent.lastText = "thinking…";
           }
         } else if (ev.type === "content_block_delta") {
           const delta = (ev as any).delta;
-          if (delta?.type === "text_delta" && delta.text) {
-            const t = delta.text.trim();
-            if (t) agent.lastText = t.slice(0, 80);
+          // thinking_delta: `delta.thinking`; text_delta: `delta.text`.
+          const raw = delta?.type === "text_delta" ? delta.text
+            : delta?.type === "thinking_delta" ? delta.thinking
+            : undefined;
+          if (typeof raw === "string") {
+            const t = raw.trim();
+            if (t) agent.lastText = t.slice(-80);
           }
         }
         break;

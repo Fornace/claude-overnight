@@ -223,22 +223,32 @@ async function runPlannerQueryOnce(
       if (!sessionId && "session_id" in (msg as any)) sessionId = (msg as any).session_id;
       if (msg.type === "stream_event") {
         const ev = (msg as any).event;
-        if (ev?.type === "content_block_start" && ev.content_block?.type === "tool_use") {
-          toolCount++;
-          const toolName = ev.content_block.name;
-          const input = ev.content_block.input as Record<string, unknown> | undefined;
-          // Enrich event with target file/path for readability
-          const target = input?.path ?? input?.file_path ?? input?.command
-            ? (typeof input?.command === "string" ? input.command.split(" ").slice(0, 3).join(" ") : "")
-            : "";
-          lastLogText = target ? `${toolName} ${target}` : toolName;
-          onLog(target ? `${toolName} → ${target}` : toolName, "event");
+        if (ev?.type === "content_block_start") {
+          const cb = ev.content_block;
+          if (cb?.type === "tool_use") {
+            toolCount++;
+            const toolName = cb.name;
+            const input = cb.input as Record<string, unknown> | undefined;
+            // Enrich event with target file/path for readability
+            const target = input?.path ?? input?.file_path ?? input?.command
+              ? (typeof input?.command === "string" ? input.command.split(" ").slice(0, 3).join(" ") : "")
+              : "";
+            lastLogText = target ? `${toolName} ${target}` : toolName;
+            onLog(target ? `${toolName} → ${target}` : toolName, "event");
+          } else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
+            lastLogText = "thinking…";
+          }
         }
         if (ev?.type === "content_block_delta") {
           const delta = (ev as any).delta;
-          if (delta?.type === "text_delta" && delta.text) {
-            const snippet = delta.text.trim().replace(/[{}"\\,[\]]+/g, " ").replace(/\s+/g, " ").trim();
-            if (snippet.length > 5) lastLogText = snippet.slice(0, 60);
+          // thinking_delta carries reasoning text under `delta.thinking`;
+          // text_delta carries final-answer text under `delta.text`.
+          const raw = delta?.type === "text_delta" ? delta.text
+            : delta?.type === "thinking_delta" ? delta.thinking
+            : undefined;
+          if (typeof raw === "string" && raw) {
+            const snippet = raw.trim().replace(/[{}"\\,[\]]+/g, " ").replace(/\s+/g, " ").trim();
+            if (snippet.length > 5) lastLogText = snippet.slice(-60);
           }
         }
       }

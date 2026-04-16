@@ -201,7 +201,15 @@ export async function identifyThemes(
   onLog: (text: string) => void = () => {},
 ): Promise<string[]> {
   const resultText = await runPlannerQuery(
-    `Split this objective into exactly ${count} independent research angles for architects exploring a codebase. Each angle should cover a distinct aspect.\n\nObjective: ${objective}\n\nReturn ONLY a JSON object: {"themes": ["angle description", ...]}`,
+    `You are picking ${count} research angles for architects who will deeply explore a codebase next.
+
+First do a BRIEF recon (3-6 tool calls max, don't go deep): read package.json and README if present, glob the top-level directory, peek at one or two config files that reveal the stack. You are learning what this codebase actually IS -- not solving anything.
+
+Then pick ${count} angles that carve up THIS specific codebase orthogonally. Prefer concrete subsystems you saw (e.g. "authentication + session handling", "time-tracking mutation paths") over generic buckets ("data layer", "UX").
+
+Objective: ${objective}
+
+Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
     { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA }, onLog,
   );
   const parsed = attemptJsonParse(resultText);
