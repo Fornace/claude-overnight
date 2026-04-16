@@ -3,7 +3,7 @@
 
 import { spawn, execSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +69,28 @@ function killTree(child) {
   }
 }
 
+function ensurePool() {
+  try {
+    const src = join(homedir(), ".cursor", "cli-config.json");
+    if (!existsSync(src)) return null;
+    const buf = readFileSync(src);
+    const dirs = [];
+    for (let i = 1; i <= 5; i++) {
+      const d = join(homedir(), ".cursor-api-proxy", "accounts", `pool-${i}`);
+      try {
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, "cli-config.json"), buf);
+        dirs.push(d);
+      } catch {
+        /* ignore */
+      }
+    }
+    return dirs.length > 0 ? dirs.join(",") : null;
+  } catch {
+    return null;
+  }
+}
+
 function baseProxyEnv(token, agentPaths) {
   const bridgeKey =
     process.env.CURSOR_BRIDGE_API_KEY?.trim() || token;
@@ -80,10 +102,14 @@ function baseProxyEnv(token, agentPaths) {
     CURSOR_SKIP_KEYCHAIN: "1",
     CURSOR_API_KEY: token,
     CURSOR_AUTH_TOKEN: token,
-    CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE: "1",
-    CURSOR_BRIDGE_USE_ACP: "1",
+    // Mirrors src/providers.ts: CLI streaming path (not ACP) to accept
+    // opus/sonnet *-thinking-* friendly names; chat-only off to avoid
+    // temp-HOME Keychain waits on macOS; account pool for parallel safety.
+    CURSOR_BRIDGE_USE_ACP: "0",
     CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "false",
   };
+  const pool = ensurePool();
+  if (pool) env.CURSOR_CONFIG_DIRS = pool;
   if (agentPaths.sysNode && agentPaths.agentJs) {
     env.CURSOR_AGENT_NODE = agentPaths.sysNode;
     env.CURSOR_AGENT_SCRIPT = agentPaths.agentJs;
@@ -95,23 +121,22 @@ function baseProxyEnv(token, agentPaths) {
 function buildMatrix(includeDanger) {
   const rows = [
     { id: "01-overnight-parity" },
-    { id: "02-acp-off", set: { CURSOR_BRIDGE_USE_ACP: "0" } },
-    { id: "03-skip-keychain-off", set: { CURSOR_SKIP_KEYCHAIN: "0" } },
-    { id: "04-ci-off", set: { CI: "0" } },
-    { id: "05-no-agent-node-override", del: ["CURSOR_AGENT_NODE", "CURSOR_AGENT_SCRIPT"] },
-    { id: "06-bridge-key-only-for-agent", del: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"] },
-    { id: "07-skip-auth-env-off", set: { CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE: "0" } },
-    { id: "08-verbose", set: { CURSOR_BRIDGE_VERBOSE: "true" } },
-    { id: "09-max-mode", set: { CURSOR_BRIDGE_MAX_MODE: "true" } },
-    { id: "10-acp-debug", set: { NODE_DEBUG: "cursor-api-proxy:acp" } },
+    { id: "02-acp-on-regress", set: { CURSOR_BRIDGE_USE_ACP: "1" } },
+    { id: "03-chat-only-regress", set: { CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "true" } },
+    { id: "04-no-pool-regress", del: ["CURSOR_CONFIG_DIRS"] },
+    { id: "05-skip-keychain-off", set: { CURSOR_SKIP_KEYCHAIN: "0" } },
+    { id: "06-ci-off", set: { CI: "0" } },
+    { id: "07-no-agent-node-override", del: ["CURSOR_AGENT_NODE", "CURSOR_AGENT_SCRIPT"] },
+    { id: "08-bridge-key-only-for-agent", del: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"] },
+    { id: "09-verbose", set: { CURSOR_BRIDGE_VERBOSE: "true" } },
+    { id: "10-max-mode", set: { CURSOR_BRIDGE_MAX_MODE: "true" } },
     { id: "11-prompt-via-stdin", set: { CURSOR_BRIDGE_PROMPT_VIA_STDIN: "true" } },
-    { id: "12-chat-workspace-isolated", set: { CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "true" } },
-    { id: "13-force-bridge", set: { CURSOR_BRIDGE_FORCE: "true" } },
+    { id: "12-force-bridge", set: { CURSOR_BRIDGE_FORCE: "true" } },
   ];
   if (includeDanger) {
     rows.push({
       id: "99-danger-no-cursor-keys",
-      del: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_BRIDGE_API_KEY", "CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE", "CURSOR_BRIDGE_USE_ACP"],
+      del: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_BRIDGE_API_KEY", "CURSOR_CONFIG_DIRS"],
       set: { CURSOR_SKIP_KEYCHAIN: "0", CI: "0" },
     });
   }

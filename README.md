@@ -97,11 +97,11 @@ security unlock-keychain ~/Library/Keychains/login.keychain-db
 
 **Advanced:** If something else must share port `8765` and you manage the proxy yourself, set `CURSOR_OVERNIGHT_NO_PROXY_RESTART=1` to skip the automatic “replace listener” step when a Cursor API token is present.
 
-**How headless Cursor + macOS Keychain actually works (discovery):** We documented the full investigation: why ACP + skip-authenticate + `CURSOR_API_KEY` were not enough, how **chat-only workspace** (default in cursor-composer) fakes `HOME` and still triggered **Keychain timeouts** despite a User API key, and how **`composer-2-fast`** can fail the ACP smoke test for reasons unrelated to Keychain. See **[docs/CURSOR_PROXY_MACOS_DISCOVERY.md](docs/CURSOR_PROXY_MACOS_DISCOVERY.md)**.
+**How headless Cursor + macOS Keychain actually works (discovery):** We documented the full investigation: why ACP was the wrong path for opus/sonnet `*-thinking-*` variants (model-name mismatch → silent `exit 1`), how **chat-only workspace** (default in cursor-composer) fakes `HOME` and triggers **Keychain timeouts** despite a User API key, and how a cloned **account pool** makes parallel cursor-agent spawns race-free. See **[docs/CURSOR_PROXY_MACOS_DISCOVERY.md](docs/CURSOR_PROXY_MACOS_DISCOVERY.md)**.
 
-**Quick reference — bundled proxy env:** `CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE=1`, `CURSOR_BRIDGE_USE_ACP=1`, `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, plus `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` / `CURSOR_BRIDGE_API_KEY` and `CURSOR_SKIP_KEYCHAIN=1` / `CI=true`. Details and tables are in the doc above.
+**Quick reference — bundled proxy env:** `CURSOR_BRIDGE_USE_ACP=0` (CLI streaming path accepts all friendly model names), `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, `CURSOR_CONFIG_DIRS=<5 cloned pool dirs>` (parallel-safe), plus `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` / `CURSOR_BRIDGE_API_KEY` and `CURSOR_SKIP_KEYCHAIN=1` / `CI=true`. Details and tables are in the doc above.
 
-**Regression / stress test:** `npm run matrix:cursor-proxy` (optional `--quick`, `--include-danger`). Use `MATRIX_MODELS=composer-2,composer-2-fast` to compare models; override `MATRIX_PORT_BASE`, `MATRIX_MODEL`, `MATRIX_MSG_TIMEOUT_MS` as needed.
+**Regression / stress test:** `npm run matrix:cursor-proxy` (optional `--quick`, `--include-danger`). Use `MATRIX_MODELS=composer-2,claude-opus-4-7-thinking-high` to compare models; override `MATRIX_PORT_BASE`, `MATRIX_MODEL`, `MATRIX_MSG_TIMEOUT_MS` as needed.
 
 ## Install
 
