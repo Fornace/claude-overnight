@@ -1,14 +1,10 @@
 # claude-overnight
 
-**A background lane for your Claude Max plan.** Runs a capped swarm of Claude Agent SDK sessions in isolated git worktrees  -- stops at a usage cap you set, so your interactive Claude Code always has headroom. Rate-limited? It waits. Crash? It resumes with full context.
+Parallel Claude agents in isolated git worktrees. Set a usage cap so your interactive Claude Code keeps its headroom. Rate-limited? It waits. Crash? It resumes with full context.
 
-Your Max plan rate limits eat interactive coding time. One deep refactor and the 5-hour window is gone before lunch. `claude-overnight` runs background agent sessions up to the percentage cap you pick (90% is typical), leaving the rest free for your own Claude Code session. Hand it an objective and a session budget, walk away, review the diff when the run ends.
+Hand it an objective and a session budget, walk away, review the diff when the run ends. Every agent runs in its own worktree on its own branch — a misbehaving agent can't trash your working tree. Unmerged branches are preserved for manual review, never discarded.
 
-Cursor API Proxy supported -- route through Cursor's model gateway for Composer-powered execution on `auto`, `composer`, or `composer-2` models. See **Run via Cursor API Proxy** below.
-
-Isolated by default. Every agent runs in its own git worktree on its own branch, so a misbehaving agent can't trash your working tree. You choose what agents can do before the run starts  -- no surprise escalation mid-flight. Unmerged branches are preserved for manual review, never discarded. Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)  -- not a Claude Code replacement, but a background lane that runs alongside it.
-
-Different shape from hosted agent harnesses like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview): instead of one agent in one cloud container billed separately, you get many parallel sessions on your own machine, in your real repo, against your own Max plan (or API key). Works with Claude Opus, Sonnet, and Haiku  -- or pair an Anthropic planner with a cheaper executor on Qwen, OpenRouter, or any Anthropic-compatible endpoint.
+Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Pair any planner (Opus, Sonnet) with any executor — Anthropic, Cursor, Qwen, OpenRouter, or any Anthropic-compatible endpoint.
 
 ## Run on Qwen 3.6 Plus
 
@@ -39,6 +35,27 @@ claude-overnight
 
 Use Cursor's model gateway as an executor -- `auto` (delegates to best available), `composer`, or `composer-2` models. Runs locally through a proxy that speaks the Anthropic Messages API, so it's a drop-in replacement for any other provider.
 
+### macOS: Cursor agent shell patch
+
+On macOS, Cursor's `agent` / `cursor-agent` CLI often misbehaves because it uses a bundled Node.js. Add this to `~/.zshrc` so the `agent` command runs the real script with your **system** Node (then `source ~/.zshrc` or open a new terminal):
+
+```bash
+# Force Cursor Agent to use System Node.js
+run_cursor_agent() {
+    # Find the real directory of the cursor-agent script (resolves symlinks)
+    local agent_path="$(command -v cursor-agent)"
+    local script_dir="$(dirname "$(realpath "$agent_path")")"
+
+    # Run the core JS file directly with your system node
+    node "$script_dir/index.js" "$@"
+}
+
+# Overwrite any existing 'agent' alias to use our custom function
+alias agent="run_cursor_agent"
+```
+
+`claude-overnight` prints a one-time notice when you use the Cursor proxy and this snippet is not detected in `~/.zshrc` or `~/.zprofile`. The bundled proxy also sets `CURSOR_AGENT_NODE` / `CURSOR_AGENT_SCRIPT` when it can find `node` and `cursor-agent`, but your interactive shell still benefits from the alias.
+
 1. **Install the Cursor CLI and proxy:**
 
    ```bash
@@ -67,6 +84,24 @@ claude-overnight
 ```
 
 **Tip:** run `claude-overnight` with the `--model=cursor-auto` flag in non-interactive mode to skip the picker. If the proxy isn't running at startup, a warning is shown but Anthropic providers remain available.
+
+### macOS: “Keychain Not Found” / `cursor-user`
+
+The Cursor **`agent`** binary stores an interactive login as **`cursor-user`** in your **login** keychain. For automation, use a **[User API key](https://cursor.com/docs/cli/headless)** (`export CURSOR_API_KEY=...` from [Integrations](https://cursor.com/dashboard/integrations)) — the bundled proxy then does not need Keychain. `claude-overnight` forces `CURSOR_SKIP_KEYCHAIN=1` and `CI=true`; if System Settings still shows **“A keychain cannot be found to store …”**, the login keychain is often missing or damaged: open **Keychain Access → First Aid** on **login**, or use **Reset To Defaults** in the dialog. Some users fix a stuck keychain with:
+
+```bash
+security unlock-keychain ~/Library/Keychains/login.keychain-db
+```
+
+**Automation:** Saving a key via **Cursor…** in `claude-overnight` is enough — it is written to `providers.json` and injected into both the Claude SDK env and the bundled proxy (including `CURSOR_API_KEY` for the native `agent`). You do not need to `export` variables unless you want to override for one shell.
+
+**Advanced:** If something else must share port `8765` and you manage the proxy yourself, set `CURSOR_OVERNIGHT_NO_PROXY_RESTART=1` to skip the automatic “replace listener” step when a Cursor API token is present.
+
+**How headless Cursor + macOS Keychain actually works (discovery):** We documented the full investigation: why ACP + skip-authenticate + `CURSOR_API_KEY` were not enough, how **chat-only workspace** (default in cursor-composer) fakes `HOME` and still triggered **Keychain timeouts** despite a User API key, and how **`composer-2-fast`** can fail the ACP smoke test for reasons unrelated to Keychain. See **[docs/CURSOR_PROXY_MACOS_DISCOVERY.md](docs/CURSOR_PROXY_MACOS_DISCOVERY.md)**.
+
+**Quick reference — bundled proxy env:** `CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE=1`, `CURSOR_BRIDGE_USE_ACP=1`, `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, plus `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` / `CURSOR_BRIDGE_API_KEY` and `CURSOR_SKIP_KEYCHAIN=1` / `CI=true`. Details and tables are in the doc above.
+
+**Regression / stress test:** `npm run matrix:cursor-proxy` (optional `--quick`, `--include-danger`). Use `MATRIX_MODELS=composer-2,composer-2-fast` to compare models; override `MATRIX_PORT_BASE`, `MATRIX_MODEL`, `MATRIX_MSG_TIMEOUT_MS` as needed.
 
 ## Install
 
@@ -126,24 +161,9 @@ claude-overnight
 
 You interact once (objective, budget, model, review themes), then the rest runs unattended  -- thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
 
-## How it differs
-
-- vs **Claude Code**: many agents, no driver, capped so your Claude Code session keeps its headroom
-- vs **[Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview)**: on your machine, against your Max plan, in your real git history  -- not a cloud container billed separately
-- vs **Cursor / Copilot / Cline**: asynchronous, off the keyboard
-
 ## Use cases
 
-- **Overnight refactors**  -- "Modernize the auth system" at budget 200.
-- **Batch feature implementation**  -- dozens of features from a task file, parallelized.
-- **Codebase-wide cleanups**  -- deduplicate, simplify, rename, normalize.
-- **Test generation at scale**  -- integration tests for every route or module.
-- **Documentation sprints**  -- API docs, READMEs, inline comments, changelogs.
-- **Framework migrations**  -- version upgrades, type annotations, config format swaps.
-- **Quality audits**  -- reflection waves surface architectural issues and code smells.
-- **Long research runs**  -- architect sessions explore a large codebase before any code lands.
-
-Typical shape: one objective + a $20–$200 spend cap + walk away.
+Overnight refactors, batch feature implementation, codebase-wide cleanups, test generation, documentation sprints, framework migrations, quality audits, long research runs. One objective + a budget + walk away.
 
 ## How it works
 

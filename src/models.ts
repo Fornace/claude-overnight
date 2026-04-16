@@ -4,44 +4,74 @@
 // arrive (which happens basically daily). Each entry describes what the model
 // can handle in terms of context and task scoping.
 //
-// contextConstraint:
-//   "tight"    — small context window. Model is lazy and error-prone on big
-//                tasks. Needs surgical, hyper-specific instructions.
-//   "moderate" — decent context. Can handle focused missions but may lose
-//                thread on sprawling codebases.
-//   "relaxed"  — large context. Can read most of the codebase at once,
-//                reliably own multi-file features with autonomy.
+// contextWindow   — declared/advertised context (shown in UI)
+// safeContext     — conservative usable context ≤40% of declared, adjusted for
+//                   model quality. This is what planners use to scope tasks.
+//                   Based on: RULER benchmarks, "lost in the middle" research,
+//                   Chroma context-rot studies, and real-world experience.
+//
+// contextConstraint — combines usable context AND model laziness/diligence:
+//   "tight"    — lazy or small context. Needs surgical, hyper-specific tasks.
+//   "moderate" — decent. Focused missions with clear targets.
+//   "relaxed"  — large usable context + low laziness. Full autonomy.
+//
+// Laziness source: IFEval scores, Ian Paterson 38-task routing benchmark,
+// Chroma hallucination study. "relaxed" = 95%+ on all three axes.
 
 export interface ModelCapability {
   contextWindow: number;
+  safeContext: number;
   contextConstraint: "tight" | "moderate" | "relaxed";
   /** Human-readable label for UI display. Falls back to the model key if absent. */
   displayName?: string;
 }
 
 export const MODEL_CAPABILITIES: Record<string, ModelCapability> = {
-  // ── Anthropic Claude 4.5 / 4.6 ──
-  "claude-sonnet-4-6":         { contextWindow: 256_000, contextConstraint: "relaxed", displayName: "Sonnet 4.6" },
-  "claude-sonnet-4-5":         { contextWindow: 256_000, contextConstraint: "relaxed", displayName: "Sonnet 4.5" },
-  "claude-opus-4-6":           { contextWindow: 200_000, contextConstraint: "relaxed", displayName: "Opus 4.6" },
-  "claude-opus-4-5":           { contextWindow: 200_000, contextConstraint: "relaxed", displayName: "Opus 4.5" },
-  "claude-opus-4-20250514":    { contextWindow: 200_000, contextConstraint: "relaxed", displayName: "Opus 4" },
-  "claude-haiku-4-5":          { contextWindow: 200_000, contextConstraint: "moderate", displayName: "Haiku 4.5" },
-  "claude-haiku-4-5-20251001": { contextWindow: 200_000, contextConstraint: "moderate", displayName: "Haiku 4.5" },
+  // ── Anthropic Claude (Apr 2026) ──
+  // Opus: only model that earns "relaxed". 100% on 38-task routing, 95%+ IFEval.
+  "claude-opus-4-6":           { contextWindow: 1_000_000, safeContext: 400_000, contextConstraint: "relaxed", displayName: "Opus 4.6" },
+  // Sonnet: good but loses thread more than Opus on autonomous multi-file work.
+  "claude-sonnet-4-6":         { contextWindow: 1_000_000, safeContext: 300_000, contextConstraint: "moderate", displayName: "Sonnet 4.6" },
+  // Haiku: cheapest Claude. Skips steps more often. No 1M upgrade.
+  "claude-haiku-4-5":          { contextWindow: 200_000, safeContext: 60_000, contextConstraint: "moderate", displayName: "Haiku 4.5" },
+  "claude-haiku-4-5-20251001": { contextWindow: 200_000, safeContext: 60_000, contextConstraint: "moderate", displayName: "Haiku 4.5" },
 
-  // ── Cursor models ──
-  "auto":            { contextWindow: 256_000, contextConstraint: "relaxed", displayName: "Cursor Auto" },
-  "composer-2":      { contextWindow: 200_000, contextConstraint: "relaxed", displayName: "Composer 2" },
-  "composer-2-fast": { contextWindow: 128_000, contextConstraint: "moderate", displayName: "Composer 2 Fast" },
-  "composer":        { contextWindow: 128_000, contextConstraint: "moderate", displayName: "Composer" },
+  // ── OpenAI (Apr 2026 — GPT-4.1/o3/o4-mini retired Feb 2026) ──
+  // GPT-5.4: current flagship. 1M context, 128K output. Good but literal.
+  "gpt-5.4":       { contextWindow: 1_050_000, safeContext: 300_000, contextConstraint: "moderate", displayName: "GPT-5.4" },
+  "gpt-5.4-mini":  { contextWindow: 1_050_000, safeContext: 200_000, contextConstraint: "moderate", displayName: "GPT-5.4 Mini" },
+  // Codex 5.3: best agentic coder from OpenAI. 400K context, 128K output.
+  "gpt-5.3-codex": { contextWindow: 400_000, safeContext: 160_000, contextConstraint: "moderate", displayName: "Codex 5.3" },
 
-  // ── Qwen (via DashScope / custom provider) ──
-  "qwen3.6-plus": { contextWindow: 131_072, contextConstraint: "moderate", displayName: "Qwen 3.6 Plus" },
-  "qwen3-coder":  { contextWindow: 262_144, contextConstraint: "relaxed", displayName: "Qwen 3 Coder" },
-  "qwen-max":     { contextWindow: 32_768,  contextConstraint: "tight",    displayName: "Qwen Max" },
+  // ── Google Gemini 3 (Apr 2026 — Gemini 2.5 deprecated June 2026) ──
+  // Large context but terrible at agentic coding: 13.5% SWE-bench (vs Sonnet 31.2%).
+  // Good for reading lots of code, bad at following through. Needs surgical tasks.
+  "gemini-3.1-pro": { contextWindow: 1_000_000, safeContext: 350_000, contextConstraint: "tight", displayName: "Gemini 3.1 Pro" },
+  "gemini-3-pro":   { contextWindow: 1_000_000, safeContext: 350_000, contextConstraint: "tight", displayName: "Gemini 3 Pro" },
+  // Flash: 8.2% SWE-bench. Essentially unusable for autonomous agent work.
+  "gemini-3-flash": { contextWindow: 1_000_000, safeContext: 250_000, contextConstraint: "tight", displayName: "Gemini 3 Flash" },
 
-  // ── Fallback for unknown models ──
-  "unknown": { contextWindow: 128_000, contextConstraint: "moderate" },
+  // ── DeepSeek V3.2 (Apr 2026 — V3/R1 superseded, V4 not yet out) ──
+  "deepseek-chat":     { contextWindow: 128_000, safeContext: 40_000, contextConstraint: "tight", displayName: "DeepSeek V3.2" },
+  "deepseek-reasoner": { contextWindow: 128_000, safeContext: 45_000, contextConstraint: "moderate", displayName: "DeepSeek V3.2 Reasoner" },
+
+  // ── Meta Llama 4 (Apr 2025 — still latest open-weight) ──
+  // Scout: claims 10M via iRoPE, providers cap at ~327K. No independent validation.
+  "llama-4-scout":    { contextWindow: 327_680, safeContext: 80_000, contextConstraint: "moderate", displayName: "Llama 4 Scout" },
+  "llama-4-maverick": { contextWindow: 1_000_000, safeContext: 100_000, contextConstraint: "moderate", displayName: "Llama 4 Maverick" },
+
+  // ── Cursor models (opaque routing) ──
+  "auto":        { contextWindow: 256_000, safeContext: 60_000, contextConstraint: "moderate", displayName: "Cursor Auto" },
+  "composer-2":  { contextWindow: 200_000, safeContext: 40_000, contextConstraint: "tight", displayName: "Composer 2" },
+  "composer":    { contextWindow: 128_000, safeContext: 30_000, contextConstraint: "tight", displayName: "Composer" },
+
+  // ── Qwen (Apr 2026 — qwen3.6-plus is newest flagship) ──
+  "qwen3.6-plus":     { contextWindow: 1_000_000, safeContext: 200_000, contextConstraint: "moderate", displayName: "Qwen 3.6 Plus" },
+  "qwen3-coder-plus": { contextWindow: 1_000_000, safeContext: 200_000, contextConstraint: "moderate", displayName: "Qwen 3 Coder Plus" },
+  "qwen3-max":        { contextWindow: 262_144, safeContext: 60_000,  contextConstraint: "moderate", displayName: "Qwen 3 Max" },
+
+  // ── Fallback — unknown models get maximum caution ──
+  "unknown": { contextWindow: 128_000, safeContext: 40_000, contextConstraint: "tight" },
 };
 
 // ── Default / fallback models ──
@@ -80,18 +110,19 @@ export function modelDisplayName(model: string): string {
 
 /**
  * Context constraint instruction injected into planner prompts.
- * Tells the planner how to scope tasks based on the worker model's context.
+ * Uses safeContext (not declared contextWindow) so planners scope tasks
+ * to what the model can actually handle reliably.
  */
 export function contextConstraintNote(model: string): string {
   const cap = getModelCapability(model);
-  const ctx = Math.round(cap.contextWindow / 1000);
+  const safe = Math.round(cap.safeContext / 1000);
   switch (cap.contextConstraint) {
     case "tight":
-      return `Worker agents have a TIGHT context window (~${ctx}K tokens). They are prone losing thread on large tasks. Be hyper-specific: name exact files, functions, and changes. One narrow deliverable per task. No ambiguity.`;
+      return `Worker agents have a TIGHT usable context (~${safe}K tokens). They lose thread and skip steps on large tasks. Be hyper-specific: name exact files, functions, and changes. One narrow deliverable per task. No ambiguity.`;
     case "moderate":
-      return `Worker agents have a moderate context window (~${ctx}K tokens). They can handle focused missions but may struggle with sprawling codebases. Be specific about files and expected outcomes. Scope tasks to clear, concrete deliverables.`;
+      return `Worker agents have a moderate usable context (~${safe}K tokens). They can handle focused missions but may struggle with sprawling tasks. Be specific about target files and expected outcomes. Scope tasks to clear, concrete deliverables — not open-ended explorations.`;
     case "relaxed":
-      return `Worker agents have a large context window (~${ctx}K tokens). They can read most of the codebase at once and reliably own multi-file features. Give them missions with full autonomy — "Design and implement X" not "edit line 42 of Y.ts".`;
+      return `Worker agents have ~${safe}K usable tokens and high instruction-following. They can own multi-file features with autonomy. Give them missions — "Design and implement X" not "edit line 42 of Y.ts".`;
   }
 }
 

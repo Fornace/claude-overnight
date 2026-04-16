@@ -1,7 +1,7 @@
 {
   "name": "claude-overnight",
-  "version": "1.24.8",
-  "description": "Background lane for your Claude Max plan. Parallel Claude Agent SDK sessions in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Provider-agnostic model catalog with capability-based planning.",
+  "version": "1.25.0",
+  "description": "Parallel Claude agents in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Provider-agnostic model catalog (Anthropic, Cursor, OpenAI, Gemini, DeepSeek, Llama, Qwen) with capability-based task scoping.",
   "type": "module",
   "bin": {
     "claude-overnight": "dist/bin.js"
@@ -11,12 +11,13 @@
     "dev": "tsc --watch",
     "start": "node dist/bin.js",
     "test": "node --test dist/__tests__/*.test.js",
+    "matrix:cursor-proxy": "node scripts/cursor-proxy-keychain-matrix.mjs",
     "prepublishOnly": "node scripts/sync-plugin-version.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.92",
     "chalk": "^5.4.1",
-    "cursor-composer-in-claude": "0.7.9",
+    "cursor-composer-in-claude": "0.8.0",
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
@@ -72,6 +73,7 @@
   "files": [
     "dist",
     "!dist/__tests__",
+    "docs",
     "plugins",
     "QUICKSHEET_PLAYWRIGHT.md",
     "README.md",

@@ -4,6 +4,11 @@
 // rest of the module graph takes several seconds on a cold cache  -- without
 // this, the terminal sits black that whole time. index.ts stops the splash
 // via `globalThis.__coStopSplash` as soon as its header is about to print.
+// Cursor agent: never inherit a shell that disabled keychain skip (`CI=0`,
+// empty `CURSOR_SKIP_KEYCHAIN`) — the Cursor CLI may prompt for "cursor-user"
+// and block preflight. Force like cursor-composer-in-claude/dist/cli.js (not ??=).
+process.env.CURSOR_SKIP_KEYCHAIN = "1";
+process.env.CI = "true";
 const argv = process.argv.slice(2);
 const quiet = argv.includes("-h") || argv.includes("--help") || argv.includes("-v") || argv.includes("--version");
 if (!quiet && process.stdout.isTTY) {

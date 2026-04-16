@@ -1,5 +1,6 @@
 export interface ModelCapability {
     contextWindow: number;
+    safeContext: number;
     contextConstraint: "tight" | "moderate" | "relaxed";
     /** Human-readable label for UI display. Falls back to the model key if absent. */
     displayName?: string;
@@ -16,7 +17,8 @@ export declare function getModelCapability(model: string): ModelCapability;
 export declare function modelDisplayName(model: string): string;
 /**
  * Context constraint instruction injected into planner prompts.
- * Tells the planner how to scope tasks based on the worker model's context.
+ * Uses safeContext (not declared contextWindow) so planners scope tasks
+ * to what the model can actually handle reliably.
  */
 export declare function contextConstraintNote(model: string): string;
 /** Format context window for display (e.g. "256K"). */

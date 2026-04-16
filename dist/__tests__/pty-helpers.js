@@ -92,3 +92,20 @@ export class PTYProcess {
         this.ptyProcess.kill(signal);
     }
 }
+/** True if node-pty can spawn (fails in some CI/sandbox environments: `posix_spawnp failed`). */
+export function canSpawnPty() {
+    try {
+        const proc = pty.spawn(process.execPath, ["-e", "process.exit(0)"], {
+            name: "xterm-256color",
+            cols: 40,
+            rows: 10,
+            cwd: process.cwd(),
+            env: { ...process.env },
+        });
+        proc.kill();
+        return true;
+    }
+    catch {
+        return false;
+    }
+}

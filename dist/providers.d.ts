@@ -62,6 +62,17 @@ export declare function preflightProvider(p: ProviderConfig, cwd: string, timeou
 export declare const PROXY_DEFAULT_URL = "http://127.0.0.1:8765";
 /** Check if a provider routes through cursor-composer-in-claude. */
 export declare function isCursorProxyProvider(p: ProviderConfig): boolean;
+/** True if ~/.zshrc / ~/.zprofile contain the `run_cursor_agent` workaround (see README). */
+export declare function hasCursorMacAgentZshPatch(): boolean;
+/**
+ * On macOS, if the Cursor `agent` / `cursor-agent` CLI is installed but the zsh
+ * workaround is missing, print once. See README: macOS Cursor agent shell patch.
+ */
+export declare function warnMacCursorAgentShellPatchIfNeeded(): void;
+/** True when a User API key (or bridge key) is available for Cursor agent + proxy. */
+export declare function hasCursorAgentToken(): boolean;
+/** Resolved token for tests/diagnostics (never log the return value). */
+export declare function getCursorAgentToken(): string | null;
 /**
  * Health check: GET /health on the proxy. Returns true if proxy is reachable.
  * Passes the stored API key so the /health endpoint doesn't return 401.

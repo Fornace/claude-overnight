@@ -25,3 +25,5 @@ export declare class PTYProcess {
     /** Kill the process. */
     kill(signal?: string): void;
 }
+/** True if node-pty can spawn (fails in some CI/sandbox environments: `posix_spawnp failed`). */
+export declare function canSpawnPty(): boolean;

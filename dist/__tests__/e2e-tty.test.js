@@ -2,8 +2,10 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
-import { PTYProcess } from "./pty-helpers.js";
+import { PTYProcess, canSpawnPty } from "./pty-helpers.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
+/** Skip entire E2E file when PTY is unavailable (sandbox/CI). */
+const e2e = canSpawnPty() ? describe : describe.skip;
 const FIXTURES = resolve(__dirname, "../../src/__tests__/fixtures");
 const BIN = resolve(__dirname, "../../dist/bin.js");
 // Skip provider preflight in e2e tests — the swarm handles proxy startup on its own.
@@ -16,7 +18,7 @@ function taskFile(name) {
     return resolve(FIXTURES, name);
 }
 // ── tests ──
-describe("E2E TTY  -- header bar", () => {
+e2e("E2E TTY  -- header bar", () => {
     let p;
     after(() => { if (p)
         p.kill(); });
@@ -44,7 +46,7 @@ describe("E2E TTY  -- header bar", () => {
         p.kill();
     });
 });
-describe("E2E TTY  -- agent table", () => {
+e2e("E2E TTY  -- agent table", () => {
     let p;
     after(() => { if (p)
         p.kill(); });
@@ -75,7 +77,7 @@ describe("E2E TTY  -- agent table", () => {
         p.kill();
     });
 });
-describe("E2E TTY  -- event log", () => {
+e2e("E2E TTY  -- event log", () => {
     let p;
     after(() => { if (p)
         p.kill(); });
@@ -99,7 +101,7 @@ describe("E2E TTY  -- event log", () => {
         p.kill();
     });
 });
-describe("E2E TTY  -- hotkey bar", () => {
+e2e("E2E TTY  -- hotkey bar", () => {
     let p;
     after(() => { if (p)
         p.kill(); });
@@ -119,7 +121,7 @@ describe("E2E TTY  -- hotkey bar", () => {
         p.kill();
     });
 });
-describe("E2E TTY  -- hotkey interactions", () => {
+e2e("E2E TTY  -- hotkey interactions", () => {
     let p;
     after(() => { if (p)
         p.kill(); });
@@ -172,7 +174,7 @@ describe("E2E TTY  -- hotkey interactions", () => {
         p.kill();
     });
 });
-describe("E2E TTY  -- navigation", () => {
+e2e("E2E TTY  -- navigation", () => {
     let p;
     after(() => { if (p)
         p.kill(); });
@@ -230,7 +232,7 @@ describe("E2E TTY  -- navigation", () => {
         p.kill();
     });
 });
-describe("E2E TTY  -- concurrency variations", () => {
+e2e("E2E TTY  -- concurrency variations", () => {
     let p;
     after(() => { if (p)
         p.kill(); });
@@ -248,7 +250,7 @@ describe("E2E TTY  -- concurrency variations", () => {
         p.kill();
     });
 });
-describe("E2E TTY  -- resilience", () => {
+e2e("E2E TTY  -- resilience", () => {
     let p;
     after(() => { if (p)
         p.kill(); });

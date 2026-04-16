@@ -14,7 +14,6 @@
 import { modelDisplayName, formatContextWindow } from "./models.js";
 export const CURSOR_PRIORITY_MODELS = [
     { id: "composer-2", label: "composer-2", hint: "Cursor Composer 2 — latest, strongest Cursor model" },
-    { id: "composer-2-fast", label: "composer-2-fast", hint: "Cursor Composer 2 Fast — faster, cheaper variant" },
     { id: "auto", label: "auto", hint: "auto-delegates to the best available model" },
 ];
 export const CURSOR_KNOWN_MODELS = [

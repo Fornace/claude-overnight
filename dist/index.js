@@ -9,7 +9,7 @@ import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
 import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
 import { setPlannerEnvResolver } from "./planner-query.js";
-import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, ensureCursorProxyRunning, bundledComposerProxyShellCommand, } from "./providers.js";
+import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, ensureCursorProxyRunning, bundledComposerProxyShellCommand, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
 import { executeRun } from "./run.js";
@@ -158,8 +158,9 @@ async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir) {
     console.log();
 }
 async function main() {
-    // Prevent macOS keychain popups from the Cursor CLI agent subprocess.
-    process.env.CURSOR_SKIP_KEYCHAIN ??= "1";
+    // Same as bin.ts: do not use ??= — parent shell can set CI=0 / CURSOR_SKIP_KEYCHAIN=0.
+    process.env.CURSOR_SKIP_KEYCHAIN = "1";
+    process.env.CI = "true";
     const argv = process.argv.slice(2);
     if (argv.includes("-v") || argv.includes("--version")) {
         const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -220,6 +221,7 @@ async function main() {
     // ── Pre-check: warn if saved Cursor providers exist but proxy is down ──
     const savedCursorProviders = loadProviders().filter(isCursorProxyProvider);
     if (savedCursorProviders.length > 0 && !dryRun) {
+        warnMacCursorAgentShellPatchIfNeeded();
         const proxyUp = await healthCheckCursorProxy();
         if (!proxyUp) {
             console.warn(chalk.yellow(`\n  ⚠ ${savedCursorProviders.length} Cursor provider(s) saved but proxy is not running at ${PROXY_DEFAULT_URL}`));
@@ -513,15 +515,10 @@ async function main() {
         mergeStrategy = resumeState.mergeStrategy;
     }
     else if (!nonInteractive) {
-        while (true) {
-            objective = await ask(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")}\n  ${chalk.cyan(">")} `);
-            if (!objective) {
-                console.error(chalk.red("\n  No objective provided."));
-                process.exit(1);
-            }
-            if (objective.split(/\s+/).length >= 5)
-                break;
-            console.log(chalk.yellow('  Be specific, e.g. "refactor the auth module, add tests, and update docs"'));
+        objective = (await ask(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")}\n  ${chalk.cyan(">")} `)).trim();
+        if (!objective) {
+            console.error(chalk.red("\n  No objective provided."));
+            process.exit(1);
         }
         const modelsPromise = fetchModels();
         const budgetAns = await ask(`\n  ${chalk.cyan("②")} ${chalk.dim("Budget")} ${chalk.dim("[")}${chalk.white("10")}${chalk.dim("]:")} `);
@@ -763,18 +760,43 @@ async function main() {
                     cursorProxies.push(p);
             }
         }
-        // Auto-start cursor proxy before pinging
+        // Auto-start cursor proxy before pinging (restarts when a token exists so stale listeners get CURSOR_API_KEY).
         if (cursorProxies.length > 0) {
             await ensureCursorProxyRunning();
+            if (!hasCursorAgentToken()) {
+                console.error(chalk.red(`  ✗ Cursor models require a User API key — add it via ${chalk.bold("Cursor…")} setup, or set ` +
+                    `${chalk.bold("CURSOR_API_KEY")} / ${chalk.bold("CURSOR_BRIDGE_API_KEY")}, or ${chalk.bold("cursorApiKey")} in providers.json.`));
+                console.error(chalk.dim(`    Without it the Cursor CLI falls back to macOS Keychain (\`cursor-user\`).`));
+                process.exit(1);
+            }
         }
         process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}…`)}\n`);
-        const results = await Promise.all(pending.map(async ([role, p]) => ({
-            role,
-            provider: p,
-            result: await preflightProvider(p, cwd, 20_000, {
-                onProgress: (msg) => process.stdout.write(chalk.dim(`    ${msg}\n`)),
-            }),
-        })));
+        // Cursor proxy: each saved model is a distinct provider id (`cursor-composer-2`, etc.), so
+        // planner + executor + fast can schedule multiple preflights. The bundled proxy typically
+        // handles one agent query at a time — parallel preflights starve each other and hit the
+        // 20s timeout. Run non-proxy checks in parallel, then cursor proxy checks one at a time
+        // (preserve original `pending` order for messages).
+        const progress = (msg) => process.stdout.write(chalk.dim(`    ${msg}\n`));
+        /** Cursor agent cold start + model variance can exceed 20s; API providers stay tight. */
+        const preflightMs = (p) => isCursorProxyProvider(p) ? 60_000 : 20_000;
+        const nonCursorIdx = [];
+        const cursorIdx = [];
+        for (let i = 0; i < pending.length; i++) {
+            if (isCursorProxyProvider(pending[i][1]))
+                cursorIdx.push(i);
+            else
+                nonCursorIdx.push(i);
+        }
+        const slot = Array.from({ length: pending.length });
+        await Promise.all(nonCursorIdx.map(async (i) => {
+            const [role, p] = pending[i];
+            slot[i] = { role, provider: p, result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }) };
+        }));
+        for (const i of cursorIdx) {
+            const [role, p] = pending[i];
+            slot[i] = { role, provider: p, result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }) };
+        }
+        const results = slot;
         for (const { role, provider, result } of results) {
             if (!result.ok) {
                 console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));

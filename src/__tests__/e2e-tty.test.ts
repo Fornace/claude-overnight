@@ -2,9 +2,11 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
-import { PTYProcess } from "./pty-helpers.js";
+import { PTYProcess, canSpawnPty } from "./pty-helpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+/** Skip entire E2E file when PTY is unavailable (sandbox/CI). */
+const e2e = canSpawnPty() ? describe : describe.skip;
 const FIXTURES = resolve(__dirname, "../../src/__tests__/fixtures");
 const BIN = resolve(__dirname, "../../dist/bin.js");
 
@@ -23,7 +25,7 @@ function taskFile(name: string) {
 
 // ── tests ──
 
-describe("E2E TTY  -- header bar", () => {
+e2e("E2E TTY  -- header bar", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -54,7 +56,7 @@ describe("E2E TTY  -- header bar", () => {
   });
 });
 
-describe("E2E TTY  -- agent table", () => {
+e2e("E2E TTY  -- agent table", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -88,7 +90,7 @@ describe("E2E TTY  -- agent table", () => {
   });
 });
 
-describe("E2E TTY  -- event log", () => {
+e2e("E2E TTY  -- event log", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -114,7 +116,7 @@ describe("E2E TTY  -- event log", () => {
   });
 });
 
-describe("E2E TTY  -- hotkey bar", () => {
+e2e("E2E TTY  -- hotkey bar", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -136,7 +138,7 @@ describe("E2E TTY  -- hotkey bar", () => {
   });
 });
 
-describe("E2E TTY  -- hotkey interactions", () => {
+e2e("E2E TTY  -- hotkey interactions", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -201,7 +203,7 @@ describe("E2E TTY  -- hotkey interactions", () => {
   });
 });
 
-describe("E2E TTY  -- navigation", () => {
+e2e("E2E TTY  -- navigation", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -274,7 +276,7 @@ describe("E2E TTY  -- navigation", () => {
   });
 });
 
-describe("E2E TTY  -- concurrency variations", () => {
+e2e("E2E TTY  -- concurrency variations", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 
@@ -293,7 +295,7 @@ describe("E2E TTY  -- concurrency variations", () => {
   });
 });
 
-describe("E2E TTY  -- resilience", () => {
+e2e("E2E TTY  -- resilience", () => {
   let p: PTYProcess;
   after(() => { if (p) p.kill(); });
 

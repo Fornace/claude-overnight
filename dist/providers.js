@@ -108,9 +108,19 @@ export function envFor(p) {
             base[k] = v;
     if (p.cursorProxy) {
         base.ANTHROPIC_BASE_URL = p.baseURL;
-        const key = process.env.CURSOR_BRIDGE_API_KEY || p.cursorApiKey;
-        base.ANTHROPIC_AUTH_TOKEN = key || "unused";
+        // HTTP Authorization to the proxy: bridge env > per-provider > any resolved agent token (env or providers.json).
+        const agentTok = resolveCursorAgentToken();
+        const bridgeBearer = process.env.CURSOR_BRIDGE_API_KEY?.trim() ||
+            p.cursorApiKey?.trim() ||
+            agentTok?.trim() ||
+            "";
+        base.ANTHROPIC_AUTH_TOKEN = bridgeBearer || "unused";
         delete base.ANTHROPIC_API_KEY;
+        // Native Cursor agent — same token so SDK and proxy never fall through to Keychain (`cursor-user`).
+        if (agentTok) {
+            base.CURSOR_API_KEY = agentTok;
+            base.CURSOR_AUTH_TOKEN = agentTok;
+        }
         // SDK replaces env for subprocesses — force these so nothing inherits a bad CI / skip flag.
         base.CI = "true";
         base.CURSOR_SKIP_KEYCHAIN = "1";
@@ -323,6 +333,48 @@ export const PROXY_DEFAULT_URL = "http://127.0.0.1:8765";
 export function isCursorProxyProvider(p) {
     return p.cursorProxy === true || p.baseURL === PROXY_DEFAULT_URL;
 }
+/** True if ~/.zshrc / ~/.zprofile contain the `run_cursor_agent` workaround (see README). */
+export function hasCursorMacAgentZshPatch() {
+    let combined = "";
+    for (const f of [".zshrc", ".zprofile"]) {
+        try {
+            combined += readFileSync(join(homedir(), f), "utf8");
+        }
+        catch {
+            /* missing */
+        }
+    }
+    return /run_cursor_agent\s*\(/.test(combined) || /alias\s+agent=\s*['"]?run_cursor_agent['"]?/.test(combined);
+}
+let warnedMacCursorAgentPatch = false;
+/**
+ * On macOS, if the Cursor `agent` / `cursor-agent` CLI is installed but the zsh
+ * workaround is missing, print once. See README: macOS Cursor agent shell patch.
+ */
+export function warnMacCursorAgentShellPatchIfNeeded() {
+    if (warnedMacCursorAgentPatch || process.platform !== "darwin")
+        return;
+    let agentPath = "";
+    try {
+        agentPath = execSync("command -v cursor-agent 2>/dev/null || command -v agent 2>/dev/null", {
+            encoding: "utf8",
+            shell: "bash",
+            timeout: 3_000,
+            stdio: ["pipe", "pipe", "pipe"],
+        }).trim();
+    }
+    catch {
+        return;
+    }
+    if (!agentPath)
+        return;
+    if (hasCursorMacAgentZshPatch())
+        return;
+    warnedMacCursorAgentPatch = true;
+    console.warn(chalk.yellow("\n  ⚠ macOS: Cursor's `agent` CLI is unreliable with its bundled Node.js."));
+    console.warn(chalk.dim("    Append the snippet from README (\"macOS: Cursor agent shell patch\") to ~/.zshrc, then run: source ~/.zshrc"));
+    console.warn("");
+}
 /** Resolve the cursor-composer-in-claude API key from env or providers.json. */
 function resolveCursorProxyKey() {
     if (process.env.CURSOR_BRIDGE_API_KEY?.trim())
@@ -331,6 +383,26 @@ function resolveCursorProxyKey() {
     if (saved?.cursorApiKey?.trim())
         return saved.cursorApiKey.trim();
     return null;
+}
+/**
+ * Token for the native Cursor `agent` binary — same order as cursor-composer `loadBridgeConfig`
+ * (CURSOR_API_KEY → CURSOR_AUTH_TOKEN → bridge / stored). Without a real token the CLI tries
+ * login/keychain and macOS may show “Keychain Not Found” for `cursor-user`.
+ */
+function resolveCursorAgentToken() {
+    if (process.env.CURSOR_API_KEY?.trim())
+        return process.env.CURSOR_API_KEY.trim();
+    if (process.env.CURSOR_AUTH_TOKEN?.trim())
+        return process.env.CURSOR_AUTH_TOKEN.trim();
+    return resolveCursorProxyKey();
+}
+/** True when a User API key (or bridge key) is available for Cursor agent + proxy. */
+export function hasCursorAgentToken() {
+    return resolveCursorAgentToken() != null;
+}
+/** Resolved token for tests/diagnostics (never log the return value). */
+export function getCursorAgentToken() {
+    return resolveCursorAgentToken();
 }
 /** Build fetch options with the cursor proxy auth header if a key is available. */
 function cursorProxyFetchOpts() {
@@ -544,9 +616,16 @@ async function isPortInUse(port, host = "127.0.0.1") {
  * Returns true when the proxy is reachable at PROXY_DEFAULT_URL.
  */
 export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forceRestart = false) {
+    warnMacCursorAgentShellPatchIfNeeded();
     const url = new URL(baseUrl);
     const port = parseInt(url.port, 10) || 80;
-    if (forceRestart && resolveCursorComposerCli()) {
+    // Stale listener on :8765 may have been started without CURSOR_API_KEY for the agent child.
+    // When we have a token, replace the listener by default so the bundled proxy always inherits it.
+    // Opt out: CURSOR_OVERNIGHT_NO_PROXY_RESTART=1 (e.g. shared port / external proxy).
+    const token = resolveCursorAgentToken();
+    const skipTokenRestart = process.env.CURSOR_OVERNIGHT_NO_PROXY_RESTART === "1";
+    const effectiveForce = forceRestart || (!!token && !skipTokenRestart);
+    if (effectiveForce && resolveCursorComposerCli()) {
         console.log(chalk.dim(`  Replacing listener on port ${port} with bundled cursor-composer-in-claude…`));
         killProcessOnPort(port, url.hostname);
         await new Promise(r => setTimeout(r, 500));
@@ -600,10 +679,21 @@ async function startProxyProcess(baseUrl, url, port) {
         }
     }
     catch { }
-    // Resolve the API key source for logging
-    const apiKeyEnv = process.env.CURSOR_BRIDGE_API_KEY;
     const apiKeyStored = loadProviders().find(p => p.cursorProxy)?.cursorApiKey;
-    const keySource = apiKeyEnv ? "env CURSOR_BRIDGE_API_KEY" : (apiKeyStored ? "providers.json (stored)" : "none — using 'unused'");
+    const agentToken = resolveCursorAgentToken();
+    if (!agentToken) {
+        console.log(chalk.red(`  ✗ Cursor proxy needs a User API key so the agent does not use macOS Keychain (\`cursor-user\`).\n` +
+            `    Set ${chalk.bold("CURSOR_API_KEY")} (${chalk.dim("Cursor dashboard → Integrations / API Keys")}) ` +
+            `or complete the ${chalk.bold("Cursor…")} setup in claude-overnight (saved to providers.json).\n` +
+            `    See: ${chalk.dim("https://cursor.com/docs/cli/headless")}`));
+        return false;
+    }
+    const bridgeKey = process.env.CURSOR_BRIDGE_API_KEY?.trim() ||
+        apiKeyStored?.trim() ||
+        agentToken;
+    const keySource = process.env.CURSOR_BRIDGE_API_KEY?.trim()
+        ? "env CURSOR_BRIDGE_API_KEY"
+        : (apiKeyStored?.trim() ? "providers.json (stored)" : "mirrored from CURSOR_API_KEY / token");
     const proxyVersion = getEmbeddedComposerProxyVersion() ?? "unknown";
     const composerCli = resolveCursorComposerCli();
     if (!composerCli) {
@@ -617,21 +707,25 @@ async function startProxyProcess(baseUrl, url, port) {
     catch {
         cliResolved = composerCli;
     }
-    const bridgeKey = apiKeyEnv || apiKeyStored || "unused";
     const proxyEnv = {
         ...Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)),
         CI: "true",
         CURSOR_BRIDGE_API_KEY: bridgeKey,
         CURSOR_SKIP_KEYCHAIN: "1",
+        // Always set — cursor-composer only forwards these to the agent; spread alone is not enough
+        // if the shell omitted CURSOR_API_KEY (GUI launches, etc.).
+        CURSOR_API_KEY: agentToken,
+        CURSOR_AUTH_TOKEN: agentToken,
+        // cursor-composer loadBridgeConfig: forces acpSkipAuthenticate so ACP never sends
+        // `authenticate` / `cursor_login` (that path touches macOS Keychain for `cursor-user`).
+        CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE: "1",
+        // Default bridge is useAcp=false → agent uses runStreaming; skip-authenticate only applies
+        // to runAcpStream. Force ACP so real traffic matches the headless/keychain-avoidance path.
+        CURSOR_BRIDGE_USE_ACP: "1",
+        // cursor-composer chat-only mode fakes HOME to a temp dir; on macOS the agent still waits on
+        // Keychain (~30s) for `cursor-user` despite CURSOR_API_KEY. Use the real workspace profile.
+        CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "false",
     };
-    // cursor-composer-in-claude passes CURSOR_API_KEY / CURSOR_AUTH_TOKEN to the agent only from
-    // these vars — not from CURSOR_BRIDGE_API_KEY. Without them the Cursor CLI falls back to
-    // login/keychain (macOS dialogs, "cursor-user", hangs under preflight).
-    const explicitAgentKey = process.env.CURSOR_API_KEY?.trim() || process.env.CURSOR_AUTH_TOKEN?.trim();
-    if (!explicitAgentKey && bridgeKey !== "unused") {
-        proxyEnv.CURSOR_API_KEY = bridgeKey;
-        proxyEnv.CURSOR_AUTH_TOKEN = bridgeKey;
-    }
     if (sysNode && agentJs) {
         proxyEnv.CURSOR_AGENT_NODE = sysNode;
         proxyEnv.CURSOR_AGENT_SCRIPT = agentJs;
@@ -644,12 +738,14 @@ async function startProxyProcess(baseUrl, url, port) {
             cliPath: cliResolved,
             nodeExec: process.execPath,
             apiKey: keySource,
-            agentCursorKey: explicitAgentKey ? "env CURSOR_API_KEY or CURSOR_AUTH_TOKEN" : (bridgeKey === "unused" ? "none" : "mirrored from bridge key"),
+            agentCursorKey: "set (CURSOR_API_KEY / bridge / stored)",
             agentPaths: sysNode && agentJs ? { node: sysNode, script: agentJs } : undefined,
             childEnv: {
                 CI: proxyEnv.CI,
                 CURSOR_SKIP_KEYCHAIN: proxyEnv.CURSOR_SKIP_KEYCHAIN,
-                CURSOR_API_KEY: proxyEnv.CURSOR_API_KEY ? "(set)" : "(unset)",
+                CURSOR_BRIDGE_USE_ACP: proxyEnv.CURSOR_BRIDGE_USE_ACP,
+                CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: proxyEnv.CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE,
+                CURSOR_API_KEY: "(set)",
             },
         },
     })));
@@ -716,10 +812,7 @@ function setupSteps() {
         },
         {
             label: "Cursor API key",
-            check: () => {
-                const key = process.env.CURSOR_BRIDGE_API_KEY;
-                return !!key && key.trim().length > 0;
-            },
+            check: () => !!resolveCursorAgentToken(),
             autoCmd: "",
             manualCmd: "",
             successMsg: "Cursor API key configured",
