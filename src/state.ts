@@ -187,13 +187,6 @@ export function findIncompleteRuns(rootDir: string, filterCwd: string): { dir: s
       const runDir = join(runsDir, d);
       const state = loadRunState(runDir);
       if (!state || state.phase === "done" || state.cwd !== filterCwd) continue;
-      // Planning-phase runs are resumable if: tasks.json exists (orchestrate
-      // completed), design docs exist (thinking wave produced output), or the
-      // run already consumed tokens (thinking wave started but was killed).
-      if (state.phase === "planning"
-        && !existsSync(join(runDir, "tasks.json"))
-        && !readMdDir(join(runDir, "designs"))
-        && state.accCompleted === 0 && state.accCost === 0) continue;
       results.push({ dir: runDir, state });
     }
     return results;
