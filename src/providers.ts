@@ -405,12 +405,15 @@ async function preflightCursorProxyViaHttp(
   const deadline = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    // max_tokens must accommodate thinking tokens for `*-thinking-*` variants —
+    // 1 token leaves zero reasoning budget and crashes the cursor-agent subprocess
+    // (observed with claude-opus-4-7-thinking-high: exit code 1 after ~12s).
     const res = await fetch(`${baseURL}/v1/messages`, {
       method: "POST",
       headers,
       body: JSON.stringify({
         model: p.model,
-        max_tokens: 1,
+        max_tokens: 4096,
         messages: [{ role: "user", content: "ok" }],
       }),
       signal: controller.signal,
