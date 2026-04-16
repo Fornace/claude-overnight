@@ -29,7 +29,19 @@ export interface PlannerOpts {
   outputFormat?: { type: "json_schema"; schema: Record<string, unknown> };
   /** When set, stream events are appended to <runDir>/transcripts/<name>.ndjson */
   transcriptName?: string;
+  /**
+   * Hard cap on conversation turns. Defaults to 20.
+   */
+  maxTurns?: number;
+  /**
+   * Tools the planner agent may use. Defaults to read-only + Write (for outFile
+   * resilience). Deliberately excludes Bash/Agent/TodoWrite/WebFetch to prevent
+   * the multi-turn tool loops that cause error_max_turns with thinking models.
+   */
+  tools?: string[];
 }
+
+const DEFAULT_MAX_TURNS = 20;
 
 // ── Shared env resolver (set once at run start, used by every planner query) ──
 //
@@ -194,21 +206,33 @@ async function runPlannerQueryOnce(
     options: {
       cwd: opts.cwd,
       model: opts.model,
-      tools: ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"],
-      allowedTools: ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"],
+      tools: opts.tools ?? ["Read", "Glob", "Grep", "Write"],
+      allowedTools: opts.tools ?? ["Read", "Glob", "Grep", "Write"],
       permissionMode: opts.permissionMode,
       ...(opts.permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       persistSession: true,
       includePartialMessages: true,
+      maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
       ...(isResume && { resume: opts.resumeSessionId }),
       ...(opts.outputFormat && { outputFormat: opts.outputFormat }),
       ...(envOverride && { env: envOverride }),
     },
   });
 
-  let lastLogText = "";
+  // Default to "thinking…" so the ticker conveys meaning during the pre-output
+  // reasoning phase. Thinking-variant models (e.g. claude-opus-4-7-thinking-*)
+  // can sit silent for 60-90s before emitting any tokens, and cursor-agent
+  // doesn't forward thinking deltas — without this, the ticker reads "4m 5s"
+  // with nothing else for a minute plus.
+  let lastLogText = "thinking…";
   let toolCount = 0;
   let costUsd = 0;
+  const jsonOutput = opts.outputFormat?.type === "json_schema";
+  let jsonCharCount = 0;
+  // Dedup identical text snippets: cursor-agent with json_schema-ignoring
+  // proxies causes the SDK to loop multiple turns, each re-emitting the same
+  // final JSON. We don't want to spam the ticker or transcript with it.
+  let lastTextSeen = "";
   const ticker = setInterval(() => {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     const m = Math.floor(elapsed / 60);
@@ -254,6 +278,12 @@ async function runPlannerQueryOnce(
   // the input arrives, and write a complete transcript entry on block stop.
   let pendingTool: { index: number; name: string; id: string; input: Record<string, unknown>; buf: string; logged: boolean } | null = null;
 
+  // Dedup tool_use logging between stream_event path and full-assistant-message
+  // path. The Cursor proxy doesn't always relay content_block_* frames through
+  // the Claude CLI's stream-json, so we also mine complete `SDKAssistantMessage`
+  // content for progress  -- without double-counting when both paths fire.
+  const seenToolIds = new Set<string>();
+
   const logTool = (name: string, input: Record<string, unknown> | undefined): void => {
     const target = extractToolTarget(input);
     lastLogText = target ? `${name} ${target}` : name;
@@ -272,6 +302,7 @@ async function runPlannerQueryOnce(
             toolCount++;
             const input = (cb.input ?? {}) as Record<string, unknown>;
             const hasInput = Object.keys(input).length > 0;
+            if (cb.id) seenToolIds.add(cb.id);
             pendingTool = {
               index: ev.index ?? 0,
               name: cb.name,
@@ -301,8 +332,16 @@ async function runPlannerQueryOnce(
             : delta?.type === "thinking_delta" ? delta.thinking
             : undefined;
           if (typeof raw === "string" && raw) {
-            const snippet = raw.trim().replace(/[{}"\\,[\]]+/g, " ").replace(/\s+/g, " ").trim();
-            if (snippet.length > 5) lastLogText = snippet.slice(-60);
+            if (jsonOutput && delta.type === "text_delta") {
+              // Don't surface tail-of-JSON as "progress" — it reads as noise
+              // like `…ppression and optimistic-update rollback`. Show size
+              // growing instead, which is a genuine signal.
+              jsonCharCount += raw.length;
+              lastLogText = `writing JSON (${jsonCharCount} chars)…`;
+            } else {
+              const snippet = raw.trim().replace(/[{}"\\,[\]]+/g, " ").replace(/\s+/g, " ").trim();
+              if (snippet.length > 5) lastLogText = snippet.slice(-60);
+            }
             if (tname) writeTranscriptEvent(tname, { kind: delta.type, text: raw });
           }
         }
@@ -315,6 +354,39 @@ async function runPlannerQueryOnce(
             if (tname) writeTranscriptEvent(tname, { kind: "tool_use", tool: pendingTool.name, input: pendingTool.input });
           }
           pendingTool = null;
+        }
+      }
+      // Fallback progress surfacing: when stream events are sparse (e.g. the
+      // Cursor proxy's heartbeat thinking block doesn't always round-trip
+      // through the Claude CLI as partial messages), mine the full assistant
+      // turn message for tool_use / thinking / text so the ticker still moves
+      // every ~6-15s instead of sitting silent for minutes.
+      if (msg.type === "assistant") {
+        const content = (msg as any).message?.content;
+        if (Array.isArray(content)) {
+          for (const part of content) {
+            if (part?.type === "tool_use" && part.id && !seenToolIds.has(part.id)) {
+              seenToolIds.add(part.id);
+              toolCount++;
+              const input = (part.input ?? {}) as Record<string, unknown>;
+              logTool(part.name, input);
+              if (tname) writeTranscriptEvent(tname, { kind: "tool_use", tool: part.name, input });
+            } else if (part?.type === "thinking" && typeof part.thinking === "string" && part.thinking) {
+              const snippet = part.thinking.trim().replace(/\s+/g, " ").slice(-60);
+              if (snippet) lastLogText = snippet;
+              if (tname) writeTranscriptEvent(tname, { kind: "thinking", text: part.thinking });
+            } else if (part?.type === "text" && typeof part.text === "string" && part.text) {
+              if (part.text === lastTextSeen) continue; // dedup repeated turns
+              lastTextSeen = part.text;
+              if (jsonOutput) {
+                lastLogText = `writing JSON (${part.text.length} chars)…`;
+              } else {
+                const snippet = part.text.trim().replace(/[{}"\\,[\]]+/g, " ").replace(/\s+/g, " ").slice(-60);
+                if (snippet.length > 5) lastLogText = snippet;
+              }
+              if (tname) writeTranscriptEvent(tname, { kind: "text", text: part.text });
+            }
+          }
         }
       }
       if (msg.type === "rate_limit_event") {

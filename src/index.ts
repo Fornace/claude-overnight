@@ -744,15 +744,38 @@ async function main() {
     // proxy now uses an account pool (`CURSOR_CONFIG_DIRS`) — each parallel
     // cursor-agent subprocess gets its own config dir, eliminating the race.
     // See ensureCursorAccountPool() in providers.ts.
-    const progress = (msg: string) => process.stdout.write(chalk.dim(`    ${msg}\n`));
+    //
+    // Single in-place status line collapses N parallel progress streams (one
+    // per provider) into one tty line updated via `\r` + ANSI clear. Keeps the
+    // "window head" calm instead of appending 3 lines per 3s tick.
+    const statuses = new Map<string, string>();
+    const isTTY = process.stdout.isTTY;
+    let statusLineActive = false;
+    const renderStatus = () => {
+      if (!isTTY) return;
+      const parts = [...statuses.entries()].map(([r, s]) => `${r} ${chalk.dim(s)}`);
+      process.stdout.write(`\x1B[2K\r`);
+      if (parts.length === 0) { statusLineActive = false; return; }
+      process.stdout.write(chalk.dim("    " + parts.join("  ·  ")));
+      statusLineActive = true;
+    };
+    const clearStatusLine = () => {
+      if (isTTY && statusLineActive) { process.stdout.write(`\x1B[2K\r`); statusLineActive = false; }
+    };
     /** Cursor agent cold start + thinking-variant model latency can exceed 20s; API providers stay tight. */
     const preflightMs = (p: ProviderConfig) =>
       isCursorProxyProvider(p) ? 60_000 : 20_000;
-    const results = await Promise.all(pending.map(async ([role, p]) => ({
-      role,
-      provider: p,
-      result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }),
-    })));
+    const results = await Promise.all(pending.map(async ([role, p]) => {
+      statuses.set(role, "connecting…");
+      renderStatus();
+      const result = await preflightProvider(p, cwd, preflightMs(p), {
+        onProgress: (msg) => { statuses.set(role, msg); renderStatus(); },
+      });
+      statuses.delete(role);
+      renderStatus();
+      return { role, provider: p, result };
+    }));
+    clearStatusLine();
     for (const { role, provider, result } of results) {
       if (!result.ok) {
         console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));

@@ -25,6 +25,16 @@ export interface PlannerOpts {
     };
     /** When set, stream events are appended to <runDir>/transcripts/<name>.ndjson */
     transcriptName?: string;
+    /**
+     * Hard cap on conversation turns. Defaults to 20.
+     */
+    maxTurns?: number;
+    /**
+     * Tools the planner agent may use. Defaults to read-only + Write (for outFile
+     * resilience). Deliberately excludes Bash/Agent/TodoWrite/WebFetch to prevent
+     * the multi-turn tool loops that cause error_max_turns with thinking models.
+     */
+    tools?: string[];
 }
 export declare function setPlannerEnvResolver(fn: ((model?: string) => Record<string, string> | undefined) | undefined): void;
 export declare function getTotalPlannerCost(): number;

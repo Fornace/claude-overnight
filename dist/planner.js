@@ -158,7 +158,8 @@ export async function planTasks(objective, cwd, plannerModel, workerModel, permi
     const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
     let resultText;
     try {
-        resultText = await runPlannerQuery(prompt + fileInstruction, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName }, onLog);
+        resultText = await runPlannerQuery(prompt + fileInstruction, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 40,
+            tools: ["Read", "Glob", "Grep", "Write"] }, onLog);
     }
     catch (err) {
         const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
@@ -168,7 +169,7 @@ export async function planTasks(objective, cwd, plannerModel, workerModel, permi
     }
     const parsed = await extractTaskJson(resultText, async () => {
         onLog("Retrying...");
-        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog);
+        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15 }, onLog);
     }, onLog, outFile);
     let tasks = (parsed.tasks || []).map((t, i) => ({
         id: String(i), prompt: typeof t === "string" ? t : t.prompt,
@@ -188,7 +189,7 @@ Then pick ${count} angles that carve up THIS specific codebase orthogonally. Pre
 
 Objective: ${objective}
 
-Return ONLY a JSON object: {"themes": ["angle description", ...]}`, { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA, transcriptName }, onLog);
+Return ONLY a JSON object: {"themes": ["angle description", ...]}`, { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12 }, onLog);
     const parsed = attemptJsonParse(resultText);
     if (parsed?.themes && Array.isArray(parsed.themes))
         return parsed.themes.slice(0, count);
@@ -259,7 +260,8 @@ Respond with ONLY a JSON object (no markdown fences):
     onLog("Synthesizing...");
     let resultText;
     try {
-        resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName }, onLog);
+        resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 25,
+            tools: ["Write"] }, onLog);
     }
     catch (err) {
         const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
@@ -269,7 +271,7 @@ Respond with ONLY a JSON object (no markdown fences):
     }
     const parsed = await extractTaskJson(resultText, async () => {
         onLog("Retrying...");
-        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog);
+        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10 }, onLog);
     }, onLog, outFile);
     let tasks = (parsed.tasks || []).map((t, i) => ({
         id: String(i), prompt: typeof t === "string" ? t : t.prompt,
@@ -303,10 +305,10 @@ ${scaleNote} ${concurrency} agents run in parallel. Update the plan accordingly.
 
 Respond with ONLY a JSON object (no markdown):
 {"tasks":[{"prompt":"..."}]}`;
-    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName }, onLog);
+    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15 }, onLog);
     const parsed = await extractTaskJson(resultText, async () => {
         onLog("Retrying...");
-        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog);
+        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8 }, onLog);
     }, onLog);
     let tasks = (parsed.tasks || []).map((t, i) => ({
         id: String(i), prompt: typeof t === "string" ? t : t.prompt,
