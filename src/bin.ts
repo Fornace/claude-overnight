@@ -8,8 +8,9 @@
 // Cursor agent: never inherit a shell that disabled keychain skip (`CI=0`,
 // empty `CURSOR_SKIP_KEYCHAIN`) — the Cursor CLI may prompt for "cursor-user"
 // and block preflight. Force like cursor-composer-in-claude/dist/cli.js (not ??=).
+// NOTE: CI=true is only set in child process envs (proxy spawn, agent spawn) —
+// setting it here kills chalk color detection (supports-color returns level 0).
 process.env.CURSOR_SKIP_KEYCHAIN = "1";
-process.env.CI = "true";
 
 const argv = process.argv.slice(2);
 const quiet = argv.includes("-h") || argv.includes("--help") || argv.includes("-v") || argv.includes("--version");

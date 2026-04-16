@@ -173,9 +173,10 @@ async function promptResumeOverrides(
 }
 
 async function main() {
-  // Same as bin.ts: do not use ??= — parent shell can set CI=0 / CURSOR_SKIP_KEYCHAIN=0.
+  // Do not use ??= — parent shell can set CURSOR_SKIP_KEYCHAIN=0.
+  // CI=true is only set in child process envs (proxy, agents) — setting it here
+  // kills chalk color detection (supports-color sees CI → returns level 0).
   process.env.CURSOR_SKIP_KEYCHAIN = "1";
-  process.env.CI = "true";
 
   const argv = process.argv.slice(2);
 
@@ -314,11 +315,26 @@ async function main() {
     }
   }
 
-  // ── Resume detection ──
+  // ── Resume / continue detection ──
   let resuming = false;
   let resumeState: RunState | null = null;
   let resumeRunDir: string | undefined;
+  let continueObjective: string | undefined;
   const incompleteRuns = findIncompleteRuns(rootDir, cwd);
+
+  // When only completed runs exist, offer to continue from the last one
+  if (incompleteRuns.length === 0 && completedRuns.length > 0 && !noTTY && tasks.length === 0) {
+    let picked = false;
+    while (!picked) {
+      const action = await selectKey("", [
+        { key: "c", desc: "ontinue last" }, { key: "h", desc: "istory" }, { key: "n", desc: "ew" }, { key: "q", desc: "uit" },
+      ]);
+      if (action === "q") process.exit(0);
+      if (action === "h") { showRunHistory(allRuns, cwd); continue; }
+      if (action === "c") { continueObjective = completedRuns[0].state.objective; }
+      picked = true;
+    }
+  }
 
   if (incompleteRuns.length > 0 && !noTTY && tasks.length === 0) {
     let decided = false;
@@ -483,7 +499,14 @@ async function main() {
     useWorktrees = resumeState!.useWorktrees;
     mergeStrategy = resumeState!.mergeStrategy;
   } else if (!nonInteractive) {
-    objective = (await ask(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")}\n  ${chalk.cyan(">")} `)).trim();
+    if (continueObjective) {
+      console.log(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")} ${chalk.dim("(Enter to continue last)")}\n  ${chalk.dim(continueObjective.slice(0, 80))}${continueObjective.length > 80 ? "…" : ""}`);
+    }
+    const objInput = (await ask(continueObjective
+      ? `  ${chalk.cyan(">")} `
+      : `\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")}\n  ${chalk.cyan(">")} `,
+    )).trim();
+    objective = objInput || continueObjective;
     if (!objective) { console.error(chalk.red("\n  No objective provided.")); process.exit(1); }
     const modelsPromise = fetchModels();
     const budgetAns = await ask(`\n  ${chalk.cyan("②")} ${chalk.dim("Budget")} ${chalk.dim("[")}${chalk.white("10")}${chalk.dim("]:")} `);
