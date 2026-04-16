@@ -232,7 +232,7 @@ export class Swarm {
     abort() {
         this.aborted = true;
         this.queue.length = 0;
-        this.activeQueries.forEach(q => q.close());
+        this.activeQueries.forEach(q => { q.interrupt().catch(() => { }); });
         this.activeQueries.clear();
     }
     /** Re-queue all errored agents' tasks for retry within this wave. */

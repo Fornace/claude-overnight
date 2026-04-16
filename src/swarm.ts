@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import chalk from "chalk";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   SDKMessage, SDKResultMessage, SDKResultError, SDKAssistantMessage,
   SDKPartialAssistantMessage, SDKRateLimitEvent,
@@ -103,7 +103,7 @@ export class Swarm {
   private config: SwarmConfig;
   private nextId = 0;
   private worktreeBase?: string;
-  private activeQueries = new Set<{ close: () => void }>();
+  private activeQueries = new Set<Query>();
   private cleanedUp = false;
   logFile?: string;
   readonly model: string | undefined;
@@ -260,7 +260,7 @@ export class Swarm {
   abort(): void {
     this.aborted = true;
     this.queue.length = 0;
-    this.activeQueries.forEach(q => q.close());
+    this.activeQueries.forEach(q => { q.interrupt().catch(() => {}); });
     this.activeQueries.clear();
   }
 

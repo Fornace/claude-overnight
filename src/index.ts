@@ -871,15 +871,16 @@ async function main() {
           }
           console.log("");
         } else {
-          const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, plannerModel, previousKnowledge || undefined);
+          const researchModel = fastModel ? workerModel : plannerModel;
+          const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, researchModel, previousKnowledge || undefined);
           console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
           const thinkingSwarm = new Swarm({
-            tasks: thinkingTasks, concurrency, cwd, model: plannerModel, permissionMode,
+            tasks: thinkingTasks, concurrency, cwd, model: researchModel, permissionMode,
             useWorktrees: false, mergeStrategy: "yolo", agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
             envForModel,
             cursorProxy: [plannerProvider, workerProvider, fastProvider].some(p => p && isCursorProxyProvider(p)),
           });
-          const thinkRunInfo = { accIn: 0, accOut: 0, accCost: 0, accCompleted: 0, accFailed: 0, sessionsBudget: budget ?? 10, waveNum: -1, remaining: budget ?? 10, model: plannerModel, startedAt: Date.now() };
+          const thinkRunInfo = { accIn: 0, accOut: 0, accCost: 0, accCompleted: 0, accFailed: 0, sessionsBudget: budget ?? 10, waveNum: -1, remaining: budget ?? 10, model: researchModel, startedAt: Date.now() };
           const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, concurrency, paused: false, dirty: false });
           thinkDisplay.setWave(thinkingSwarm);
           thinkDisplay.start();
