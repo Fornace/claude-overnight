@@ -320,6 +320,7 @@ async function main() {
 
   // ── Resume / continue detection ──
   let resuming = false;
+  let replanFromScratch = false;
   let resumeState: RunState | null = null;
   let resumeRunDir: string | undefined;
   let continueObjective: string | undefined;
@@ -426,28 +427,31 @@ async function main() {
           // thinking spend instead of throwing it away).
           const designs = readMdDir(join(resumeRunDir, "designs"));
           if (!designs || !resumeState.objective) {
-            console.error(chalk.red(`\n  Planning-phase run has no usable tasks.json or designs  -- start Fresh instead.\n`));
-            process.exit(1);
-          }
-          const remainingBudget = Math.max(resumeState.concurrency, resumeState.budget - resumeState.accCompleted);
-          const orchBudget = Math.min(50, Math.max(resumeState.concurrency, Math.ceil(remainingBudget * 0.5)));
-          const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${remainingBudget}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
-          console.log(chalk.cyan(`\n  ◆ Re-orchestrating plan from existing designs...\n`));
-          process.stdout.write("\x1B[?25l");
-          try {
-            const orchTasks = await orchestrate(
-              resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel,
-              resumeState.permissionMode, orchBudget, resumeState.concurrency, makeProgressLog(),
-              flexNote, join(resumeRunDir, "tasks.json"),
-            );
-            resumeState.currentTasks = orchTasks;
-            process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${orchTasks.length} tasks`)}\n`);
-          } catch (err: any) {
+            // Planning died before producing anything — re-run planning from
+            // scratch while keeping all saved settings (model, budget, etc.).
+            console.log(chalk.yellow(`\n  ⚠ Planning-phase run has no tasks or designs — will re-plan from scratch.\n`));
+            replanFromScratch = true;
+          } else {
+            const remainingBudget = Math.max(resumeState.concurrency, resumeState.budget - resumeState.accCompleted);
+            const orchBudget = Math.min(50, Math.max(resumeState.concurrency, Math.ceil(remainingBudget * 0.5)));
+            const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${remainingBudget}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
+            console.log(chalk.cyan(`\n  ◆ Re-orchestrating plan from existing designs...\n`));
+            process.stdout.write("\x1B[?25l");
+            try {
+              const orchTasks = await orchestrate(
+                resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel,
+                resumeState.permissionMode, orchBudget, resumeState.concurrency, makeProgressLog(),
+                flexNote, join(resumeRunDir, "tasks.json"),
+              );
+              resumeState.currentTasks = orchTasks;
+              process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${orchTasks.length} tasks`)}\n`);
+            } catch (err: any) {
+              process.stdout.write("\x1B[?25h");
+              console.error(chalk.red(`\n  Re-orchestration failed: ${err.message}\n  Start Fresh instead.\n`));
+              process.exit(1);
+            }
             process.stdout.write("\x1B[?25h");
-            console.error(chalk.red(`\n  Re-orchestration failed: ${err.message}\n  Start Fresh instead.\n`));
-            process.exit(1);
           }
-          process.stdout.write("\x1B[?25h");
         }
       }
       const unmerged = resumeState.branches.filter(b => b.status === "unmerged").length;
@@ -786,7 +790,7 @@ async function main() {
   if (resuming && resumeRunDir) updateLatestSymlink(rootDir, resumeRunDir);
   const previousKnowledge = readPreviousRunKnowledge(rootDir);
 
-  const needsPlan = tasks.length === 0 && !resuming;
+  const needsPlan = tasks.length === 0 && (!resuming || replanFromScratch);
   const designDir = join(runDir, "designs");
 
   // Persist an early planning-phase state so the run is visible to the resume
