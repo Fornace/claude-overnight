@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.25.5
+
+### Wave lifecycle hooks
+
+Three new task file fields let you run shell commands at key points in the wave loop — completely technology-agnostic, just shell commands in `cwd`:
+
+```json
+{
+  "beforeWave": "pnpm run db:generate",
+  "afterWave":  "supabase db push",
+  "afterRun":   "vercel deploy --prod"
+}
+```
+
+- **`beforeWave`** — runs before each wave starts. Useful for generating types from the current schema so workers have accurate types.
+- **`afterWave`** — runs after each wave's workers finish and merge, before the post-wave review and steering. The canonical place for migration commands: schema is applied before the review agent runs build/tests.
+- **`afterRun`** — runs once after the entire run finishes (any outcome: done, capped, stopped), after the git checkout back to the original branch. For deploy, notify, or cleanup commands.
+
+All three accept a string or array of strings. Failures are surfaced in the display but never abort the run. Order per wave: `beforeWave` → workers → merge → `afterWave` → post-wave review → steering.
+
+### Planner tool expansion
+
+The planning phase was restricted to `["Read", "Glob", "Grep", "Write"]`. Now expanded to include `Bash`, `WebFetch`, `WebSearch`, `TodoWrite`, and `Agent` — letting planners run `git log`, fetch library docs, track analysis progress with a todo list, and spawn sub-agents for deeper codebase exploration.
+
+Workers were never restricted (no `tools` param = all built-in tools available by default).
+
+### Wave debrief footer
+
+After each wave finishes, a fast model writes a one-line progress summary into the display footer. Visible in both swarm and steering views so the current wave's intent is always on screen.
+
+### UI polish
+
+- **COMPLETE tag** in the header + `"(all tasks done — processing)"` event indicator so the UI is never ambiguous when a wave finishes before steering kicks in.
+- **Elastic content area** — `renderUnifiedFrame` now shrinks the content area to fit the maxRows budget, so the header, footer, and input prompt are never clipped on small terminals.
+- **Alt/Option+key sequences** no longer cancel steer/ask input on macOS.
+
 ## 1.25.0
 
 ### Model catalog expansion + capability-based task scoping

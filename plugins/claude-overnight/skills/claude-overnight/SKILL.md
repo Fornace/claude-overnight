@@ -31,6 +31,20 @@ claude-overnight "task a" "task b"    # inline
 
 Common flags: `--budget=N`, `--concurrency=N`, `--model=<name>`, `--usage-cap=N`, `--allow-extra-usage`, `--extra-usage-budget=N`, `--timeout=SECONDS`, `--no-flex`, `--dry-run`.
 
+Task file supports lifecycle hooks — shell commands run in `cwd` at key points:
+
+```json
+{
+  "objective": "...",
+  "beforeWave": "pnpm run db:generate",
+  "afterWave":  "supabase db push",
+  "afterRun":   "vercel deploy --prod",
+  "tasks": []
+}
+```
+
+`beforeWave` runs before each wave starts · `afterWave` runs after workers merge (before review/steering) · `afterRun` runs once after the entire run. All accept a string or `string[]`. Failures are surfaced but never abort the run.
+
 Live keys while running: `b` change budget · `t` change usage cap · `q` graceful stop (twice = force).
 
 Exit codes: `0` all ok · `1` some failed · `2` all/none.
