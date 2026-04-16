@@ -71,6 +71,22 @@ export declare function cursorProxySessionsLogPath(): string;
 export declare function readCursorProxyLogTail(linesPerFile?: number): string | null;
 /** Check if a provider routes through cursor-composer-in-claude. */
 export declare function isCursorProxyProvider(p: ProviderConfig): boolean;
+/**
+ * Ensure an "account pool" of cloned config dirs exists under
+ * `~/.cursor-api-proxy/accounts/pool-{1..N}`. Each clone is just a copy of the
+ * user's `~/.cursor/cli-config.json` (has `authInfo.email` so cursor-composer
+ * auto-discovers it as an authenticated account).
+ *
+ * Purpose: cursor-agent subprocesses write their own cli-config.json on every
+ * startup via atomic tmp+rename. When N siblings all write to the same file in
+ * parallel, rename can lose the race and raise ENOENT. Giving each spawned
+ * agent its own CURSOR_CONFIG_DIR (one per pool entry) lets cursor-composer's
+ * AccountPool round-robin between them — zero shared writes, zero race.
+ *
+ * Refreshed every startup so token rotations in ~/.cursor flow through.
+ * Returns the list of pool dir paths, or null if the source config is missing.
+ */
+export declare function ensureCursorAccountPool(poolSize?: number): string[] | null;
 /** True if ~/.zshrc / ~/.zprofile contain the `run_cursor_agent` workaround (see README). */
 export declare function hasCursorMacAgentZshPatch(): boolean;
 /**

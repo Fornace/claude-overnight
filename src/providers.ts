@@ -495,6 +495,45 @@ export function isCursorProxyProvider(p: ProviderConfig): boolean {
   return p.cursorProxy === true || p.baseURL === PROXY_DEFAULT_URL;
 }
 
+/**
+ * Ensure an "account pool" of cloned config dirs exists under
+ * `~/.cursor-api-proxy/accounts/pool-{1..N}`. Each clone is just a copy of the
+ * user's `~/.cursor/cli-config.json` (has `authInfo.email` so cursor-composer
+ * auto-discovers it as an authenticated account).
+ *
+ * Purpose: cursor-agent subprocesses write their own cli-config.json on every
+ * startup via atomic tmp+rename. When N siblings all write to the same file in
+ * parallel, rename can lose the race and raise ENOENT. Giving each spawned
+ * agent its own CURSOR_CONFIG_DIR (one per pool entry) lets cursor-composer's
+ * AccountPool round-robin between them — zero shared writes, zero race.
+ *
+ * Refreshed every startup so token rotations in ~/.cursor flow through.
+ * Returns the list of pool dir paths, or null if the source config is missing.
+ */
+export function ensureCursorAccountPool(poolSize = 5): string[] | null {
+  if (poolSize <= 0) return null;
+  const source = join(homedir(), ".cursor", "cli-config.json");
+  if (!existsSync(source)) return null;
+  let sourceBuf: Buffer;
+  try {
+    sourceBuf = readFileSync(source);
+  } catch {
+    return null;
+  }
+  const dirs: string[] = [];
+  for (let i = 1; i <= poolSize; i++) {
+    const dir = join(homedir(), ".cursor-api-proxy", "accounts", `pool-${i}`);
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "cli-config.json"), sourceBuf);
+      dirs.push(dir);
+    } catch {
+      // skip this slot; pool still works with fewer dirs
+    }
+  }
+  return dirs.length > 0 ? dirs : null;
+}
+
 /** True if ~/.zshrc / ~/.zprofile contain the `run_cursor_agent` workaround (see README). */
 export function hasCursorMacAgentZshPatch(): boolean {
   let combined = "";
@@ -912,6 +951,13 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     proxyEnv.CURSOR_AGENT_SCRIPT = agentJs;
   }
 
+  // Enable the account pool so parallel cursor-agent subprocesses get
+  // separate CURSOR_CONFIG_DIRs — no more cli-config.json write race.
+  const pool = ensureCursorAccountPool(5);
+  if (pool && !proxyEnv.CURSOR_CONFIG_DIRS) {
+    proxyEnv.CURSOR_CONFIG_DIRS = pool.join(",");
+  }
+
   console.log(chalk.dim(JSON.stringify({
     claudeOvernight: VERSION,
     spawnProxy: {
@@ -928,6 +974,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
         CURSOR_BRIDGE_USE_ACP: proxyEnv.CURSOR_BRIDGE_USE_ACP,
         CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: proxyEnv.CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE,
         CURSOR_API_KEY: "(set)",
+        accountPool: proxyEnv.CURSOR_CONFIG_DIRS ? `${proxyEnv.CURSOR_CONFIG_DIRS.split(",").length} dirs` : "disabled",
       },
     },
   })));

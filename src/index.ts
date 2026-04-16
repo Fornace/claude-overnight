@@ -728,35 +728,20 @@ async function main() {
     }
 
     process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}…`)}\n`);
-    // Preflight strategy:
-    // - API providers (Anthropic, Qwen, etc.) run fully in parallel (~3-10s each).
-    // - Cursor proxy providers run SEQUENTIALLY. The proxy has no internal queue
-    //   and each request spawns its own cursor-agent subprocess, but those
-    //   subprocesses all write to the shared ~/.cursor/cli-config.json on startup
-    //   and race on `rename(*.tmp -> cli-config.json)` — causing intermittent
-    //   ENOENT crashes when fired in parallel. Sequential keeps each preflight
-    //   lightweight (direct HTTP POST /v1/messages, no claude CLI spawn) while
-    //   avoiding the shared-config race.
+    // Preflight strategy: all providers run fully in parallel. Cursor proxy
+    // providers used to race on the shared `~/.cursor/cli-config.json`, but the
+    // proxy now uses an account pool (`CURSOR_CONFIG_DIRS`) — each parallel
+    // cursor-agent subprocess gets its own config dir, eliminating the race.
+    // See ensureCursorAccountPool() in providers.ts.
     const progress = (msg: string) => process.stdout.write(chalk.dim(`    ${msg}\n`));
     /** Cursor agent cold start + thinking-variant model latency can exceed 20s; API providers stay tight. */
     const preflightMs = (p: ProviderConfig) =>
       isCursorProxyProvider(p) ? 60_000 : 20_000;
-    const apiPreflights = pending.filter(([, p]) => !isCursorProxyProvider(p));
-    const cursorPreflights = pending.filter(([, p]) => isCursorProxyProvider(p));
-    const apiResultsPromise = Promise.all(apiPreflights.map(async ([role, p]) => ({
+    const results = await Promise.all(pending.map(async ([role, p]) => ({
       role,
       provider: p,
       result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }),
     })));
-    const cursorResults: Array<{ role: string; provider: ProviderConfig; result: Awaited<ReturnType<typeof preflightProvider>> }> = [];
-    for (const [role, p] of cursorPreflights) {
-      cursorResults.push({
-        role,
-        provider: p,
-        result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }),
-      });
-    }
-    const results = [...(await apiResultsPromise), ...cursorResults];
     for (const { role, provider, result } of results) {
       if (!result.ok) {
         console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
