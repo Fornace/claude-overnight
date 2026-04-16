@@ -34,6 +34,11 @@ export class RunDisplay {
     navState = { focusSection: 0, focusRow: 0, scrollOffset: 0 };
     onSteer;
     onAsk;
+    debriefText;
+    /** Get the latest debrief line for footer rendering. */
+    getDebrief() { return this.debriefText; }
+    /** Set or clear the debrief text shown in the footer. */
+    setDebrief(text) { this.debriefText = text; }
     constructor(runInfo, liveConfig, callbacks) {
         this.runInfo = runInfo;
         this.liveConfig = liveConfig;
@@ -368,14 +373,14 @@ export class RunDisplay {
         const frameBudget = maxRows != null ? maxRows - bottomRows : undefined;
         let frame = "";
         if (this.swarm) {
-            frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo, this.selectedAgentId, frameBudget);
+            frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo, this.selectedAgentId, frameBudget, this.debriefText);
         }
         else if (this.steeringActive) {
             frame = renderSteeringFrame(this.runInfo, {
                 statusLine: this.steeringStatusLine,
                 events: this.steeringEvents,
                 context: this.steeringContext,
-            }, this.hasHotkeys(), this.rlGetter, frameBudget);
+            }, this.hasHotkeys(), this.rlGetter, frameBudget, this.debriefText);
         }
         else {
             return "";

@@ -17,6 +17,12 @@ export interface RunConfig extends RunConfigBase {
     cwd: string;
     /** Allowlist of SDK tool names agents are permitted to use. */
     allowedTools?: string[];
+    /** Shell command(s) to run in cwd before each wave starts (e.g. "pnpm run generate"). */
+    beforeWave?: string | string[];
+    /** Shell command(s) to run in cwd after each wave completes (e.g. "supabase db push"). */
+    afterWave?: string | string[];
+    /** Shell command(s) to run in cwd once after the entire run finishes (e.g. "vercel deploy"). */
+    afterRun?: string | string[];
     /** Persisted run directory path. */
     runDir: string;
     /** Knowledge about the codebase from a pre-run thinking wave. */

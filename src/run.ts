@@ -39,6 +39,12 @@ export interface RunConfig extends RunConfigBase {
   cwd: string;
   /** Allowlist of SDK tool names agents are permitted to use. */
   allowedTools?: string[];
+  /** Shell command(s) to run in cwd before each wave starts (e.g. "pnpm run generate"). */
+  beforeWave?: string | string[];
+  /** Shell command(s) to run in cwd after each wave completes (e.g. "supabase db push"). */
+  afterWave?: string | string[];
+  /** Shell command(s) to run in cwd once after the entire run finishes (e.g. "vercel deploy"). */
+  afterRun?: string | string[];
   /** Persisted run directory path. */
   runDir: string;
   /** Knowledge about the codebase from a pre-run thinking wave. */
@@ -67,7 +73,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const restore = () => { try { process.stdout.write("\x1B[?25h\n"); } catch {} };
   const {
     objective, cwd, workerModel, plannerModel, fastModel, concurrency, permissionMode,
-    allowedTools, runDir, previousKnowledge,
+    allowedTools, beforeWave: beforeWaveCmds, afterWave: afterWaveCmds, afterRun: afterRunCmds, runDir, previousKnowledge,
   } = cfg;
 
   const envForModel = buildEnvResolver({
@@ -207,6 +213,22 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const steeringLog: PlannerLog = (text, kind) => {
     if (kind === "event") display.appendSteeringEvent(text);
     else display.updateSteeringStatus(text);
+  };
+
+  const runDebrief = (label: string) => {
+    const debriefModel = fastModel || workerModel;
+    const memory = readRunMemory(runDir, previousKnowledge || undefined);
+    const cap = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
+    const ctx = [
+      objective ? `Objective: ${objective}` : "",
+      memory.status ? `Status:\n${cap(memory.status, 800)}` : "",
+      waveHistory.length ? `Waves done: ${waveHistory.length}` : "",
+      memory.reflections ? `Reflections:\n${cap(memory.reflections, 600)}` : "",
+    ].filter(Boolean).join("\n\n");
+    const prompt = `${label}\n\n${ctx}\n\nWrite one short sentence (max 120 chars) summarising progress and what's next. No preamble.`;
+    void runPlannerQuery(prompt, { cwd, model: debriefModel, permissionMode }, () => {})
+      .then(text => { display.setDebrief(text.trim().slice(0, 140)); })
+      .catch(() => {});
   };
 
   // For flex + branch strategy: create one target branch
@@ -395,6 +417,21 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     );
     if (stopping) break;
 
+    // Before-wave commands: run in cwd before each wave starts (e.g. generate types from schema).
+    if (beforeWaveCmds) {
+      const cmds = Array.isArray(beforeWaveCmds) ? beforeWaveCmds : [beforeWaveCmds];
+      for (const cmd of cmds) {
+        display.appendSteeringEvent(`Before-wave: ${cmd}`);
+        try {
+          const out = execSync(cmd, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+          if (out.trim()) display.appendSteeringEvent(`  → ${out.trim().slice(0, 200)}`);
+        } catch (err: any) {
+          const msg = (err.stderr || err.stdout || err.message || "").trim().slice(0, 300);
+          display.appendSteeringEvent(`  ✗ ${cmd}: ${msg}`);
+        }
+      }
+    }
+
     const swarm = new Swarm({
       tasks: currentTasks, concurrency, cwd, model: workerModel, permissionMode, allowedTools,
       useWorktrees, mergeStrategy: waveMerge, agentTimeoutMs: cfg.agentTimeoutMs,
@@ -448,6 +485,25 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       wave: waveNum,
       tasks: swarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, filesChanged: a.filesChanged, error: a.error })),
     });
+
+    // Fire-and-forget debrief after each wave.
+    runDebrief(`Wave ${waveNum + 1} just finished.`);
+
+    // After-wave commands: run shell commands in cwd after each wave (e.g. "supabase db push").
+    // Runs regardless of flex mode so migrations are applied before review/steering.
+    if (afterWaveCmds && !swarm.aborted && !swarm.cappedOut) {
+      const cmds = Array.isArray(afterWaveCmds) ? afterWaveCmds : [afterWaveCmds];
+      for (const cmd of cmds) {
+        display.appendSteeringEvent(`After-wave: ${cmd}`);
+        try {
+          const out = execSync(cmd, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+          if (out.trim()) display.appendSteeringEvent(`  → ${out.trim().slice(0, 200)}`);
+        } catch (err: any) {
+          const msg = (err.stderr || err.stdout || err.message || "").trim().slice(0, 300);
+          display.appendSteeringEvent(`  ✗ ${cmd}: ${msg}`);
+        }
+      }
+    }
 
     // Post-wave review: a single review agent against the consolidated diff.
     // Runs only when there was real work (not first wave, not abort/cap).
@@ -556,6 +612,22 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   } catch {}
   if (runBranch && originalRef) {
     try { execSync(`git checkout "${originalRef}"`, { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
+  }
+
+  // After-run commands: run once after the entire run finishes (e.g. deploy).
+  if (afterRunCmds) {
+    const cmds = Array.isArray(afterRunCmds) ? afterRunCmds : [afterRunCmds];
+    for (const cmd of cmds) {
+      console.log(chalk.dim(`  After-run: ${cmd}`));
+      try {
+        const out = execSync(cmd, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        if (out.trim()) console.log(chalk.dim(`  → ${out.trim().slice(0, 300)}`));
+      } catch (err: any) {
+        const msg = (err.stderr || err.stdout || err.message || "").trim().slice(0, 400);
+        console.log(chalk.red(`  ✗ ${cmd}: ${msg}`));
+      }
+    }
+    console.log("");
   }
 
   // ── Final summary ──

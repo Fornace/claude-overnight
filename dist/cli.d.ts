@@ -54,6 +54,9 @@ export interface FileArgs {
     permissionMode?: PermMode;
     cwd?: string;
     allowedTools?: string[];
+    beforeWave?: string | string[];
+    afterWave?: string | string[];
+    afterRun?: string | string[];
     useWorktrees?: boolean;
     mergeStrategy?: MergeStrategy;
     usageCap?: number;

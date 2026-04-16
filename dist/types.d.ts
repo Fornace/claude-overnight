@@ -25,6 +25,12 @@ export interface TaskFile {
     permissionMode?: PermMode;
     /** Allowlist of SDK tool names agents are permitted to use. */
     allowedTools?: string[];
+    /** Shell command(s) to run in cwd before each wave starts (e.g. "pnpm run generate"). */
+    beforeWave?: string | string[];
+    /** Shell command(s) to run in cwd after each wave completes (e.g. "supabase db push"). */
+    afterWave?: string | string[];
+    /** Shell command(s) to run in cwd once after the entire run finishes (e.g. "vercel deploy"). */
+    afterRun?: string | string[];
     /** Merge strategy: "yolo" merges into current branch, "branch" creates a new branch. */
     mergeStrategy?: MergeStrategy;
     /** Stop dispatching new tasks when rate-limit utilization reaches this percentage (0-100). */
@@ -183,6 +189,12 @@ export interface RunConfigBase {
     flex: boolean;
     /** Use git worktree isolation for agents. */
     useWorktrees: boolean;
+    /** Shell command(s) to run in cwd before each wave starts (e.g. "pnpm run generate"). */
+    beforeWave?: string | string[];
+    /** Shell command(s) to run in cwd after each wave completes (e.g. "supabase db push"). */
+    afterWave?: string | string[];
+    /** Shell command(s) to run in cwd once after the entire run finishes (e.g. "vercel deploy"). */
+    afterRun?: string | string[];
     /** How worktree branches are merged. */
     mergeStrategy: MergeStrategy;
 }

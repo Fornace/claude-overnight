@@ -190,7 +190,7 @@ export function renderUnifiedFrame(params) {
     }
     return [...header, ...content, ...footer].join("\n");
 }
-export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRows) {
+export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRows, debrief) {
     const allDone = swarm.agents.length > 0 && swarm.agents.every(a => a.status !== "running");
     const doneTag = allDone && !swarm.aborted ? chalk.green("COMPLETE") : "";
     const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
@@ -290,6 +290,8 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
     // Build footer
     let hotkeyRow;
     const extraFooterRows = [];
+    if (debrief)
+        extraFooterRows.push(chalk.dim(`  ${debrief}`));
     if (showHotkeys) {
         const pending = runInfo?.pendingSteer ?? 0;
         const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
@@ -397,7 +399,7 @@ function renderStatusBlock(out, w, status) {
     for (const ln of lines)
         out.push(`  ${chalk.dim(truncate(ln.trim(), w - 4))}`);
 }
-export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRows) {
+export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRows, debrief) {
     const totalUsed = runInfo.accCompleted + runInfo.accFailed;
     const ctx = data.context;
     const content = {
@@ -467,6 +469,9 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
         : undefined;
     // Footer
     let hotkeyRow;
+    const extraFooterRows = [];
+    if (debrief)
+        extraFooterRows.push(chalk.dim(`  ${debrief}`));
     if (showHotkeys) {
         const pending = runInfo?.pendingSteer ?? 0;
         const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
@@ -490,6 +495,7 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
         usageBarRender,
         content,
         hotkeyRow,
+        extraFooterRows,
         maxRows,
     });
 }

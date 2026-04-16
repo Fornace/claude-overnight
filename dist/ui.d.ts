@@ -74,6 +74,11 @@ export declare class RunDisplay {
     private navState;
     private onSteer?;
     private onAsk?;
+    private debriefText?;
+    /** Get the latest debrief line for footer rendering. */
+    getDebrief(): string | undefined;
+    /** Set or clear the debrief text shown in the footer. */
+    setDebrief(text: string | undefined): void;
     constructor(runInfo: RunInfo, liveConfig?: LiveConfig, callbacks?: {
         onSteer?: (text: string) => void;
         onAsk?: (text: string) => void;

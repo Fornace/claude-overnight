@@ -279,6 +279,9 @@ async function main() {
   const nonInteractive = noTTY || fileCfg !== undefined || tasks.length > 0;
   const cwd = fileCfg?.cwd ?? process.cwd();
   const allowedTools = fileCfg?.allowedTools;
+  const beforeWave = fileCfg?.beforeWave;
+  const afterWave = fileCfg?.afterWave;
+  const afterRun = fileCfg?.afterRun;
   if (!existsSync(cwd)) { console.error(chalk.red(`  Working directory does not exist: ${cwd}`)); process.exit(1); }
   if (noTTY) console.log(chalk.dim("  Non-interactive mode  -- using defaults\n"));
 
@@ -989,7 +992,7 @@ async function main() {
     tasks, objective, budget: budget ?? tasks.length, workerModel, plannerModel, fastModel,
     workerProvider, plannerProvider, fastProvider, concurrency,
     permissionMode, useWorktrees, mergeStrategy, usageCap, allowExtraUsage, extraUsageBudget,
-    flex, agentTimeoutMs, cwd, allowedTools, runDir, previousKnowledge,
+    flex, agentTimeoutMs, cwd, allowedTools, beforeWave, afterWave, afterRun, runDir, previousKnowledge,
     resuming, resumeState: resumeState ?? undefined,
     thinkingUsed, thinkingCost, thinkingIn, thinkingOut, thinkingTools, thinkingHistory,
     runStartedAt: resuming && resumeState?.startedAt ? new Date(resumeState.startedAt).getTime() : Date.now(),

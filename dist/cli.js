@@ -332,7 +332,7 @@ export async function selectKey(label, options) {
     });
 }
 const KNOWN_TASK_FILE_KEYS = new Set([
-    "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
+    "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "beforeWave", "afterWave", "afterRun", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 export function loadTaskFile(file) {
     const path = resolve(file);
@@ -394,6 +394,9 @@ export function loadTaskFile(file) {
         cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
         permissionMode: parsed.permissionMode,
         allowedTools: parsed.allowedTools,
+        beforeWave: parsed.beforeWave,
+        afterWave: parsed.afterWave,
+        afterRun: parsed.afterRun,
         useWorktrees: parsed.worktrees,
         mergeStrategy: parsed.mergeStrategy,
         usageCap,

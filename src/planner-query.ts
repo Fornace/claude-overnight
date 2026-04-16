@@ -165,8 +165,8 @@ async function runPlannerQueryOnce(
     options: {
       cwd: opts.cwd,
       model: opts.model,
-      tools: ["Read", "Glob", "Grep", "Write"],
-      allowedTools: ["Read", "Glob", "Grep", "Write"],
+      tools: ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"],
+      allowedTools: ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"],
       permissionMode: opts.permissionMode,
       ...(opts.permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       persistSession: true,

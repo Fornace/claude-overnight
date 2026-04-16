@@ -305,6 +305,9 @@ export interface FileArgs {
   permissionMode?: PermMode;
   cwd?: string;
   allowedTools?: string[];
+  beforeWave?: string | string[];
+  afterWave?: string | string[];
+  afterRun?: string | string[];
   useWorktrees?: boolean;
   mergeStrategy?: MergeStrategy;
   usageCap?: number;
@@ -312,7 +315,7 @@ export interface FileArgs {
 }
 
 const KNOWN_TASK_FILE_KEYS = new Set([
-  "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
+  "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "beforeWave", "afterWave", "afterRun", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 
 export function loadTaskFile(file: string): FileArgs {
@@ -368,6 +371,9 @@ export function loadTaskFile(file: string): FileArgs {
     cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
     permissionMode: parsed.permissionMode,
     allowedTools: parsed.allowedTools,
+    beforeWave: parsed.beforeWave,
+    afterWave: parsed.afterWave,
+    afterRun: parsed.afterRun,
     useWorktrees: parsed.worktrees,
     mergeStrategy: parsed.mergeStrategy,
     usageCap,

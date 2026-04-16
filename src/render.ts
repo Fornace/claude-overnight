@@ -194,13 +194,17 @@ export function renderUnifiedFrame(
     // Footer
     hotkeyRow?: string;
     extraFooterRows?: string[];
+    // Layout budget — when set, content sections are trimmed so the total
+    // frame never exceeds this many lines.  Header and footer are always
+    // rendered in full; only the content area shrinks.
+    maxRows?: number;
   },
 ): string {
   const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
-  const out: string[] = [];
 
-  // Header
-  renderHeader(out, w, {
+  // ── Header (fixed) ──
+  const header: string[] = [];
+  renderHeader(header, w, {
     model: params.model,
     phase: params.phase,
     barPct: params.barPct,
@@ -217,52 +221,48 @@ export function renderUnifiedFrame(
     sessionsBudget: params.sessionsBudget,
     remaining: params.remaining,
   });
+  if (params.usageBarRender) params.usageBarRender(header, w);
+  header.push("");
 
-  // Usage bar
-  if (params.usageBarRender) {
-    params.usageBarRender(out, w);
-  }
+  // ── Footer (fixed) ──
+  const footer: string[] = [""];
+  if (params.hotkeyRow) footer.push(params.hotkeyRow);
+  if (params.extraFooterRows) for (const row of params.extraFooterRows) footer.push(row);
+  footer.push("");
 
-  out.push("");
+  // ── Content (elastic — shrinks to fit) ──
+  const contentBudget = params.maxRows != null
+    ? Math.max(0, params.maxRows - header.length - footer.length)
+    : Infinity;
 
-  // Content sections
+  const content: string[] = [];
   const sections = params.content.sections();
   for (const sec of sections) {
-    if (sec.title) {
-      section(out, w, sec.title);
-    }
+    if (content.length >= contentBudget) break;
+    if (sec.title) section(content, w, sec.title);
     for (const row of sec.rows) {
-      out.push(row);
+      if (content.length >= contentBudget) break;
+      content.push(row);
     }
   }
 
-  // Footer
-  out.push("");
-  if (params.hotkeyRow) {
-    out.push(params.hotkeyRow);
-  }
-  if (params.extraFooterRows) {
-    for (const row of params.extraFooterRows) {
-      out.push(row);
-    }
-  }
-  out.push("");
-
-  return out.join("\n");
+  return [...header, ...content, ...footer].join("\n");
 }
 
 // ── Frame renderers ──
 
 type RLGetter = () => { utilization: number; isUsingOverage: boolean; windows: Map<string, RateLimitWindow>; resetsAt?: number };
 
-export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number): string {
+export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number, maxRows?: number, debrief?: string): string {
+  const allDone = swarm.agents.length > 0 && swarm.agents.every(a => a.status !== "running");
+  const doneTag = allDone && !swarm.aborted ? chalk.green("COMPLETE") : "";
   const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
   const pausedTag = swarm.paused ? chalk.yellow("PAUSED") : "";
   const stallTag = swarm.stallLevel >= 3 ? chalk.red("STALL") : swarm.stallLevel > 0 ? chalk.yellow(`STALL L${swarm.stallLevel}`) : "";
   const phaseLabel = swarm.phase === "planning" ? chalk.magenta("PLANNING")
     : swarm.phase === "merging" ? chalk.yellow("MERGING")
     : swarm.rateLimitPaused > 0 ? chalk.yellow("COOLING") : "";
-  const phase = [phaseLabel, pausedTag, stallTag, stoppingTag].filter(Boolean).join(" ");
+  const phase = [phaseLabel, doneTag, pausedTag, stallTag, stoppingTag].filter(Boolean).join(" ");
 
   const waveUsed = swarm.completed + swarm.failed;
 
@@ -325,6 +325,11 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
       // Event log (undecorated)
       const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
       const eventRows: string[] = [chalk.gray("  \u2500\u2500\u2500 Events " + "\u2500".repeat(Math.min(ww - 16, 90)))];
+      // All-done indicator: visible immediately when swarm finishes, before summary / steering
+      if (allDone && swarm.phase !== "done") {
+        eventRows.push(chalk.dim("  (all tasks done \u2014 processing)"));
+        eventRows.push("");
+      }
       const logN = Math.min(12, swarm.logs.length);
       for (const entry of swarm.logs.slice(-logN)) {
         const t = new Date(entry.time).toLocaleTimeString("en", { hour12: false });
@@ -348,6 +353,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
   // Build footer
   let hotkeyRow: string | undefined;
   const extraFooterRows: string[] = [];
+  if (debrief) extraFooterRows.push(chalk.dim(`  ${debrief}`));
   if (showHotkeys) {
     const pending = runInfo?.pendingSteer ?? 0;
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
@@ -382,6 +388,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     content,
     hotkeyRow,
     extraFooterRows,
+    maxRows,
   });
 }
 
@@ -463,6 +470,8 @@ export function renderSteeringFrame(
   data: SteeringViewData,
   showHotkeys: boolean,
   rlGetter?: RLGetter,
+  maxRows?: number,
+  debrief?: string,
 ): string {
   const totalUsed = runInfo.accCompleted + runInfo.accFailed;
   const ctx = data.context;
@@ -540,6 +549,8 @@ export function renderSteeringFrame(
 
   // Footer
   let hotkeyRow: string | undefined;
+  const extraFooterRows: string[] = [];
+  if (debrief) extraFooterRows.push(chalk.dim(`  ${debrief}`));
   if (showHotkeys) {
     const pending = runInfo?.pendingSteer ?? 0;
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
@@ -564,6 +575,8 @@ export function renderSteeringFrame(
     usageBarRender,
     content,
     hotkeyRow,
+    extraFooterRows,
+    maxRows,
   });
 }
 

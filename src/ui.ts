@@ -100,6 +100,11 @@ export class RunDisplay {
   private navState: NavState = { focusSection: 0, focusRow: 0, scrollOffset: 0 };
   private onSteer?: (text: string) => void;
   private onAsk?: (text: string) => void;
+  private debriefText?: string;
+  /** Get the latest debrief line for footer rendering. */
+  getDebrief(): string | undefined { return this.debriefText; }
+  /** Set or clear the debrief text shown in the footer. */
+  setDebrief(text: string | undefined): void { this.debriefText = text; }
 
   constructor(
     runInfo: RunInfo,
@@ -396,33 +401,39 @@ export class RunDisplay {
     this.interval = setInterval(() => this.flush(), 250);
   }
 
-  /** Write the full frame to stdout, clamped to terminal height. */
+  /** Write the full frame to stdout, clamped to terminal height.
+   *  Layout: header + content (elastic) + footer + input/ask (fixed).
+   *  The content area shrinks so input prompts are never clipped. */
   private flush(): void {
     try {
       const maxRows = (process.stdout.rows || 40) - 1;
-      const frame = this.render();
-      const lines = frame.split("\n");
-      process.stdout.write("\x1B[H\x1B[J");
-      process.stdout.write(lines.length > maxRows ? lines.slice(0, maxRows).join("\n") : frame);
+      const frame = this.render(maxRows);
+      process.stdout.write("\x1B[H\x1B[J" + frame);
     } catch { this.pause(); }
   }
 
-  private render(): string {
+  private render(maxRows?: number): string {
+    // Compute how many rows the input prompt + ask panel need so the
+    // main frame can shrink its content area to leave room.
+    const inputPrompt = this.renderInputPrompt();
+    const askPanel = this.renderAskPanel();
+    const bottom = inputPrompt + askPanel;
+    const bottomRows = bottom ? (bottom.match(/\n/g) || []).length : 0;
+    const frameBudget = maxRows != null ? maxRows - bottomRows : undefined;
+
     let frame = "";
     if (this.swarm) {
-      frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo, this.selectedAgentId);
+      frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo, this.selectedAgentId, frameBudget, this.debriefText);
     } else if (this.steeringActive) {
       frame = renderSteeringFrame(this.runInfo, {
         statusLine: this.steeringStatusLine,
         events: this.steeringEvents,
         context: this.steeringContext,
-      }, this.hasHotkeys(), this.rlGetter);
+      }, this.hasHotkeys(), this.rlGetter, frameBudget, this.debriefText);
     } else {
       return "";
     }
-    frame += this.renderInputPrompt();
-    frame += this.renderAskPanel();
-    return frame;
+    return frame + bottom;
   }
 
   private renderInputPrompt(): string {
@@ -515,16 +526,16 @@ export class RunDisplay {
 
   /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw.
    *
-   * Demux pipeline  -- routes arrow keys and ESC BEFORE hotkey matching:
+   * Demux pipeline  -- routes escape sequences and modifiers BEFORE hotkey matching:
    *   Raw stdin chunk → splitPaste
-   *     ├─ paste → handlePaste (existing, fine)
+   *     ├─ paste → handlePaste
    *     └─ typed → demux
-   *          ├─ ESC + [A/B/C/D  → this.navigate("up"/"down"/"right"/"left")
-   *          ├─ ESC             → cancel input / close detail / dismiss panel
-   *          ├─ Enter           → submit / reveal / select
-   *          ├─ Ctrl+C          → abort
-   *          ├─ Backspace       → delete
-   *          └─ printable       → hotkey matching (b, t, c, e, p, s, q, ?, d, 0-9)
+   *          1. ESC + [A/B/C/D  → navigate; other CSI → swallow
+   *          2. ESC + non-[     → Alt/Option+key → swallow
+   *          3. ESC alone       → cancel input / close detail / dismiss panel
+   *          4. numeric input   → digits, Enter, Backspace
+   *          5. text input      → printable chars, Enter, Backspace, ESC (with lookahead)
+   *          6. hotkey mode     → b, t, c, e, p, s, q, ?, d, 0-9
    */
   private handleTyped(s: string): boolean {
     const lc = this.liveConfig!;
@@ -540,7 +551,12 @@ export class RunDisplay {
       return true;
     }
 
-    // ── 2. Standalone ESC ──
+    // ── 2. Alt/Option+key: \x1B followed by a non-bracket byte (e.g. \x1Bb, \x1Bf) ──
+    if (s.length >= 2 && s[0] === "\x1B" && s[1] !== "[") {
+      return false; // swallow — don't cancel input, don't trigger hotkeys
+    }
+
+    // ── 3. Standalone ESC ──
     if (s === "\x1B") {
       if (this.inputMode !== "none") {
         this.inputMode = "none";
@@ -559,7 +575,7 @@ export class RunDisplay {
       return false;
     }
 
-    // ── 3. Input mode: budget / threshold / concurrency / extra ──
+    // ── 4. Input mode: budget / threshold / concurrency / extra ──
     if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency" || this.inputMode === "extra") {
       let dirty = false;
       for (const ch of s) {
@@ -600,7 +616,7 @@ export class RunDisplay {
       return dirty;
     }
 
-    // ── 4. Input mode: steer / ask ──
+    // ── 5. Input mode: steer / ask ──
     if (this.inputMode === "steer" || this.inputMode === "ask") {
       let dirty = false;
       for (let ci = 0; ci < s.length; ci++) {
@@ -621,9 +637,10 @@ export class RunDisplay {
           this.inputSegs = [];
           return true;
         }
-        // ESC cancels input mode (no ANSI-byte consumption loop  -- arrows arrive
-        // as "\x1B[A" in a single call and are caught by step 1 above)
+        // ESC: if next byte exists it's part of an Alt+key sequence — skip both.
+        // Standalone ESC (no following byte) cancels input mode.
         if (ch === "\x1B") {
+          if (ci + 1 < s.length) { ci++; continue; }
           this.inputMode = "none";
           this.inputSegs = [];
           return true;
@@ -644,7 +661,7 @@ export class RunDisplay {
       return dirty;
     }
 
-    // ── 5. Hotkey mode ──
+    // ── 6. Hotkey mode ──
 
     // Enter
     if (s === "\r" || s === "\n") {
@@ -702,7 +719,7 @@ export class RunDisplay {
       this.inputMode = "steer"; this.inputSegs = []; return true;
     }
     if (key === "?" && this.onAsk && this.swarm && !this.askBusy) {
-      if (this.askState && !this.askState.streaming) { this.askState = undefined; this.clearAskTempFile(); return false; }
+      if (this.askState && !this.askState.streaming) { this.askState = undefined; this.clearAskTempFile(); return true; }
       this.inputMode = "ask"; this.inputSegs = []; return true;
     }
     // [d] cycle agent detail panel
