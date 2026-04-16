@@ -53,7 +53,7 @@ export declare function formatTimeAgo(isoStr: string): string;
 export declare function showRunHistory(allRuns: {
     dir: string;
     state: RunState;
-}[], filterCwd: string): void;
+}[], filterCwd: string): Promise<void>;
 export declare function readPreviousRunKnowledge(rootDir: string): string;
 export declare function createRunDir(rootDir: string): string;
 export declare function updateLatestSymlink(rootDir: string, runDir: string): void;

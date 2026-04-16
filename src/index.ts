@@ -333,7 +333,7 @@ async function main() {
         { key: "c", desc: "ontinue last" }, { key: "h", desc: "istory" }, { key: "n", desc: "ew" }, { key: "q", desc: "uit" },
       ]);
       if (action === "q") process.exit(0);
-      if (action === "h") { showRunHistory(allRuns, cwd); continue; }
+      if (action === "h") { await showRunHistory(allRuns, cwd); continue; }
       if (action === "c") { continueObjective = completedRuns[0].state.objective; }
       picked = true;
     }
@@ -373,7 +373,7 @@ async function main() {
         const action = await selectKey("", [{ key: "r", desc: "esume" }, { key: "h", desc: "istory" }, { key: "f", desc: "resh" }, { key: "q", desc: "uit" }]);
         if (action === "q") process.exit(0);
         if (action === "f") { decided = true; break; }
-        if (action === "h") { showRunHistory(allRuns, cwd); continue; }
+        if (action === "h") { await showRunHistory(allRuns, cwd); continue; }
         resuming = true; resumeState = prev; resumeRunDir = run.dir; decided = true;
       } else {
         const shown = incompleteRuns.slice(0, 9);
@@ -401,7 +401,7 @@ async function main() {
         ]);
         if (action === "q") process.exit(0);
         if (action === "f") { decided = true; break; }
-        if (action === "h") { showRunHistory(allRuns, cwd); continue; }
+        if (action === "h") { await showRunHistory(allRuns, cwd); continue; }
         const idx = parseInt(action) - 1;
         if (idx >= 0 && idx < shown.length) {
           resuming = true; resumeState = shown[idx].state; resumeRunDir = shown[idx].dir; decided = true;

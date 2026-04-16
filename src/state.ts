@@ -5,6 +5,7 @@ import chalk from "chalk";
 import type { Task, RunState, BranchRecord, AgentState, RunMemory, WaveSummary } from "./types.js";
 import { forceMergeOverlay } from "./merge.js";
 import { FALLBACK_MODEL } from "./models.js";
+import { selectKey } from "./cli.js";
 
 // ── File I/O helpers ──
 
@@ -284,27 +285,38 @@ export function formatTimeAgo(isoStr: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export function showRunHistory(allRuns: { dir: string; state: RunState }[], filterCwd: string): void {
-  const runs = allRuns.filter(r => r.state.cwd === filterCwd);
-  if (runs.length === 0) { console.log(chalk.dim("\n  No run history.\n")); return; }
-  const w = Math.min((process.stdout.columns ?? 80) - 6, 50);
-  console.log(chalk.dim(`\n  ── Run History ${"─".repeat(Math.max(0, w - 16))}\n`));
-  let resumeIdx = 0;
-  for (const run of runs) {
-    const s = run.state;
-    const done = s.phase === "done";
-    const icon = done ? chalk.green("✓") : chalk.yellow("⚠");
-    const date = s.startedAt?.slice(0, 16).replace("T", " ") || "unknown";
-    const cost = s.accCost > 0 ? ` · $${s.accCost.toFixed(2)}` : "";
-    const obj = s.objective?.slice(0, 50) || "";
-    const num = done ? " " : chalk.cyan(String(++resumeIdx));
-    const merged = s.branches.filter(b => b.status === "merged").length;
-    console.log(`  ${icon} ${num} ${chalk.dim(date)} · ${s.phase} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
-    console.log(`      ${obj}${obj.length >= 50 ? "…" : ""}`);
-    let status = "";
-    try { status = readFileSync(join(run.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}
-    if (status) console.log(chalk.dim(`      ${status}`));
-    console.log("");
+export async function showRunHistory(allRuns: { dir: string; state: RunState }[], filterCwd: string): Promise<void> {
+  const runs = allRuns.filter(r => r.state.cwd === filterCwd && r.state.phase === "done");
+  if (runs.length === 0) { console.log(chalk.dim("\n  No completed runs.\n")); return; }
+  const PAGE = 5;
+  const pages = Math.ceil(runs.length / PAGE);
+  let page = 0;
+  while (true) {
+    const w = Math.min((process.stdout.columns ?? 80) - 6, 50);
+    const pageLabel = pages > 1 ? ` (${page + 1}/${pages})` : "";
+    console.log(chalk.dim(`\n  ── Run History${pageLabel} ${"─".repeat(Math.max(0, w - 16 - pageLabel.length))}\n`));
+    for (const run of runs.slice(page * PAGE, (page + 1) * PAGE)) {
+      const s = run.state;
+      const date = s.startedAt?.slice(0, 16).replace("T", " ") || "unknown";
+      const cost = s.accCost > 0 ? ` · $${s.accCost.toFixed(2)}` : "";
+      const obj = s.objective?.slice(0, 50) || "";
+      const merged = s.branches.filter(b => b.status === "merged").length;
+      console.log(`  ${chalk.green("✓")} ${chalk.dim(date)} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
+      console.log(`      ${obj}${obj.length >= 50 ? "…" : ""}`);
+      let status = "";
+      try { status = readFileSync(join(run.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}
+      if (status) console.log(chalk.dim(`      ${status}`));
+      console.log("");
+    }
+    if (pages === 1) break;
+    const opts: { key: string; desc: string }[] = [];
+    if (page < pages - 1) opts.push({ key: "n", desc: "ext" });
+    if (page > 0) opts.push({ key: "p", desc: "rev" });
+    opts.push({ key: "b", desc: "ack" });
+    const action = await selectKey("", opts);
+    if (action === "n") { page++; continue; }
+    if (action === "p") { page--; continue; }
+    break;
   }
 }
 
