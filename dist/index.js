@@ -806,32 +806,19 @@ async function main() {
             }
         }
         process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}…`)}\n`);
-        // Cursor proxy: each saved model is a distinct provider id (`cursor-composer-2`, etc.), so
-        // planner + executor + fast can schedule multiple preflights. The bundled proxy typically
-        // handles one agent query at a time — parallel preflights starve each other and hit the
-        // 20s timeout. Run non-proxy checks in parallel, then cursor proxy checks one at a time
-        // (preserve original `pending` order for messages).
+        // All preflights run in parallel. Cursor proxy preflights now go through a
+        // plain HTTP POST /v1/messages (see preflightCursorProxyViaHttp) instead of
+        // spawning the claude CLI, and the bundled proxy has no internal queue —
+        // each request spawns its own cursor-agent subprocess (request-listener.js
+        // → handleAnthropicMessages → runAgentStream).
         const progress = (msg) => process.stdout.write(chalk.dim(`    ${msg}\n`));
-        /** Cursor agent cold start + model variance can exceed 20s; API providers stay tight. */
+        /** Cursor agent cold start + thinking-variant model latency can exceed 20s; API providers stay tight. */
         const preflightMs = (p) => isCursorProxyProvider(p) ? 60_000 : 20_000;
-        const nonCursorIdx = [];
-        const cursorIdx = [];
-        for (let i = 0; i < pending.length; i++) {
-            if (isCursorProxyProvider(pending[i][1]))
-                cursorIdx.push(i);
-            else
-                nonCursorIdx.push(i);
-        }
-        const slot = Array.from({ length: pending.length });
-        await Promise.all(nonCursorIdx.map(async (i) => {
-            const [role, p] = pending[i];
-            slot[i] = { role, provider: p, result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }) };
-        }));
-        for (const i of cursorIdx) {
-            const [role, p] = pending[i];
-            slot[i] = { role, provider: p, result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }) };
-        }
-        const results = slot;
+        const results = await Promise.all(pending.map(async ([role, p]) => ({
+            role,
+            provider: p,
+            result: await preflightProvider(p, cwd, preflightMs(p), { onProgress: progress }),
+        })));
         for (const { role, provider, result } of results) {
             if (!result.ok) {
                 console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));

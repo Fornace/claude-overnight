@@ -256,6 +256,12 @@ function normalizeBaseURL(raw) {
  * so misconfig doesn't delay the main run.
  */
 export async function preflightProvider(p, cwd, timeoutMs = 20_000, opts) {
+    // Cursor proxy path: direct HTTP POST /v1/messages instead of spawning a
+    // full `claude` CLI subprocess. Same end-to-end validation (proxy + auth +
+    // cursor-agent + model) without per-check 1-3s of CLI spawn overhead.
+    if (isCursorProxyProvider(p)) {
+        return preflightCursorProxyViaHttp(p, timeoutMs, opts);
+    }
     let env;
     try {
         env = envFor(p);
@@ -264,11 +270,7 @@ export async function preflightProvider(p, cwd, timeoutMs = 20_000, opts) {
         return { ok: false, error: err.message };
     }
     // Show what we're checking
-    const keyInfo = p.cursorProxy
-        ? `proxy auth`
-        : p.keyEnv
-            ? `env ${p.keyEnv}`
-            : "stored key";
+    const keyInfo = p.keyEnv ? `env ${p.keyEnv}` : "stored key";
     opts?.onProgress?.(`checking ${p.model} (${keyInfo})…`);
     let pq;
     try {
@@ -325,6 +327,57 @@ export async function preflightProvider(p, cwd, timeoutMs = 20_000, opts) {
             pq?.close();
         }
         catch { }
+    }
+}
+/**
+ * Cursor-proxy-only preflight: HTTP POST /v1/messages instead of spawning the
+ * `claude` CLI. The proxy spawns its own cursor-agent subprocess per request
+ * (see cursor-composer-in-claude agent-runner.js) with no internal queue —
+ * callers can safely run these in parallel.
+ */
+async function preflightCursorProxyViaHttp(p, timeoutMs, opts) {
+    opts?.onProgress?.(`checking ${p.model} (proxy auth)…`);
+    const baseURL = (p.baseURL || PROXY_DEFAULT_URL).replace(/\/$/, "");
+    const key = resolveCursorProxyKey();
+    const headers = { "content-type": "application/json" };
+    if (key)
+        headers["authorization"] = `Bearer ${key}`;
+    const controller = new AbortController();
+    let elapsed = 0;
+    const PROGRESS_INTERVAL_MS = 3_000;
+    const progressTimer = setInterval(() => {
+        elapsed += PROGRESS_INTERVAL_MS;
+        opts?.onProgress?.(`still waiting… (${(elapsed / 1000).toFixed(1)}s)`);
+    }, PROGRESS_INTERVAL_MS);
+    const deadline = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(`${baseURL}/v1/messages`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+                model: p.model,
+                max_tokens: 1,
+                messages: [{ role: "user", content: "ok" }],
+            }),
+            signal: controller.signal,
+        });
+        if (!res.ok) {
+            const text = await res.text().catch(() => "");
+            return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
+        }
+        // Drain body so the connection closes cleanly; we don't care about content.
+        await res.text().catch(() => "");
+        return { ok: true };
+    }
+    catch (err) {
+        if (err?.name === "AbortError") {
+            return { ok: false, error: `timeout after ${Math.round(timeoutMs / 1000)}s` };
+        }
+        return { ok: false, error: String(err?.message || err).slice(0, 200) };
+    }
+    finally {
+        clearTimeout(deadline);
+        clearInterval(progressTimer);
     }
 }
 // ── Cursor API Proxy ──
