@@ -891,12 +891,18 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     // if the shell omitted CURSOR_API_KEY (GUI launches, etc.).
     CURSOR_API_KEY: agentToken,
     CURSOR_AUTH_TOKEN: agentToken,
-    // cursor-composer loadBridgeConfig: forces acpSkipAuthenticate so ACP never sends
-    // `authenticate` / `cursor_login` (that path touches macOS Keychain for `cursor-user`).
-    CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE: "1",
-    // Default bridge is useAcp=false → agent uses runStreaming; skip-authenticate only applies
-    // to runAcpStream. Force ACP so real traffic matches the headless/keychain-avoidance path.
-    CURSOR_BRIDGE_USE_ACP: "1",
+    // Use the CLI streaming path (runStreaming), NOT ACP. The ACP path is broken for
+    // opus/sonnet *-thinking-*/effort-variant friendly names: cursor-composer's
+    // resolveAcpModelConfigValue only matches against ACP `name` fields (e.g.
+    // `claude-opus-4-7`), while friendly IDs like `claude-opus-4-7-thinking-high`
+    // come from `agent --list-models`. The ACP agent then replies
+    // `{error: "Invalid model value: claude-opus-4-7-thinking-high"}` and
+    // cursor-composer's acp-client swallows the error to a silent exit-1.
+    // The CLI path accepts all friendly names (verified with opus-thinking-high,
+    // gemini-3.1-pro, composer-2 via HTTP preflight). Keychain safety is preserved:
+    // the CLI path injects keychain-shim-inject.js via NODE_OPTIONS which no-ops
+    // /usr/bin/security calls on macOS (cursor-composer/dist/lib/process.js).
+    CURSOR_BRIDGE_USE_ACP: "0",
     // cursor-composer chat-only mode fakes HOME to a temp dir; on macOS the agent still waits on
     // Keychain (~30s) for `cursor-user` despite CURSOR_API_KEY. Use the real workspace profile.
     CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "false",

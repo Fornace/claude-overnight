@@ -6,6 +6,8 @@ globs: src/providers.ts,src/index.ts,docs/CURSOR_PROXY_MACOS_DISCOVERY.md
 # Cursor keychain / ACP
 
 - **Authoritative write-up:** `docs/CURSOR_PROXY_MACOS_DISCOVERY.md` (chat-only temp `HOME` vs Keychain, `USE_ACP`, `composer-2` vs `composer-2-fast`, verification matrix).
-- Bundled **cursor-composer-in-claude** uses ACP `authenticate` with `methodId: "cursor_login"` unless `acpSkipAuthenticate` is true (`loadBridgeConfig`). That RPC can trigger macOS Keychain for **`cursor-user`** even when `CURSOR_SKIP_KEYCHAIN=1` on the agent env.
-- **Mitigation in claude-overnight:** **`CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE=1`**, **`CURSOR_BRIDGE_USE_ACP=1`**, **`CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`** (default chat-only isolation fakes `HOME` and can still cause Keychain timeouts with a User API key), plus **`CURSOR_API_KEY`** / **`CURSOR_AUTH_TOKEN`** injected into the proxy spawn.
-- **Regression:** `npm run matrix:cursor-proxy`; preflight smoke when changing proxy env (macOS).
+- Bundled **cursor-composer-in-claude** has TWO agent paths: **CLI streaming** (default, `useAcp=false`) and **ACP** (JSON-RPC).
+- **ACP path is broken** for opus/sonnet friendly names like `claude-opus-4-7-thinking-high`: the ACP catalog only exposes bracketed IDs (`claude-opus-4-7[thinking=true,effort=high]`) keyed by stripped `name` fields (`claude-opus-4-7`). `resolveAcpModelConfigValue` has no mapping for `-thinking-high`/`-xhigh`/etc. and the agent replies `Invalid model value: …` — which acp-client.js swallows to a silent `exit 1` (`logAgentError` stderr is empty). Verified live against v0.8.0.
+- **Mitigation in claude-overnight:** force **`CURSOR_BRIDGE_USE_ACP=0`** so the proxy uses the CLI streaming path, which accepts every `agent --list-models` friendly name. Keychain safety is preserved by cursor-composer's built-in NODE_OPTIONS shim (`keychain-shim-inject.js`, applied by `process.js`) that no-ops `/usr/bin/security` on macOS — no `acpSkipAuthenticate` needed because the CLI path never calls `cursor_login`.
+- Still set: **`CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`**, **`CURSOR_SKIP_KEYCHAIN=1`**, **`CURSOR_API_KEY`** / **`CURSOR_AUTH_TOKEN`** injected into the proxy spawn.
+- **Regression:** `npm run matrix:cursor-proxy`; preflight smoke with an opus/sonnet `-thinking-*` variant when changing proxy env (macOS).
