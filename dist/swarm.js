@@ -438,6 +438,12 @@ export class Swarm {
     }
     // ── Agent execution ──
     async runAgent(task) {
+        // Guard: if pause was triggered between dispatch and here, re-queue immediately.
+        // The worker already shifted this task, so unshift puts it back for resume.
+        if (this.paused) {
+            this.queue.unshift(task);
+            return;
+        }
         const id = this.nextId++;
         const agent = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0 };
         this.agents.push(agent);
@@ -537,6 +543,16 @@ export class Swarm {
                         timer = setTimeout(check, timeoutMs);
                     });
                     this.activeQueries.add(agentQuery);
+                    // Guard: if pause was triggered between runAgent check and here, close the query
+                    // immediately so requeueIfPaused can catch it without running a turn.
+                    if (this.paused) {
+                        this.activeQueries.delete(agentQuery);
+                        try {
+                            agentQuery.close();
+                        }
+                        catch { }
+                        return;
+                    }
                     try {
                         await Promise.race([
                             (async () => {
@@ -561,17 +577,47 @@ export class Swarm {
                         catch { }
                     }
                 };
-                try {
-                    await runOnce(false);
-                }
-                catch (nudgeErr) {
-                    if (nudgeErr instanceof NudgeError && resumeSessionId) {
-                        this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
+                // Helper: re-queue this task with resume info when paused mid-turn.
+                const requeueIfPaused = () => {
+                    if (!this.paused || agent.status !== "running")
+                        return false;
+                    agent.status = "paused";
+                    this.log(id, "Paused mid-task");
+                    if (resumeSessionId) {
+                        this.queue.unshift({ ...task, resumeSessionId, agentCwd });
+                    }
+                    return true;
+                };
+                if (isResumed && resumeSessionId) {
+                    // Resumed task: continue the existing SDK session
+                    try {
                         await runOnce(true);
                     }
-                    else
-                        throw nudgeErr;
+                    catch (nudgeErr) {
+                        if (nudgeErr instanceof NudgeError && resumeSessionId) {
+                            this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
+                            await runOnce(true);
+                        }
+                        else
+                            throw nudgeErr;
+                    }
                 }
+                else {
+                    // Fresh task: start with the task prompt
+                    try {
+                        await runOnce(false);
+                    }
+                    catch (nudgeErr) {
+                        if (nudgeErr instanceof NudgeError && resumeSessionId) {
+                            this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
+                            await runOnce(true);
+                        }
+                        else
+                            throw nudgeErr;
+                    }
+                }
+                if (requeueIfPaused())
+                    return;
                 if (resumeSessionId && agent.status === "running") {
                     try {
                         this.log(id, "Simplify pass");
@@ -582,6 +628,8 @@ export class Swarm {
                         this.log(id, "Simplify pass skipped");
                     }
                 }
+                if (requeueIfPaused())
+                    return;
                 if (agent.status === "running") {
                     agent.finishedAt = Date.now();
                     const duration = agent.finishedAt - (agent.startedAt || agent.finishedAt);

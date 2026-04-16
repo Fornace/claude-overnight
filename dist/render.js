@@ -510,6 +510,7 @@ export function renderSummary(swarm) {
     out.push(chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, fixedW + taskW))));
     const groups = [
         swarm.agents.filter(a => a.status === "running"),
+        swarm.agents.filter(a => a.status === "paused"),
         swarm.agents.filter(a => a.status === "done"),
         swarm.agents.filter(a => a.status === "error"),
     ].filter(g => g.length > 0);
@@ -521,7 +522,10 @@ export function renderSummary(swarm) {
         for (const a of groups[gi]) {
             const id = String(a.id).padStart(3);
             const ok = a.status === "done";
-            const status = ok ? chalk.green("\u2713 done") : a.status === "running" ? chalk.blue("~ run ") : chalk.red("\u2717 err ");
+            const status = ok ? chalk.green("\u2713 done")
+                : a.status === "running" ? chalk.blue("~ run ")
+                    : a.status === "paused" ? chalk.yellow("\u23F8 paused")
+                        : chalk.red("\u2717 err ");
             const task = truncate(a.task.prompt, taskW).padEnd(taskW);
             const durMs = a.startedAt != null ? (a.finishedAt ?? Date.now()) - a.startedAt : 0;
             const dur = fmtDur(durMs).padStart(8);
@@ -532,7 +536,7 @@ export function renderSummary(swarm) {
             totalFiles += a.filesChanged ?? 0;
             totalTools += a.toolCalls;
             totalCost += a.costUsd ?? 0;
-            const color = ok ? chalk.white : a.status === "running" ? chalk.blue : chalk.red;
+            const color = ok ? chalk.white : a.status === "running" ? chalk.blue : a.status === "paused" ? chalk.yellow : chalk.red;
             out.push(color(`  ${id}  ${status}  ${task}  ${dur}  ${files}  ${tools}  ${cost}`));
         }
     }
@@ -549,7 +553,8 @@ function fmtRow(a, w, selected = false) {
     const spin = SPINNER[Math.floor(Date.now() / 250) % SPINNER.length];
     const icon = a.status === "running"
         ? (a.blockedAt ? chalk.yellow("\u25CF blk") : chalk.blue(`${spin} run`)) + elapsed
-        : a.status === "done" ? chalk.green("\u2713 done") : chalk.red("\u2717 err ");
+        : a.status === "paused" ? chalk.yellow("\u23F8 paused")
+            : a.status === "done" ? chalk.green("\u2713 done") : chalk.red("\u2717 err ");
     const taskW = Math.max(20, Math.min(36, w - 50));
     const task = truncate(a.task.prompt, taskW).padEnd(taskW);
     let action;
@@ -561,6 +566,10 @@ function fmtRow(a, w, selected = false) {
     }
     else if (a.status === "running") {
         action = chalk.dim(truncate(a.lastText || "...", 24));
+    }
+    else if (a.status === "paused") {
+        const dur = fmtDur((Date.now()) - (a.startedAt || Date.now()));
+        action = chalk.yellow(`paused ${dur}`);
     }
     else if (a.status === "done") {
         const dur = fmtDur((a.finishedAt || Date.now()) - (a.startedAt || Date.now()));

@@ -10,6 +10,10 @@ export interface Task {
   model?: string;
   /** When true, skip worktree isolation  -- run in the real project directory with env files, dependencies, and local config. */
   noWorktree?: boolean;
+  /** SDK session ID to resume from (set when task was paused mid-turn). */
+  resumeSessionId?: string;
+  /** Working directory preserved from a previous run (worktree dir for paused-and-resumed tasks). */
+  agentCwd?: string;
 }
 
 /** Schema for a JSON task file that defines a batch of work for the swarm. */
@@ -43,7 +47,7 @@ export interface TaskFile {
 }
 
 /** Lifecycle status of a single agent. */
-export type AgentStatus = "pending" | "running" | "done" | "error";
+export type AgentStatus = "pending" | "running" | "paused" | "done" | "error";
 
 /** Live mutable state for one agent, used by the UI and orchestrator. */
 export interface AgentState {

@@ -157,6 +157,13 @@ export class Swarm {
     if (this.paused === b) return;
     this.paused = b;
     this.log(-1, b ? "Dispatch paused" : "Dispatch resumed");
+    if (b) {
+      // Instant: interrupt every active SDK session so agents stop mid-turn.
+      // After the interrupt, the for await loop exits, runOnce returns, and
+      // runAgent detects this.paused and re-queues the task with resume info.
+      this.activeQueries.forEach(q => { q.interrupt().catch(() => {}); });
+      this.log(-1, "Pausing agents…");
+    }
   }
 
   /** Returns the rate-limit window currently holding the swarm back  -- rejected first, then highest utilization. */
@@ -451,12 +458,18 @@ export class Swarm {
   // ── Agent execution ──
 
   private async runAgent(task: Task): Promise<void> {
+    // Guard: if pause was triggered between dispatch and here, re-queue immediately.
+    // The worker already shifted this task, so unshift puts it back for resume.
+    if (this.paused) {
+      this.queue.unshift(task);
+      return;
+    }
     const id = this.nextId++;
     const agent: AgentState = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0 };
     this.agents.push(agent);
 
-    let agentCwd = task.cwd || this.config.cwd;
-    if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree) {
+    let agentCwd = task.agentCwd || task.cwd || this.config.cwd;
+    if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree && !task.agentCwd) {
       const branch = `swarm/task-${id}`;
       const dir = join(this.worktreeBase, `agent-${id}`);
       let baseRef: string | undefined;
@@ -485,7 +498,8 @@ export class Swarm {
       }
     }
 
-    this.log(id, `Starting: ${task.prompt.slice(0, 60)}`);
+    const isResumed = !!task.resumeSessionId;
+    this.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
     const maxRetries = this.config.maxRetries ?? 2;
     const inactivityMs = this.config.agentTimeoutMs ?? 15 * 60 * 1000;
 
@@ -499,7 +513,7 @@ export class Swarm {
 
       try {
         const perm = this.config.permissionMode ?? "auto";
-        let resumeSessionId: string | undefined;
+        let resumeSessionId: string | undefined = task.resumeSessionId;
         let resumePrompt = "Continue. Complete the task.";
 
         const runOnce = async (isResume: boolean): Promise<void> => {
@@ -539,6 +553,13 @@ export class Swarm {
             timer = setTimeout(check, timeoutMs);
           });
           this.activeQueries.add(agentQuery);
+          // Guard: if pause was triggered between runAgent check and here, close the query
+          // immediately so requeueIfPaused can catch it without running a turn.
+          if (this.paused) {
+            this.activeQueries.delete(agentQuery);
+            try { agentQuery.close(); } catch {}
+            return;
+          }
           try {
             await Promise.race([
               (async () => {
@@ -558,18 +579,43 @@ export class Swarm {
           }
         };
 
-        try { await runOnce(false); }
-        catch (nudgeErr) {
-          if (nudgeErr instanceof NudgeError && resumeSessionId) {
-            this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
-            await runOnce(true);
-          } else throw nudgeErr;
+        // Helper: re-queue this task with resume info when paused mid-turn.
+        const requeueIfPaused = (): boolean => {
+          if (!this.paused || agent.status !== "running") return false;
+          agent.status = "paused";
+          this.log(id, "Paused mid-task");
+          if (resumeSessionId) {
+            this.queue.unshift({ ...task, resumeSessionId, agentCwd });
+          }
+          return true;
+        };
+
+        if (isResumed && resumeSessionId) {
+          // Resumed task: continue the existing SDK session
+          try { await runOnce(true); }
+          catch (nudgeErr) {
+            if (nudgeErr instanceof NudgeError && resumeSessionId) {
+              this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
+              await runOnce(true);
+            } else throw nudgeErr;
+          }
+        } else {
+          // Fresh task: start with the task prompt
+          try { await runOnce(false); }
+          catch (nudgeErr) {
+            if (nudgeErr instanceof NudgeError && resumeSessionId) {
+              this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
+              await runOnce(true);
+            } else throw nudgeErr;
+          }
         }
+        if (requeueIfPaused()) return;
 
         if (resumeSessionId && agent.status === "running") {
           try { this.log(id, "Simplify pass"); resumePrompt = SIMPLIFY_PROMPT; await runOnce(true); }
           catch { this.log(id, "Simplify pass skipped"); }
         }
+        if (requeueIfPaused()) return;
 
         if (agent.status === "running") {
           agent.finishedAt = Date.now();
