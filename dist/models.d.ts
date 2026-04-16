@@ -7,7 +7,7 @@ export interface ModelCapability {
 }
 export declare const MODEL_CAPABILITIES: Record<string, ModelCapability>;
 export declare const DEFAULT_MODEL = "claude-sonnet-4-6";
-export declare const FALLBACK_MODEL = "claude-opus-4-6";
+export declare const FALLBACK_MODEL = "claude-opus-4-7";
 /**
  * Find capability info for a model string. Tries: exact match → lowercase
  * exact → substring match. Falls back to "unknown" entry.

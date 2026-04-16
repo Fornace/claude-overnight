@@ -29,6 +29,7 @@ export interface ModelCapability {
 export const MODEL_CAPABILITIES: Record<string, ModelCapability> = {
   // ── Anthropic Claude (Apr 2026) ──
   // Opus: only model that earns "relaxed". 100% on 38-task routing, 95%+ IFEval.
+  "claude-opus-4-7":           { contextWindow: 1_000_000, safeContext: 400_000, contextConstraint: "relaxed", displayName: "Opus 4.7" },
   "claude-opus-4-6":           { contextWindow: 1_000_000, safeContext: 400_000, contextConstraint: "relaxed", displayName: "Opus 4.6" },
   // Sonnet: good but loses thread more than Opus on autonomous multi-file work.
   "claude-sonnet-4-6":         { contextWindow: 1_000_000, safeContext: 300_000, contextConstraint: "moderate", displayName: "Sonnet 4.6" },
@@ -77,7 +78,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapability> = {
 // ── Default / fallback models ──
 
 export const DEFAULT_MODEL = "claude-sonnet-4-6";
-export const FALLBACK_MODEL = "claude-opus-4-6"; // used for planner + worker recovery
+export const FALLBACK_MODEL = "claude-opus-4-7"; // used for planner + worker recovery
 
 // ── Lookup ──
 
