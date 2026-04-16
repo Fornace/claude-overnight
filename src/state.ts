@@ -285,9 +285,10 @@ export function formatTimeAgo(isoStr: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export async function showRunHistory(allRuns: { dir: string; state: RunState }[], filterCwd: string): Promise<void> {
-  const runs = allRuns.filter(r => r.state.cwd === filterCwd && r.state.phase === "done");
-  if (runs.length === 0) { console.log(chalk.dim("\n  No completed runs.\n")); return; }
+export async function showRunHistory(allRuns: { dir: string; state: RunState }[], filterCwd: string, resumable: { dir: string }[] = []): Promise<void> {
+  const resumableDirs = new Set(resumable.map(r => r.dir));
+  const runs = allRuns.filter(r => r.state.cwd === filterCwd && !resumableDirs.has(r.dir));
+  if (runs.length === 0) { console.log(chalk.dim("\n  No run history.\n")); return; }
   const PAGE = 5;
   const pages = Math.ceil(runs.length / PAGE);
   let page = 0;
@@ -301,7 +302,8 @@ export async function showRunHistory(allRuns: { dir: string; state: RunState }[]
       const cost = s.accCost > 0 ? ` · $${s.accCost.toFixed(2)}` : "";
       const obj = s.objective?.slice(0, 50) || "";
       const merged = s.branches.filter(b => b.status === "merged").length;
-      console.log(`  ${chalk.green("✓")} ${chalk.dim(date)} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
+      const icon = s.phase === "done" ? chalk.green("✓") : chalk.dim("·");
+      console.log(`  ${icon} ${chalk.dim(date)} · ${s.phase} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
       console.log(`      ${obj}${obj.length >= 50 ? "…" : ""}`);
       let status = "";
       try { status = readFileSync(join(run.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}

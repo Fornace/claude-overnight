@@ -305,10 +305,11 @@ export function formatTimeAgo(isoStr) {
         return `${hours}h ago`;
     return `${Math.floor(hours / 24)}d ago`;
 }
-export async function showRunHistory(allRuns, filterCwd) {
-    const runs = allRuns.filter(r => r.state.cwd === filterCwd && r.state.phase === "done");
+export async function showRunHistory(allRuns, filterCwd, resumable = []) {
+    const resumableDirs = new Set(resumable.map(r => r.dir));
+    const runs = allRuns.filter(r => r.state.cwd === filterCwd && !resumableDirs.has(r.dir));
     if (runs.length === 0) {
-        console.log(chalk.dim("\n  No completed runs.\n"));
+        console.log(chalk.dim("\n  No run history.\n"));
         return;
     }
     const PAGE = 5;
@@ -324,7 +325,8 @@ export async function showRunHistory(allRuns, filterCwd) {
             const cost = s.accCost > 0 ? ` · $${s.accCost.toFixed(2)}` : "";
             const obj = s.objective?.slice(0, 50) || "";
             const merged = s.branches.filter(b => b.status === "merged").length;
-            console.log(`  ${chalk.green("✓")} ${chalk.dim(date)} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
+            const icon = s.phase === "done" ? chalk.green("✓") : chalk.dim("·");
+            console.log(`  ${icon} ${chalk.dim(date)} · ${s.phase} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
             console.log(`      ${obj}${obj.length >= 50 ? "…" : ""}`);
             let status = "";
             try {

@@ -332,7 +332,7 @@ async function main() {
             if (action === "q")
                 process.exit(0);
             if (action === "h") {
-                await showRunHistory(allRuns, cwd);
+                await showRunHistory(allRuns, cwd, incompleteRuns);
                 continue;
             }
             if (action === "c") {
@@ -385,7 +385,7 @@ async function main() {
                     break;
                 }
                 if (action === "h") {
-                    await showRunHistory(allRuns, cwd);
+                    await showRunHistory(allRuns, cwd, incompleteRuns);
                     continue;
                 }
                 resuming = true;
@@ -429,7 +429,7 @@ async function main() {
                     break;
                 }
                 if (action === "h") {
-                    await showRunHistory(allRuns, cwd);
+                    await showRunHistory(allRuns, cwd, incompleteRuns);
                     continue;
                 }
                 const idx = parseInt(action) - 1;
