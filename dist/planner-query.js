@@ -2,6 +2,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync } from "fs";
 import { NudgeError } from "./types.js";
 import { writeTranscriptEvent } from "./transcripts.js";
+const DEFAULT_TOOLS = ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"];
 const DEFAULT_MAX_TURNS = 20;
 // ── Shared env resolver (set once at run start, used by every planner query) ──
 //
@@ -144,8 +145,8 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
         options: {
             cwd: opts.cwd,
             model: opts.model,
-            tools: opts.tools ?? ["Read", "Glob", "Grep", "Write"],
-            allowedTools: opts.tools ?? ["Read", "Glob", "Grep", "Write"],
+            tools: opts.tools ?? DEFAULT_TOOLS,
+            allowedTools: opts.tools ?? DEFAULT_TOOLS,
             permissionMode: opts.permissionMode,
             ...(opts.permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
             persistSession: true,

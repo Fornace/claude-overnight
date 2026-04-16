@@ -21,6 +21,8 @@ export interface PlannerRateLimitInfo {
   costUsd: number;
 }
 
+const DEFAULT_TOOLS = ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"];
+
 export interface PlannerOpts {
   cwd: string;
   model: string;
@@ -34,9 +36,7 @@ export interface PlannerOpts {
    */
   maxTurns?: number;
   /**
-   * Tools the planner agent may use. Defaults to read-only + Write (for outFile
-   * resilience). Deliberately excludes Bash/Agent/TodoWrite/WebFetch to prevent
-   * the multi-turn tool loops that cause error_max_turns with thinking models.
+   * Tools the planner agent may use. Defaults to the full Claude tool suite.
    */
   tools?: string[];
 }
@@ -206,8 +206,8 @@ async function runPlannerQueryOnce(
     options: {
       cwd: opts.cwd,
       model: opts.model,
-      tools: opts.tools ?? ["Read", "Glob", "Grep", "Write"],
-      allowedTools: opts.tools ?? ["Read", "Glob", "Grep", "Write"],
+      tools: opts.tools ?? DEFAULT_TOOLS,
+      allowedTools: opts.tools ?? DEFAULT_TOOLS,
       permissionMode: opts.permissionMode,
       ...(opts.permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       persistSession: true,

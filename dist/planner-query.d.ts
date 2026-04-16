@@ -30,9 +30,7 @@ export interface PlannerOpts {
      */
     maxTurns?: number;
     /**
-     * Tools the planner agent may use. Defaults to read-only + Write (for outFile
-     * resilience). Deliberately excludes Bash/Agent/TodoWrite/WebFetch to prevent
-     * the multi-turn tool loops that cause error_max_turns with thinking models.
+     * Tools the planner agent may use. Defaults to the full Claude tool suite.
      */
     tools?: string[];
 }
