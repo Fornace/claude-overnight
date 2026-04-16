@@ -979,6 +979,39 @@ async function main() {
                     const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, concurrency, paused: false, dirty: false });
                     thinkDisplay.setWave(thinkingSwarm);
                     thinkDisplay.start();
+                    // Save thinking-wave state on every exit path (normal, abort, double-q).
+                    const saveThinkingState = () => {
+                        thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
+                        thinkingCost = thinkingSwarm.totalCostUsd;
+                        thinkingIn = thinkingSwarm.totalInputTokens;
+                        thinkingOut = thinkingSwarm.totalOutputTokens;
+                        thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+                        try {
+                            saveRunState(runDir, {
+                                id: runDir.split(/[/\\]/).pop() ?? "",
+                                objective: objective, budget: budget ?? 10, remaining: (budget ?? 10) - thinkingUsed,
+                                workerModel, plannerModel,
+                                workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
+                                concurrency, permissionMode,
+                                usageCap, allowExtraUsage, extraUsageBudget,
+                                flex, useWorktrees, mergeStrategy,
+                                waveNum: 0, currentTasks: [],
+                                accCost: thinkingCost, accCompleted: thinkingUsed, accFailed: 0,
+                                accIn: thinkingIn, accOut: thinkingOut, accTools: thinkingTools,
+                                branches: [],
+                                phase: "planning",
+                                startedAt: new Date().toISOString(),
+                                cwd,
+                            });
+                        }
+                        catch { }
+                    };
+                    // Catch double-q / hard exit during thinking wave
+                    const exitHandler = () => { try {
+                        saveThinkingState();
+                    }
+                    catch { } };
+                    process.on("exit", exitHandler);
                     try {
                         await thinkingSwarm.run();
                     }
@@ -986,35 +1019,10 @@ async function main() {
                         thinkDisplay.pause();
                         console.log(renderSummary(thinkingSwarm));
                         thinkDisplay.stop();
+                        saveThinkingState();
+                        process.removeListener("exit", exitHandler);
                     }
-                    thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
-                    thinkingCost = thinkingSwarm.totalCostUsd;
-                    thinkingIn = thinkingSwarm.totalInputTokens;
-                    thinkingOut = thinkingSwarm.totalOutputTokens;
-                    thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
                     thinkingHistory = { wave: -1, tasks: thinkingSwarm.agents.map(a => ({ prompt: a.task.prompt.slice(0, 200), status: a.status, filesChanged: a.filesChanged, error: a.error })) };
-                    // Persist thinking cost/count into run.json so if the user quits
-                    // between thinking and orchestrate, resume still sees the real spend
-                    // and the run stays visible in the picker (designs on disk = resumable).
-                    try {
-                        saveRunState(runDir, {
-                            id: runDir.split(/[/\\]/).pop() ?? "",
-                            objective: objective, budget: budget ?? 10, remaining: (budget ?? 10) - thinkingUsed,
-                            workerModel, plannerModel,
-                            workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
-                            concurrency, permissionMode,
-                            usageCap, allowExtraUsage, extraUsageBudget,
-                            flex, useWorktrees, mergeStrategy,
-                            waveNum: 0, currentTasks: [],
-                            accCost: thinkingCost, accCompleted: thinkingUsed, accFailed: 0,
-                            accIn: thinkingIn, accOut: thinkingOut, accTools: thinkingTools,
-                            branches: [],
-                            phase: "planning",
-                            startedAt: new Date().toISOString(),
-                            cwd,
-                        });
-                    }
-                    catch { }
                     if (thinkingSwarm.rateLimitResetsAt) {
                         const waitMs = thinkingSwarm.rateLimitResetsAt - Date.now();
                         if (waitMs > 0) {

@@ -113,7 +113,9 @@ export declare class RunDisplay {
     resume(): void;
     stop(): void;
     private resumeInterval;
-    /** Write the full frame to stdout, clamped to terminal height. */
+    /** Write the full frame to stdout, clamped to terminal height.
+     *  Layout: header + content (elastic) + footer + input/ask (fixed).
+     *  The content area shrinks so input prompts are never clipped. */
     private flush;
     private render;
     private renderInputPrompt;
@@ -124,16 +126,16 @@ export declare class RunDisplay {
     private handlePaste;
     /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw.
      *
-     * Demux pipeline  -- routes arrow keys and ESC BEFORE hotkey matching:
+     * Demux pipeline  -- routes escape sequences and modifiers BEFORE hotkey matching:
      *   Raw stdin chunk → splitPaste
-     *     ├─ paste → handlePaste (existing, fine)
+     *     ├─ paste → handlePaste
      *     └─ typed → demux
-     *          ├─ ESC + [A/B/C/D  → this.navigate("up"/"down"/"right"/"left")
-     *          ├─ ESC             → cancel input / close detail / dismiss panel
-     *          ├─ Enter           → submit / reveal / select
-     *          ├─ Ctrl+C          → abort
-     *          ├─ Backspace       → delete
-     *          └─ printable       → hotkey matching (b, t, c, e, p, s, q, ?, d, 0-9)
+     *          1. ESC + [A/B/C/D  → navigate; other CSI → swallow
+     *          2. ESC + non-[     → Alt/Option+key → swallow
+     *          3. ESC alone       → cancel input / close detail / dismiss panel
+     *          4. numeric input   → digits, Enter, Backspace
+     *          5. text input      → printable chars, Enter, Backspace, ESC (with lookahead)
+     *          6. hotkey mode     → b, t, c, e, p, s, q, ?, d, 0-9
      */
     private handleTyped;
     private plainTick;

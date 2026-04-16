@@ -141,9 +141,9 @@ function renderUsageBars(out, w, swarm) {
 // ── Unified frame renderer ──
 export function renderUnifiedFrame(params) {
     const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
-    const out = [];
-    // Header
-    renderHeader(out, w, {
+    // ── Header (fixed) ──
+    const header = [];
+    renderHeader(header, w, {
         model: params.model,
         phase: params.phase,
         barPct: params.barPct,
@@ -160,35 +160,37 @@ export function renderUnifiedFrame(params) {
         sessionsBudget: params.sessionsBudget,
         remaining: params.remaining,
     });
-    // Usage bar
-    if (params.usageBarRender) {
-        params.usageBarRender(out, w);
-    }
-    out.push("");
-    // Content sections
+    if (params.usageBarRender)
+        params.usageBarRender(header, w);
+    header.push("");
+    // ── Footer (fixed) ──
+    const footer = [""];
+    if (params.hotkeyRow)
+        footer.push(params.hotkeyRow);
+    if (params.extraFooterRows)
+        for (const row of params.extraFooterRows)
+            footer.push(row);
+    footer.push("");
+    // ── Content (elastic — shrinks to fit) ──
+    const contentBudget = params.maxRows != null
+        ? Math.max(0, params.maxRows - header.length - footer.length)
+        : Infinity;
+    const content = [];
     const sections = params.content.sections();
     for (const sec of sections) {
-        if (sec.title) {
-            section(out, w, sec.title);
-        }
+        if (content.length >= contentBudget)
+            break;
+        if (sec.title)
+            section(content, w, sec.title);
         for (const row of sec.rows) {
-            out.push(row);
+            if (content.length >= contentBudget)
+                break;
+            content.push(row);
         }
     }
-    // Footer
-    out.push("");
-    if (params.hotkeyRow) {
-        out.push(params.hotkeyRow);
-    }
-    if (params.extraFooterRows) {
-        for (const row of params.extraFooterRows) {
-            out.push(row);
-        }
-    }
-    out.push("");
-    return out.join("\n");
+    return [...header, ...content, ...footer].join("\n");
 }
-export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId) {
+export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRows) {
     const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
     const pausedTag = swarm.paused ? chalk.yellow("PAUSED") : "";
     const stallTag = swarm.stallLevel >= 3 ? chalk.red("STALL") : swarm.stallLevel > 0 ? chalk.yellow(`STALL L${swarm.stallLevel}`) : "";
@@ -314,6 +316,7 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId) {
         content,
         hotkeyRow,
         extraFooterRows,
+        maxRows,
     });
 }
 function section(out, w, title) {
@@ -387,7 +390,7 @@ function renderStatusBlock(out, w, status) {
     for (const ln of lines)
         out.push(`  ${chalk.dim(truncate(ln.trim(), w - 4))}`);
 }
-export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter) {
+export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRows) {
     const totalUsed = runInfo.accCompleted + runInfo.accFailed;
     const ctx = data.context;
     const content = {
@@ -480,6 +483,7 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter) {
         usageBarRender,
         content,
         hotkeyRow,
+        maxRows,
     });
 }
 export function renderSummary(swarm) {

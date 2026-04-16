@@ -77,6 +77,16 @@ describe("findIncompleteRuns  -- planning phase visibility", () => {
     assert.equal(found!.state.accCost, 2.02);
   });
 
+  it("surfaces a planning-phase run with spent tokens but no designs or tasks.json", () => {
+    const dir = makeRun("2026-04-16T10-18-18");
+    saveRunState(dir, { ...baseState("planning"), accCost: 0.42, accCompleted: 2 });
+    // No tasks.json, no designs — but the thinking wave consumed tokens before quit
+    const runs = findIncompleteRuns(tmp, cwd);
+    const found = runs.find(r => r.dir === dir);
+    assert.ok(found, "planning run with spent tokens should be visible");
+    assert.equal(found!.state.accCompleted, 2);
+  });
+
   it("still surfaces steering-phase runs (existing behavior)", () => {
     const dir = makeRun("2026-04-11T18-00-00");
     saveRunState(dir, { ...baseState("steering"), waveNum: 2, accCost: 12.34 });

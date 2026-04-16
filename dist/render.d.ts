@@ -34,6 +34,7 @@ export declare function renderUnifiedFrame(params: {
     content: ContentRenderer;
     hotkeyRow?: string;
     extraFooterRows?: string[];
+    maxRows?: number;
 }): string;
 type RLGetter = () => {
     utilization: number;
@@ -41,7 +42,7 @@ type RLGetter = () => {
     windows: Map<string, RateLimitWindow>;
     resetsAt?: number;
 };
-export declare function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number): string;
+export declare function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number, maxRows?: number): string;
 export interface SteeringViewData {
     /** The ephemeral ticker heartbeat  -- elapsed, tool count, cost, current reasoning snippet. */
     statusLine: string;
@@ -50,6 +51,6 @@ export interface SteeringViewData {
     /** Optional context read from disk at setSteering() time. */
     context?: SteeringContext;
 }
-export declare function renderSteeringFrame(runInfo: RunInfo, data: SteeringViewData, showHotkeys: boolean, rlGetter?: RLGetter): string;
+export declare function renderSteeringFrame(runInfo: RunInfo, data: SteeringViewData, showHotkeys: boolean, rlGetter?: RLGetter, maxRows?: number): string;
 export declare function renderSummary(swarm: Swarm): string;
 export {};
