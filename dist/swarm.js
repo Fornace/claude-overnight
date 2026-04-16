@@ -126,6 +126,13 @@ export class Swarm {
             return;
         this.paused = b;
         this.log(-1, b ? "Dispatch paused" : "Dispatch resumed");
+        if (b) {
+            // Instant: interrupt every active SDK session so agents stop mid-turn.
+            // After the interrupt, the for await loop exits, runOnce returns, and
+            // runAgent detects this.paused and re-queues the task with resume info.
+            this.activeQueries.forEach(q => { q.interrupt().catch(() => { }); });
+            this.log(-1, "Pausing agents…");
+        }
     }
     /** Returns the rate-limit window currently holding the swarm back  -- rejected first, then highest utilization. */
     mostConstrainedWindow() {
@@ -434,8 +441,8 @@ export class Swarm {
         const id = this.nextId++;
         const agent = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0 };
         this.agents.push(agent);
-        let agentCwd = task.cwd || this.config.cwd;
-        if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree) {
+        let agentCwd = task.agentCwd || task.cwd || this.config.cwd;
+        if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree && !task.agentCwd) {
             const branch = `swarm/task-${id}`;
             const dir = join(this.worktreeBase, `agent-${id}`);
             let baseRef;
@@ -477,7 +484,8 @@ export class Swarm {
                 this.log(id, `Worktree failed after retry  -- running without isolation`);
             }
         }
-        this.log(id, `Starting: ${task.prompt.slice(0, 60)}`);
+        const isResumed = !!task.resumeSessionId;
+        this.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
         const maxRetries = this.config.maxRetries ?? 2;
         const inactivityMs = this.config.agentTimeoutMs ?? 15 * 60 * 1000;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -491,7 +499,7 @@ export class Swarm {
             }
             try {
                 const perm = this.config.permissionMode ?? "auto";
-                let resumeSessionId;
+                let resumeSessionId = task.resumeSessionId;
                 let resumePrompt = "Continue. Complete the task.";
                 const runOnce = async (isResume) => {
                     const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
