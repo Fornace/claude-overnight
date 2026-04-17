@@ -1,8 +1,14 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync } from "fs";
-import { NudgeError } from "./types.js";
+import { NudgeError, extractToolTarget, sumUsageTokens } from "./types.js";
 import type { Task, PermMode, RateLimitWindow } from "./types.js";
 import { writeTranscriptEvent } from "./transcripts.js";
+
+/** Log a tool invocation with a short target for planner queries. */
+const logTool = (label: string, input: Record<string, unknown> | undefined): string => {
+  const target = extractToolTarget(input);
+  return target ? `${label} \u2192 ${target}` : label;
+};
 
 /**
  * Logging callback used by planner/steering queries.
@@ -19,6 +25,10 @@ export interface PlannerRateLimitInfo {
   windows: Map<string, RateLimitWindow>;
   resetsAt?: number;
   costUsd: number;
+  /** Peak total input tokens (input + cache) in any single planner turn — proxy for context-window occupancy. */
+  contextTokens?: number;
+  /** Model used by the current planner query (for safeContext lookup). */
+  model?: string;
 }
 
 const DEFAULT_TOOLS = ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"];
@@ -64,6 +74,12 @@ function isRateLimitError(err: unknown): boolean {
 
 let _totalPlannerCostUsd = 0;
 export function getTotalPlannerCost(): number { return _totalPlannerCostUsd; }
+
+let _peakPlannerContextTokens = 0;
+let _peakPlannerContextModel: string | undefined;
+export function getPeakPlannerContext(): { tokens: number; model?: string } {
+  return { tokens: _peakPlannerContextTokens, model: _peakPlannerContextModel };
+}
 
 let _plannerRateLimitInfo: PlannerRateLimitInfo = {
   utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0,
@@ -118,21 +134,6 @@ async function throttlePlanner(
   // Exhausted backoffs — proceed anyway, the retry loop will catch a rejection.
 }
 
-/**
- * Pick a short, human-readable target for a tool invocation (Read/Grep/Bash/…).
- * Prefers explicit file paths; falls back to the first few tokens of a shell
- * command. Returns `""` when the input has no useful identifier.
- */
-function extractToolTarget(input: Record<string, unknown> | undefined): string {
-  if (!input) return "";
-  const p = input.path ?? input.file_path ?? input.pattern;
-  if (typeof p === "string" && p) return p;
-  if (typeof input.command === "string" && input.command) {
-    return input.command.split(" ").slice(0, 3).join(" ");
-  }
-  return "";
-}
-
 // ── Query execution ──
 
 const NUDGE_MS = 15 * 60 * 1000;
@@ -184,7 +185,7 @@ async function runPlannerQueryOnce(
   opts: PlannerOpts,
   onLog: PlannerLog,
 ): Promise<string> {
-  _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0 };
+  _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0, contextTokens: 0, model: opts.model };
   let resultText = "";
   let structuredOutput: unknown;
   const startedAt = Date.now();
@@ -362,6 +363,15 @@ async function runPlannerQueryOnce(
       // turn message for tool_use / thinking / text so the ticker still moves
       // every ~6-15s instead of sitting silent for minutes.
       if (msg.type === "assistant") {
+        const u = (msg as any).message?.usage;
+        if (u) {
+          const turnTotal = sumUsageTokens(u);
+          if (turnTotal > (_plannerRateLimitInfo.contextTokens ?? 0)) _plannerRateLimitInfo.contextTokens = turnTotal;
+          if (turnTotal > _peakPlannerContextTokens) {
+            _peakPlannerContextTokens = turnTotal;
+            _peakPlannerContextModel = opts.model;
+          }
+        }
         const content = (msg as any).message?.content;
         if (Array.isArray(content)) {
           for (const part of content) {

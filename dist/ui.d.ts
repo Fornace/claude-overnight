@@ -1,5 +1,6 @@
 import type { Swarm } from "./swarm.js";
-import type { RateLimitWindow, WaveSummary } from "./types.js";
+import type { RLGetter, WaveSummary } from "./types.js";
+import { InteractivePanel } from "./interactive-panel.js";
 /** Short-lived context the steering view renders around its live log. */
 export interface SteeringContext {
     objective?: string;
@@ -43,12 +44,6 @@ export interface AskState {
     streaming: boolean;
     error?: string;
 }
-type RLGetter = () => {
-    utilization: number;
-    isUsingOverage: boolean;
-    windows: Map<string, RateLimitWindow>;
-    resetsAt?: number;
-};
 export declare class RunDisplay {
     readonly runInfo: RunInfo;
     private liveConfig?;
@@ -72,12 +67,11 @@ export declare class RunDisplay {
     /** ID of the agent whose detail panel is open; undefined = no detail shown. */
     private selectedAgentId?;
     private navState;
+    /** Interactive panel for debrief, Q&A, and other user-facing content. */
+    readonly panel: InteractivePanel;
     private onSteer?;
     private onAsk?;
-    private debriefText?;
-    /** Get the latest debrief line for footer rendering. */
-    getDebrief(): string | undefined;
-    /** Set or clear the debrief text shown in the footer. */
+    /** Set or clear the debrief text shown in the interactive panel. */
     setDebrief(text: string | undefined): void;
     constructor(runInfo: RunInfo, liveConfig?: LiveConfig, callbacks?: {
         onSteer?: (text: string) => void;
@@ -124,7 +118,6 @@ export declare class RunDisplay {
     private flush;
     private render;
     private renderInputPrompt;
-    private renderAskPanel;
     private hasHotkeys;
     private setupHotkeys;
     /** Handle a pasted block. Returns true if the frame needs a redraw. */
@@ -145,4 +138,3 @@ export declare class RunDisplay {
     private handleTyped;
     private plainTick;
 }
-export {};

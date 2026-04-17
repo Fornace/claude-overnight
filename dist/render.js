@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { RATE_LIMIT_WINDOW_SHORT } from "./types.js";
+import { getModelCapability, modelDisplayName } from "./models.js";
 const SPINNER = ["|", "/", "-", "\\"];
 // ── Shared helpers ──
 export function truncate(s, max) {
@@ -62,10 +63,53 @@ function renderHeader(out, w, p) {
         (costStr ? `  ${costStr}` : "") + sessionStr);
 }
 // ── Usage bars ──
-function renderUsageBars(out, w, swarm) {
+/** Context-fill percentage and color function for a token count vs safe limit. */
+export function contextFillInfo(tokens, safe) {
+    const pct = safe > 0 ? Math.round((tokens / safe) * 100) : 0;
+    const color = pct > 80 ? chalk.red : pct > 50 ? chalk.yellow : chalk.green;
+    return { pct, color };
+}
+function drawContextBar(out, w, tokens, safe, label) {
+    const barW = Math.min(30, w - 40);
+    const { pct, color } = contextFillInfo(tokens, safe);
+    const filled = Math.round((pct / 100) * barW);
+    const bar = color("\u2588".repeat(filled)) + chalk.gray("\u2591".repeat(barW - filled));
+    const prefix = chalk.dim("Ctx   ");
+    out.push(`  ${prefix}${bar}  ${label}`);
+}
+/** Pick the running agent with the highest context-fill ratio; returns {tokens, safe, agentId} or null. */
+function peakAgentContext(swarm) {
+    let best = null;
+    for (const a of swarm.agents) {
+        if (a.status !== "running")
+            continue;
+        const tokens = a.contextTokens ?? 0;
+        if (tokens <= 0)
+            continue;
+        const model = a.task.model || swarm.model || "unknown";
+        const safe = getModelCapability(model).safeContext;
+        const ratio = safe > 0 ? tokens / safe : 0;
+        if (!best || ratio > best.ratio)
+            best = { tokens, safe, agentId: a.id, model, ratio };
+    }
+    return best;
+}
+function renderUsageBars(out, w, swarm, selectedAgentId) {
     const windows = Array.from(swarm.rateLimitWindows.values());
     const rlPct = swarm.rateLimitUtilization;
-    if (rlPct <= 0 && !swarm.rateLimitResetsAt && !swarm.cappedOut && swarm.rateLimitPaused <= 0 && windows.length === 0)
+    const hasRL = !(rlPct <= 0 && !swarm.rateLimitResetsAt && !swarm.cappedOut && swarm.rateLimitPaused <= 0 && windows.length === 0);
+    // Context bar — prefer the selected agent when detail view is open, else the peak running agent.
+    let ctx = null;
+    if (selectedAgentId != null) {
+        const a = swarm.agents.find(x => x.id === selectedAgentId);
+        if (a && (a.contextTokens ?? 0) > 0) {
+            const model = a.task.model || swarm.model || "unknown";
+            ctx = { tokens: a.contextTokens ?? 0, safe: getModelCapability(model).safeContext, agentId: a.id, model };
+        }
+    }
+    if (!ctx)
+        ctx = peakAgentContext(swarm);
+    if (!hasRL && !ctx)
         return;
     const barW = Math.min(30, w - 40);
     const capFrac = swarm.usageCap;
@@ -107,10 +151,13 @@ function renderUsageBars(out, w, swarm) {
         }
         if (swarm.isUsingOverage && !swarm.cappedOut)
             label += chalk.red(" [OVERAGE]");
-        const prefix = windowLabel ? chalk.dim(windowLabel.padEnd(6)) : chalk.dim("Usage ");
+        const prefix = windowLabel ? chalk.dim(windowLabel.padEnd(6)) : chalk.dim("RL    ");
         out.push(`  ${prefix}${barStr}  ${label}`);
     };
-    if (windows.length > 1) {
+    if (!hasRL) {
+        // Skip the Anthropic RL bar entirely when there's no signal — just show the context bar below.
+    }
+    else if (windows.length > 1) {
         const cycleIdx = Math.floor(Date.now() / 3000) % windows.length;
         const win = windows[cycleIdx];
         const shortName = RATE_LIMIT_WINDOW_SHORT[win.type] ?? win.type.replace(/_/g, " ");
@@ -136,6 +183,12 @@ function renderUsageBars(out, w, swarm) {
             ? chalk.red(`$${swarm.overageCostUsd.toFixed(2)}/$${swarm.extraUsageBudget} \u2014 budget hit`)
             : `$${swarm.overageCostUsd.toFixed(2)}/$${swarm.extraUsageBudget}`;
         out.push(`  ${chalk.dim("Extra ")}${barStr}  ${label}`);
+    }
+    // Context fullness bar (per peak-running-agent or selected agent).
+    if (ctx) {
+        const who = selectedAgentId != null && ctx.agentId === selectedAgentId ? `agent ${ctx.agentId}` : `peak a${ctx.agentId}`;
+        const label = `${fmtTokens(ctx.tokens)}/${fmtTokens(ctx.safe)} safe  ${chalk.dim(`${who} · ${modelDisplayName(ctx.model)}`)}`;
+        drawContextBar(out, w, ctx.tokens, ctx.safe, label);
     }
 }
 // ── Unified frame renderer ──
@@ -188,9 +241,14 @@ export function renderUnifiedFrame(params) {
             content.push(row);
         }
     }
-    return [...header, ...content, ...footer].join("\n");
+    const full = [...header, ...content, ...footer];
+    if (params.maxRows != null && full.length > params.maxRows) {
+        return full.slice(0, Math.max(0, params.maxRows)).join("\n");
+    }
+    return full.join("\n");
 }
-export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRows, debrief) {
+// ── Frame renderers ──
+export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRows, panel) {
     const allDone = swarm.agents.length > 0 && swarm.agents.every(a => a.status !== "running");
     const doneTag = allDone && !swarm.aborted ? chalk.green("COMPLETE") : "";
     const stoppingTag = swarm.aborted ? chalk.yellow("STOPPING") : "";
@@ -211,6 +269,14 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
     const content = {
         sections() {
             const secs = [];
+            // Expanded panel (debrief, ask, custom) — rendered as first section
+            if (panel?.visible && panel.state.expanded) {
+                const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
+                const panelRows = maxRows != null ? Math.max(4, maxRows - 6) : 12;
+                const lines = panel.renderExpanded(ww, panelRows);
+                if (lines.length > 0)
+                    secs.push({ title: "", rows: lines });
+            }
             // Agent table (undecorated  -- raw header + rows)
             if (show.length > 0) {
                 const rows = [
@@ -245,6 +311,13 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
                     meta.push(chalk.yellow(`$${detailAgent.costUsd.toFixed(3)}`));
                 if (detailAgent.toolCalls > 0)
                     meta.push(chalk.dim(`${detailAgent.toolCalls} tools`));
+                if ((detailAgent.contextTokens ?? 0) > 0) {
+                    const mdl = detailAgent.task.model || swarm.model || "unknown";
+                    const safe = getModelCapability(mdl).safeContext;
+                    const tok = detailAgent.contextTokens ?? 0;
+                    const { pct, color } = contextFillInfo(tok, safe);
+                    meta.push(color(`ctx ${fmtTokens(tok)}/${fmtTokens(safe)} (${pct}%)`));
+                }
                 if (meta.length > 0)
                     rows.push(`  ${meta.join(chalk.dim("  \u00b7 "))}`);
                 secs.push({ title: `Agent ${detailAgent.id} detail \u00b7 [d] next \u00b7 [Esc] close`, rows });
@@ -290,8 +363,12 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
     // Build footer
     let hotkeyRow;
     const extraFooterRows = [];
-    if (debrief)
-        extraFooterRows.push(chalk.dim(`  ${debrief}`));
+    // Collapsed panel bar shown in footer area
+    if (panel?.visible && !panel.state.expanded) {
+        const bar = panel.renderCollapsed(Math.max((process.stdout.columns ?? 80) || 80, 60));
+        if (bar)
+            extraFooterRows.push(bar);
+    }
     if (showHotkeys) {
         const pending = runInfo?.pendingSteer ?? 0;
         const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
@@ -300,7 +377,8 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
         const pauseLabel = swarm.paused ? "[p] resume" : "[p] pause";
         const detailChip = swarm.active > 0 ? chalk.dim("  [d] detail") : "";
         const selectChip = swarm.active > 0 && running.length <= 10 ? chalk.dim("  [0-9] select") : "";
-        hotkeyRow = chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip;
+        const panelChip = panel?.visible ? chalk.green(`  [Ctrl-O] ${panel.state.expanded ? "collapse" : "expand"}`) : "";
+        hotkeyRow = chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip + panelChip;
         if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
             extraFooterRows.push(chalk.yellow(`  all workers rate-limited  -- [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
         }
@@ -321,7 +399,7 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
         sessionsUsed: (runInfo ? runInfo.accCompleted + runInfo.accFailed : 0) + waveUsed,
         sessionsBudget: runInfo?.sessionsBudget ?? swarm.total,
         remaining: Math.max(0, (runInfo?.remaining ?? swarm.total) - waveUsed),
-        usageBarRender: (out, w) => renderUsageBars(out, w, swarm),
+        usageBarRender: (out, w) => renderUsageBars(out, w, swarm, selectedAgentId),
         content,
         hotkeyRow,
         extraFooterRows,
@@ -352,16 +430,25 @@ function renderSteeringUsageBar(out, w, rl) {
             const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
             lbl = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
         }
-        const prefix = label ? chalk.dim(label.padEnd(6)) : chalk.dim("Usage ");
+        const prefix = label ? chalk.dim(label.padEnd(6)) : chalk.dim("RL    ");
         out.push(`  ${prefix}${barStr}  ${lbl}`);
     };
-    if (rl.windows.size > 1) {
-        const wins = Array.from(rl.windows.values());
-        const idx = Math.floor(Date.now() / 3000) % wins.length;
-        draw(wins[idx].utilization, wins[idx].type.replace(/_/g, " ").slice(0, 5));
+    const hasRL = rl.utilization > 0 || rl.windows.size > 0 || (rl.resetsAt && rl.resetsAt > Date.now());
+    if (hasRL) {
+        if (rl.windows.size > 1) {
+            const wins = Array.from(rl.windows.values());
+            const idx = Math.floor(Date.now() / 3000) % wins.length;
+            draw(wins[idx].utilization, wins[idx].type.replace(/_/g, " ").slice(0, 5));
+        }
+        else {
+            draw(rl.utilization);
+        }
     }
-    else {
-        draw(rl.utilization);
+    if ((rl.contextTokens ?? 0) > 0 && rl.model) {
+        const safe = getModelCapability(rl.model).safeContext;
+        const tok = rl.contextTokens ?? 0;
+        const label = `${fmtTokens(tok)}/${fmtTokens(safe)} safe  ${chalk.dim(`planner · ${modelDisplayName(rl.model)}`)}`;
+        drawContextBar(out, w, tok, safe, label);
     }
 }
 function renderLastWave(out, w, lw) {
@@ -399,13 +486,20 @@ function renderStatusBlock(out, w, status) {
     for (const ln of lines)
         out.push(`  ${chalk.dim(truncate(ln.trim(), w - 4))}`);
 }
-export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRows, debrief) {
+export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRows, panel) {
     const totalUsed = runInfo.accCompleted + runInfo.accFailed;
     const ctx = data.context;
     const content = {
         sections() {
             const secs = [];
             const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
+            // Expanded panel (debrief, ask, custom) — rendered as first section
+            if (panel?.visible && panel.state.expanded) {
+                const panelRows = maxRows != null ? Math.max(4, maxRows - 6) : 12;
+                const lines = panel.renderExpanded(ww, panelRows);
+                if (lines.length > 0)
+                    secs.push({ title: "", rows: lines });
+            }
             // Objective (undecorated  -- raw line)
             if (ctx?.objective) {
                 const obj = ctx.objective.replace(/\s+/g, " ").trim();
@@ -462,7 +556,7 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
     const usageBarRender = rlGetter
         ? (out, w) => {
             const rl = rlGetter();
-            if (rl && (rl.utilization > 0 || rl.windows.size > 0)) {
+            if (rl && (rl.utilization > 0 || rl.windows.size > 0 || (rl.contextTokens ?? 0) > 0)) {
                 renderSteeringUsageBar(out, w, rl);
             }
         }
@@ -470,12 +564,17 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
     // Footer
     let hotkeyRow;
     const extraFooterRows = [];
-    if (debrief)
-        extraFooterRows.push(chalk.dim(`  ${debrief}`));
+    // Collapsed panel bar shown in footer area
+    if (panel?.visible && !panel.state.expanded) {
+        const bar = panel.renderCollapsed(Math.max((process.stdout.columns ?? 80) || 80, 60));
+        if (bar)
+            extraFooterRows.push(bar);
+    }
     if (showHotkeys) {
         const pending = runInfo?.pendingSteer ?? 0;
         const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
-        hotkeyRow = chalk.dim("  [b] budget  [s] steer  [q] stop") + chip;
+        const panelChip = panel?.visible ? chalk.green(`  [Ctrl-O] ${panel.state.expanded ? "collapse" : "expand"}`) : "";
+        hotkeyRow = chalk.dim("  [b] budget  [s] steer  [q] stop") + chip + panelChip;
     }
     return renderUnifiedFrame({
         model: runInfo.model,
@@ -502,11 +601,12 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
 export function renderSummary(swarm) {
     const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
     const out = [];
-    const fixedW = 3 + 6 + 8 + 5 + 5 + 8 + 12 + 2;
+    const ctxW = 5;
+    const fixedW = 3 + 6 + 8 + 5 + 5 + 8 + ctxW + 14;
     const taskW = Math.max(10, w - fixedW);
     out.push("");
     out.push(chalk.gray("  " + "#".padStart(3) + "  " + "Status".padEnd(6) + "  " + "Task".padEnd(taskW) +
-        "  " + "Duration".padStart(8) + "  " + "Files".padStart(5) + "  " + "Tools".padStart(5) + "  " + "Cost".padStart(8)));
+        "  " + "Duration".padStart(8) + "  " + "Files".padStart(5) + "  " + "Tools".padStart(5) + "  " + "Ctx%".padStart(ctxW) + "  " + "Cost".padStart(8)));
     out.push(chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, fixedW + taskW))));
     const groups = [
         swarm.agents.filter(a => a.status === "running"),
@@ -516,6 +616,7 @@ export function renderSummary(swarm) {
     ].filter(g => g.length > 0);
     const thinSep = chalk.gray("  " + "\u254C".repeat(Math.min(w - 4, fixedW + taskW)));
     let totalDurMs = 0, totalFiles = 0, totalTools = 0, totalCost = 0;
+    let peakCtxPct = 0;
     for (let gi = 0; gi < groups.length; gi++) {
         if (gi > 0)
             out.push(thinSep);
@@ -532,17 +633,25 @@ export function renderSummary(swarm) {
             const files = String(a.filesChanged ?? 0).padStart(5);
             const tools = String(a.toolCalls).padStart(5);
             const cost = a.costUsd != null ? `$${a.costUsd.toFixed(3)}`.padStart(8) : "".padStart(8);
+            const mdl = a.task.model || swarm.model || "unknown";
+            const safe = getModelCapability(mdl).safeContext;
+            const ctxTok = a.contextTokens ?? 0;
+            const { pct: ctxPct, color: ctxColor } = ctxTok > 0 ? contextFillInfo(ctxTok, safe) : { pct: 0, color: chalk.gray };
+            if (ctxPct > peakCtxPct)
+                peakCtxPct = ctxPct;
+            const ctxCell = ctxTok > 0 ? `${ctxPct}%`.padStart(ctxW) : "".padStart(ctxW);
             totalDurMs += durMs;
             totalFiles += a.filesChanged ?? 0;
             totalTools += a.toolCalls;
             totalCost += a.costUsd ?? 0;
             const color = ok ? chalk.white : a.status === "running" ? chalk.blue : a.status === "paused" ? chalk.yellow : chalk.red;
-            out.push(color(`  ${id}  ${status}  ${task}  ${dur}  ${files}  ${tools}  ${cost}`));
+            out.push(color(`  ${id}  ${status}  ${task}  ${dur}  ${files}  ${tools}  `) + (ctxTok > 0 ? ctxColor(ctxCell) : chalk.gray(ctxCell)) + color(`  ${cost}`));
         }
     }
     out.push(chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, fixedW + taskW))));
     const label = `${swarm.agents.length} tasks`.padEnd(taskW);
-    out.push(chalk.bold(`  ${"".padStart(3)}  ${"Total ".padEnd(6)}  ${label}  ${fmtDur(totalDurMs).padStart(8)}  ${String(totalFiles).padStart(5)}  ${String(totalTools).padStart(5)}  ${`$${totalCost.toFixed(3)}`.padStart(8)}`));
+    const peakCell = peakCtxPct > 0 ? `${peakCtxPct}%`.padStart(ctxW) : "".padStart(ctxW);
+    out.push(chalk.bold(`  ${"".padStart(3)}  ${"Total ".padEnd(6)}  ${label}  ${fmtDur(totalDurMs).padStart(8)}  ${String(totalFiles).padStart(5)}  ${String(totalTools).padStart(5)}  ${peakCell}  ${`$${totalCost.toFixed(3)}`.padStart(8)}`));
     out.push("");
     return out.join("\n");
 }

@@ -18,6 +18,14 @@ export function readMdDir(dir) {
         return "";
     }
 }
+function hasMdFiles(dir) {
+    try {
+        return readdirSync(dir).some(f => f.endsWith(".md"));
+    }
+    catch {
+        return false;
+    }
+}
 export function readRunMemory(runDir, previousRuns) {
     let goal = "", status = "";
     try {
@@ -194,6 +202,16 @@ export function findIncompleteRuns(rootDir, filterCwd) {
             const state = loadRunState(runDir);
             if (!state || state.phase === "done" || state.cwd !== filterCwd)
                 continue;
+            // Filter empty planning shells: no tasks.json, no designs/, no spent
+            // cost or completed sessions — nothing to resume.
+            if (state.phase === "planning"
+                && !existsSync(join(runDir, "tasks.json"))
+                && !hasMdFiles(join(runDir, "designs"))
+                && (state.accCost ?? 0) === 0
+                && (state.accCompleted ?? 0) === 0
+                && (state.accFailed ?? 0) === 0) {
+                continue;
+            }
             results.push({ dir: runDir, state });
         }
         return results;

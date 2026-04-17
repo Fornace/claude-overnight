@@ -3,9 +3,10 @@ import { join } from "path";
 import { tmpdir } from "os";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { NudgeError, RATE_LIMIT_WINDOW_SHORT } from "./types.js";
+import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import { ensureCursorProxyRunning } from "./providers.js";
+import { getModelCapability } from "./models.js";
 const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
 
 Run \`git diff\` to see what you changed, then fix any issues:
@@ -76,6 +77,7 @@ export class Swarm {
     // with empty `input` and streams the real payload via `input_json_delta`, so we
     // need to wait for content_block_stop before we can log the file/path target.
     pendingTools = new WeakMap();
+    ctxWarned = new WeakSet();
     logFile;
     model;
     usageCap;
@@ -449,7 +451,7 @@ export class Swarm {
             return;
         }
         const id = this.nextId++;
-        const agent = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0 };
+        const agent = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0, contextTokens: 0 };
         this.agents.push(agent);
         let agentCwd = task.agentCwd || task.cwd || this.config.cwd;
         if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree && !task.agentCwd) {
@@ -706,12 +708,7 @@ export class Swarm {
     // ── Message handler ──
     /** Log a tool invocation with a short target extracted from its input. */
     logToolUse(agent, name, input) {
-        const p = input.path ?? input.file_path ?? input.pattern;
-        const target = typeof p === "string" && p
-            ? p
-            : typeof input.command === "string" && input.command
-                ? input.command.split(" ").slice(0, 3).join(" ")
-                : "";
+        const target = extractToolTarget(input);
         this.log(agent.id, target ? `${name} \u2192 ${target}` : name);
     }
     handleMsg(agent, msg) {
@@ -725,6 +722,22 @@ export class Swarm {
         switch (msg.type) {
             case "assistant": {
                 const m = msg;
+                const u = m.message?.usage;
+                if (u) {
+                    const turnTotal = sumUsageTokens(u);
+                    if (turnTotal > (agent.contextTokens ?? 0)) {
+                        agent.contextTokens = turnTotal;
+                        if (!this.ctxWarned.has(agent)) {
+                            const mdl = agent.task.model || this.config.model || "unknown";
+                            const safe = getModelCapability(mdl).safeContext;
+                            if (safe > 0 && turnTotal > safe * 0.8) {
+                                this.ctxWarned.add(agent);
+                                const pct = Math.round((turnTotal / safe) * 100);
+                                this.log(agent.id, `\u26A0 context ${pct}% of safe window — task may degrade`);
+                            }
+                        }
+                    }
+                }
                 if (!m.message?.content)
                     break;
                 for (const block of m.message.content) {

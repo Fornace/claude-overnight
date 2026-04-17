@@ -7,11 +7,12 @@ import type {
   SDKMessage, SDKResultMessage, SDKResultError, SDKAssistantMessage,
   SDKPartialAssistantMessage, SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
-import { NudgeError, RATE_LIMIT_WINDOW_SHORT } from "./types.js";
+import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "./types.js";
 import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult } from "./merge.js";
 import { ensureCursorProxyRunning } from "./providers.js";
+import { getModelCapability } from "./models.js";
 
 const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
 
@@ -109,6 +110,7 @@ export class Swarm {
   // with empty `input` and streams the real payload via `input_json_delta`, so we
   // need to wait for content_block_stop before we can log the file/path target.
   private pendingTools = new WeakMap<AgentState, { name: string; input: Record<string, unknown>; buf: string; logged: boolean }>();
+  private ctxWarned = new WeakSet<AgentState>();
   logFile?: string;
   readonly model: string | undefined;
   usageCap: number | undefined;
@@ -469,7 +471,7 @@ export class Swarm {
       return;
     }
     const id = this.nextId++;
-    const agent: AgentState = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0 };
+    const agent: AgentState = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0, contextTokens: 0 };
     this.agents.push(agent);
 
     let agentCwd = task.agentCwd || task.cwd || this.config.cwd;
@@ -684,12 +686,7 @@ export class Swarm {
 
   /** Log a tool invocation with a short target extracted from its input. */
   private logToolUse(agent: AgentState, name: string, input: Record<string, unknown>): void {
-    const p = input.path ?? input.file_path ?? input.pattern;
-    const target = typeof p === "string" && p
-      ? p
-      : typeof input.command === "string" && input.command
-        ? input.command.split(" ").slice(0, 3).join(" ")
-        : "";
+    const target = extractToolTarget(input);
     this.log(agent.id, target ? `${name} \u2192 ${target}` : name);
   }
 
@@ -703,6 +700,22 @@ export class Swarm {
     switch (msg.type) {
       case "assistant": {
         const m = msg as SDKAssistantMessage;
+        const u = m.message?.usage as { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+        if (u) {
+          const turnTotal = sumUsageTokens(u);
+          if (turnTotal > (agent.contextTokens ?? 0)) {
+            agent.contextTokens = turnTotal;
+            if (!this.ctxWarned.has(agent)) {
+              const mdl = agent.task.model || this.config.model || "unknown";
+              const safe = getModelCapability(mdl).safeContext;
+              if (safe > 0 && turnTotal > safe * 0.8) {
+                this.ctxWarned.add(agent);
+                const pct = Math.round((turnTotal / safe) * 100);
+                this.log(agent.id, `\u26A0 context ${pct}% of safe window — task may degrade`);
+              }
+            }
+          }
+        }
         if (!m.message?.content) break;
         for (const block of m.message.content) {
           if (block.type === "text" && block.text) {

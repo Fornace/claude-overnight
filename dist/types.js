@@ -11,3 +11,19 @@ export class NudgeError extends Error {
         this.name = "NudgeError";
     }
 }
+/** Pick a short, human-readable target for a tool invocation (Read/Grep/Bash/...). */
+export function extractToolTarget(input) {
+    if (!input)
+        return "";
+    const p = input.path ?? input.file_path ?? input.pattern;
+    if (typeof p === "string" && p)
+        return p;
+    if (typeof input.command === "string" && input.command) {
+        return input.command.split(" ").slice(0, 3).join(" ");
+    }
+    return "";
+}
+/** Sum input + cache read + cache creation tokens from a usage object. */
+export function sumUsageTokens(u) {
+    return (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+}

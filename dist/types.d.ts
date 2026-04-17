@@ -80,6 +80,8 @@ export interface AgentState {
     filesChanged?: number;
     /** Unix timestamp (ms) when this agent entered a rate-limit wait inside its retry loop. Cleared when work resumes. */
     blockedAt?: number;
+    /** Peak total input tokens (input + cache_read + cache_creation) seen in any single turn — a proxy for current context-window occupancy. */
+    contextTokens?: number;
 }
 /** A timestamped log line from an agent's execution. */
 export interface LogEntry {
@@ -151,7 +153,7 @@ export interface SteerResult {
     statusUpdate?: string;
     estimatedSessionsRemaining?: number;
 }
-/** Accumulated run memory  -- designs, verifications, etc.  -- fed to the steerer. */
+/** RunMemory accumulates run designs, reflections, verifications, milestones, status, goal, and previous runs. */
 export interface RunMemory {
     designs: string;
     reflections: string;
@@ -235,3 +237,20 @@ export interface RunState extends RunConfigBase {
     /** Working directory for the run. */
     cwd: string;
 }
+/** Function that returns a rate-limit snapshot with optional context token info. */
+export type RLGetter = () => {
+    utilization: number;
+    isUsingOverage: boolean;
+    windows: Map<string, RateLimitWindow>;
+    resetsAt?: number;
+    contextTokens?: number;
+    model?: string;
+};
+/** Pick a short, human-readable target for a tool invocation (Read/Grep/Bash/...). */
+export declare function extractToolTarget(input: Record<string, unknown> | undefined): string;
+/** Sum input + cache read + cache creation tokens from a usage object. */
+export declare function sumUsageTokens(u: {
+    input_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+}): number;

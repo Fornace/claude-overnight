@@ -4,7 +4,9 @@ import { execSync } from "child_process";
 import chalk from "chalk";
 import { Swarm } from "./swarm.js";
 import { steerWave } from "./steering.js";
-import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver } from "./planner-query.js";
+import { getTotalPlannerCost, getPlannerRateLimitInfo, getPeakPlannerContext, runPlannerQuery, setPlannerEnvResolver } from "./planner-query.js";
+import { contextFillInfo } from "./render.js";
+import { getModelCapability } from "./models.js";
 import { buildEnvResolver, isCursorProxyProvider } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary } from "./render.js";
@@ -47,6 +49,7 @@ export async function executeRun(cfg) {
     const waveHistory = [];
     let accCost, accCompleted, accFailed, accTools;
     let accIn = 0, accOut = 0;
+    let peakWorkerCtxPct = 0, peakWorkerCtxTokens = 0;
     let lastCapped = false, lastAborted = false, objectiveComplete = false, lastHealed = false;
     let lastEstimate;
     const branches = [];
@@ -429,6 +432,18 @@ export async function executeRun(cfg) {
             accCompleted += swarm.completed;
             accFailed += swarm.failed;
             accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+            for (const a of swarm.agents) {
+                const tok = a.contextTokens ?? 0;
+                if (tok <= 0)
+                    continue;
+                const mdl = a.task.model || swarm.model || "unknown";
+                const safe = getModelCapability(mdl).safeContext;
+                const { pct } = contextFillInfo(tok, safe);
+                if (pct > peakWorkerCtxPct) {
+                    peakWorkerCtxPct = pct;
+                    peakWorkerCtxTokens = tok;
+                }
+            }
             remaining = Math.max(0, remaining - swarm.completed - swarm.failed);
             const totalConsumed = accCompleted + accFailed + cfg.thinkingUsed;
             const expectedFloor = Math.max(0, cfg.budget - totalConsumed);
@@ -619,11 +634,21 @@ export async function executeRun(cfg) {
         console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- STOPPED`));
     console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
     console.log("");
+    const peakPlanner = getPeakPlannerContext();
+    const plannerSafe = peakPlanner.model ? getModelCapability(peakPlanner.model).safeContext : 0;
+    const plannerPct = plannerSafe > 0 && peakPlanner.tokens > 0 ? Math.round((peakPlanner.tokens / plannerSafe) * 100) : 0;
+    const colorByPct = (pct) => pct > 80 ? chalk.red : pct > 50 ? chalk.yellow : chalk.green;
+    const fmtCtx = (tok, pct) => {
+        if (tok <= 0)
+            return chalk.dim("—");
+        return colorByPct(pct)(`${fmtTokens(tok)} (${pct}%)`);
+    };
     const statRows = [
         [chalk.bold("Waves"), String(waves), chalk.bold("Sessions"), `${accCompleted} done${accFailed > 0 ? ` / ${accFailed} failed` : ""}${remaining > 0 ? ` (${remaining} remaining)` : ""}`],
         [chalk.bold("Cost"), chalk.green(`$${accCost.toFixed(2)}`), chalk.bold("Elapsed"), elapsedStr],
         [chalk.bold("Merged"), `${totalMerged} branches`, chalk.bold("Conflicts"), totalConflicts > 0 ? chalk.red(String(totalConflicts)) : chalk.green("0")],
         [chalk.bold("Tokens"), `${fmtTokens(accIn)} in / ${fmtTokens(accOut)} out`, chalk.bold("Tool calls"), String(accTools)],
+        [chalk.bold("Peak ctx"), `worker ${fmtCtx(peakWorkerCtxTokens, peakWorkerCtxPct)}`, chalk.bold(""), `planner ${fmtCtx(peakPlanner.tokens, plannerPct)}`],
     ];
     for (const [k1, v1, k2, v2] of statRows)
         console.log(`  ${k1}  ${v1.padEnd(20)}  ${k2}  ${v2}`);

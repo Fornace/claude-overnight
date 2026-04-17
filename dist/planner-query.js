@@ -1,7 +1,12 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync } from "fs";
-import { NudgeError } from "./types.js";
+import { NudgeError, extractToolTarget, sumUsageTokens } from "./types.js";
 import { writeTranscriptEvent } from "./transcripts.js";
+/** Log a tool invocation with a short target for planner queries. */
+const logTool = (label, input) => {
+    const target = extractToolTarget(input);
+    return target ? `${label} \u2192 ${target}` : label;
+};
 const DEFAULT_TOOLS = ["Read", "Glob", "Grep", "Write", "Bash", "WebFetch", "WebSearch", "TodoWrite", "Agent"];
 const DEFAULT_MAX_TURNS = 20;
 // ── Shared env resolver (set once at run start, used by every planner query) ──
@@ -21,6 +26,11 @@ function isRateLimitError(err) {
 }
 let _totalPlannerCostUsd = 0;
 export function getTotalPlannerCost() { return _totalPlannerCostUsd; }
+let _peakPlannerContextTokens = 0;
+let _peakPlannerContextModel;
+export function getPeakPlannerContext() {
+    return { tokens: _peakPlannerContextTokens, model: _peakPlannerContextModel };
+}
 let _plannerRateLimitInfo = {
     utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0,
 };
@@ -66,22 +76,6 @@ async function throttlePlanner(onLog, aborted) {
     }
     // Exhausted backoffs — proceed anyway, the retry loop will catch a rejection.
 }
-/**
- * Pick a short, human-readable target for a tool invocation (Read/Grep/Bash/…).
- * Prefers explicit file paths; falls back to the first few tokens of a shell
- * command. Returns `""` when the input has no useful identifier.
- */
-function extractToolTarget(input) {
-    if (!input)
-        return "";
-    const p = input.path ?? input.file_path ?? input.pattern;
-    if (typeof p === "string" && p)
-        return p;
-    if (typeof input.command === "string" && input.command) {
-        return input.command.split(" ").slice(0, 3).join(" ");
-    }
-    return "";
-}
 // ── Query execution ──
 const NUDGE_MS = 15 * 60 * 1000;
 const HARD_TIMEOUT_MS = 30 * 60 * 1000;
@@ -123,7 +117,7 @@ export async function runPlannerQuery(prompt, opts, onLog) {
     throw new Error("Planner query failed after retries");
 }
 async function runPlannerQueryOnce(prompt, opts, onLog) {
-    _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0 };
+    _plannerRateLimitInfo = { utilization: 0, status: "", isUsingOverage: false, windows: new Map(), costUsd: 0, contextTokens: 0, model: opts.model };
     let resultText = "";
     let structuredOutput;
     const startedAt = Date.now();
@@ -310,6 +304,16 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
             // turn message for tool_use / thinking / text so the ticker still moves
             // every ~6-15s instead of sitting silent for minutes.
             if (msg.type === "assistant") {
+                const u = msg.message?.usage;
+                if (u) {
+                    const turnTotal = sumUsageTokens(u);
+                    if (turnTotal > (_plannerRateLimitInfo.contextTokens ?? 0))
+                        _plannerRateLimitInfo.contextTokens = turnTotal;
+                    if (turnTotal > _peakPlannerContextTokens) {
+                        _peakPlannerContextTokens = turnTotal;
+                        _peakPlannerContextModel = opts.model;
+                    }
+                }
                 const content = msg.message?.content;
                 if (Array.isArray(content)) {
                     for (const part of content) {

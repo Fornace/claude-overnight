@@ -68,6 +68,7 @@ export declare class Swarm {
     private activeQueries;
     private cleanedUp;
     private pendingTools;
+    private ctxWarned;
     logFile?: string;
     readonly model: string | undefined;
     usageCap: number | undefined;

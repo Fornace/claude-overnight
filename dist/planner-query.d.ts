@@ -13,6 +13,10 @@ export interface PlannerRateLimitInfo {
     windows: Map<string, RateLimitWindow>;
     resetsAt?: number;
     costUsd: number;
+    /** Peak total input tokens (input + cache) in any single planner turn — proxy for context-window occupancy. */
+    contextTokens?: number;
+    /** Model used by the current planner query (for safeContext lookup). */
+    model?: string;
 }
 export interface PlannerOpts {
     cwd: string;
@@ -36,6 +40,10 @@ export interface PlannerOpts {
 }
 export declare function setPlannerEnvResolver(fn: ((model?: string) => Record<string, string> | undefined) | undefined): void;
 export declare function getTotalPlannerCost(): number;
+export declare function getPeakPlannerContext(): {
+    tokens: number;
+    model?: string;
+};
 export declare function getPlannerRateLimitInfo(): PlannerRateLimitInfo;
 export declare function runPlannerQuery(prompt: string, opts: PlannerOpts, onLog: PlannerLog): Promise<string>;
 export declare function postProcess(raw: Task[], budget: number | undefined, onLog: (text: string) => void): Task[];

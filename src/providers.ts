@@ -18,6 +18,28 @@ import {
 } from "./cursor-models.js";
 import { VERSION } from "./_version.js";
 
+/** Cached system Node.js and agent script paths — resolved once, reused across envFor calls. */
+let _cachedAgentNode: string | null = null;
+let _cachedAgentScript: string | null = null;
+
+/** Resolve system Node.js and agent index.js paths. Returns [nodePath, scriptPath] or [null, null]. */
+function resolveAgentPaths(timeoutMs = 2_000): [string | null, string | null] {
+  let nodePath: string | null = null;
+  let agentJs: string | null = null;
+  try {
+    nodePath = execSync("which node 2>/dev/null", { timeout: timeoutMs, encoding: "utf-8", shell: "bash" }).trim() || null;
+    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
+      timeout: timeoutMs, encoding: "utf-8", shell: "bash",
+    }).trim();
+    if (agentPath) {
+      const agentDir = dirname(realpathSync(agentPath));
+      const indexPath = `${agentDir}/index.js`;
+      if (existsSync(indexPath)) agentJs = indexPath;
+    }
+  } catch {}
+  return [nodePath, agentJs];
+}
+
 /** Run the installed package CLI with `node` (avoids npx/npm invoking extra tooling on macOS). */
 function resolveCursorComposerCli(): string | null {
   try {
@@ -156,6 +178,23 @@ export function envFor(p: ProviderConfig): Record<string, string> {
     // SDK replaces env for subprocesses — force these so nothing inherits a bad CI / skip flag.
     base.CI = "true";
     base.CURSOR_SKIP_KEYCHAIN = "1";
+    // Bridge mode controls the agent behavior: "plan" enables tool use (Read,
+    // Glob, Grep, Write, Bash), "ask" gives a chat-only assistant. Planner
+    // agents and workers must use "plan" so they actually interact with the codebase.
+    base.CURSOR_BRIDGE_MODE = "plan";
+    // Use system Node.js for agent subprocess to avoid macOS segfaults with
+    // bundled Node.js. Resolve lazily.
+    if (!_cachedAgentNode || !_cachedAgentScript) {
+      const [node, script] = resolveAgentPaths(2_000);
+      _cachedAgentNode = node;
+      _cachedAgentScript = script;
+    }
+    if (_cachedAgentNode) {
+      base.CURSOR_AGENT_NODE = _cachedAgentNode;
+    }
+    if (_cachedAgentScript) {
+      base.CURSOR_AGENT_SCRIPT = _cachedAgentScript;
+    }
     return base;
   }
 
@@ -870,19 +909,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
 
   // Resolve system node and agent index.js so the proxy uses system Node.js
   // for the agent subprocess (avoids segfaults with --list-models on macOS).
-  let sysNode: string | null = null;
-  let agentJs: string | null = null;
-  try {
-    sysNode = execSync("which node 2>/dev/null", { timeout: 3_000, encoding: "utf-8", shell: "bash" }).trim() || null;
-    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
-      timeout: 3_000, encoding: "utf-8", shell: "bash",
-    }).trim();
-    if (agentPath) {
-      const agentDir = dirname(realpathSync(agentPath));
-      const indexPath = `${agentDir}/index.js`;
-      if (existsSync(indexPath)) agentJs = indexPath;
-    }
-  } catch {}
+  const [sysNode, agentJs] = resolveAgentPaths(3_000);
 
   const apiKeyStored = loadProviders().find(p => p.cursorProxy)?.cursorApiKey;
   const agentToken = resolveCursorAgentToken();
@@ -942,6 +969,9 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     // the CLI path injects keychain-shim-inject.js via NODE_OPTIONS which no-ops
     // /usr/bin/security calls on macOS (cursor-composer/dist/lib/process.js).
     CURSOR_BRIDGE_USE_ACP: "0",
+    // Default bridge mode: "plan" enables tool use (Read, Glob, Grep, Write, Bash).
+    // "ask" gives a chat-only assistant that doesn't interact with the codebase.
+    CURSOR_BRIDGE_MODE: "plan",
     // cursor-composer chat-only mode fakes HOME to a temp dir; on macOS the agent still waits on
     // Keychain (~30s) for `cursor-user` despite CURSOR_API_KEY. Use the real workspace profile.
     CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "false",
@@ -971,6 +1001,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
       childEnv: {
         CI: proxyEnv.CI,
         CURSOR_SKIP_KEYCHAIN: proxyEnv.CURSOR_SKIP_KEYCHAIN,
+        CURSOR_BRIDGE_MODE: proxyEnv.CURSOR_BRIDGE_MODE,
         CURSOR_BRIDGE_USE_ACP: proxyEnv.CURSOR_BRIDGE_USE_ACP,
         CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: proxyEnv.CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE,
         CURSOR_API_KEY: "(set)",

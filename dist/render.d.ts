@@ -1,6 +1,8 @@
+import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
-import type { RateLimitWindow } from "./types.js";
+import type { RLGetter } from "./types.js";
 import type { RunInfo, SteeringContext, SteeringEvent } from "./ui.js";
+import { InteractivePanel } from "./interactive-panel.js";
 export interface Section {
     title: string;
     rows: string[];
@@ -14,6 +16,11 @@ export interface ContentRenderer {
 export declare function truncate(s: string, max: number): string;
 export declare function fmtTokens(n: number): string;
 export declare function fmtDur(ms: number): string;
+/** Context-fill percentage and color function for a token count vs safe limit. */
+export declare function contextFillInfo(tokens: number, safe: number): {
+    pct: number;
+    color: typeof chalk;
+};
 export declare function renderUnifiedFrame(params: {
     model?: string;
     phase: string;
@@ -36,13 +43,7 @@ export declare function renderUnifiedFrame(params: {
     extraFooterRows?: string[];
     maxRows?: number;
 }): string;
-type RLGetter = () => {
-    utilization: number;
-    isUsingOverage: boolean;
-    windows: Map<string, RateLimitWindow>;
-    resetsAt?: number;
-};
-export declare function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number, maxRows?: number, debrief?: string): string;
+export declare function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInfo, selectedAgentId?: number, maxRows?: number, panel?: InteractivePanel): string;
 export interface SteeringViewData {
     /** The ephemeral ticker heartbeat  -- elapsed, tool count, cost, current reasoning snippet. */
     statusLine: string;
@@ -51,6 +52,5 @@ export interface SteeringViewData {
     /** Optional context read from disk at setSteering() time. */
     context?: SteeringContext;
 }
-export declare function renderSteeringFrame(runInfo: RunInfo, data: SteeringViewData, showHotkeys: boolean, rlGetter?: RLGetter, maxRows?: number, debrief?: string): string;
+export declare function renderSteeringFrame(runInfo: RunInfo, data: SteeringViewData, showHotkeys: boolean, rlGetter?: RLGetter, maxRows?: number, panel?: InteractivePanel): string;
 export declare function renderSummary(swarm: Swarm): string;
-export {};

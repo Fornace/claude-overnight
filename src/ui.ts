@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
-import type { RateLimitWindow, WaveSummary } from "./types.js";
+import type { RateLimitWindow, RLGetter, WaveSummary } from "./types.js";
 import { renderFrame, renderSteeringFrame } from "./render.js";
 import {
   type InputSegment,
@@ -15,6 +15,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
+import { InteractivePanel, type PanelMode } from "./interactive-panel.js";
 
 /** Short-lived context the steering view renders around its live log. */
 export interface SteeringContext {
@@ -68,11 +69,14 @@ interface NavState {
   scrollOffset: number;
 }
 
-type RLGetter = () => { utilization: number; isUsingOverage: boolean; windows: Map<string, RateLimitWindow>; resetsAt?: number };
-
 const MAX_STEERING_EVENTS = 60;
 const MAX_INPUT_LEN = 600;
 const MAX_ASK_LINES = 40;
+
+/** Visible lines for the ask panel, clamped to leave room for header/content/footer/input. */
+function askDisplayCap(): number {
+  return Math.max(3, Math.min(MAX_ASK_LINES, (process.stdout.rows || 40) - 20));
+}
 let askTempDir: string | undefined;
 
 export class RunDisplay {
@@ -98,13 +102,18 @@ export class RunDisplay {
   /** ID of the agent whose detail panel is open; undefined = no detail shown. */
   private selectedAgentId?: number;
   private navState: NavState = { focusSection: 0, focusRow: 0, scrollOffset: 0 };
+  /** Interactive panel for debrief, Q&A, and other user-facing content. */
+  readonly panel = new InteractivePanel();
   private onSteer?: (text: string) => void;
   private onAsk?: (text: string) => void;
-  private debriefText?: string;
-  /** Get the latest debrief line for footer rendering. */
-  getDebrief(): string | undefined { return this.debriefText; }
-  /** Set or clear the debrief text shown in the footer. */
-  setDebrief(text: string | undefined): void { this.debriefText = text; }
+  /** Set or clear the debrief text shown in the interactive panel. */
+  setDebrief(text: string | undefined): void {
+    if (text) {
+      this.panel.set({ mode: "debrief", header: "Debrief", preview: text, body: text });
+    } else if (this.panel.state.mode === "debrief") {
+      this.panel.set({ mode: "none", header: "", preview: "", body: "" });
+    }
+  }
 
   constructor(
     runInfo: RunInfo,
@@ -126,13 +135,25 @@ export class RunDisplay {
     // Write full answer to temp file when streaming is done and answer is long
     if (state && !state.streaming && !state.error && state.answer) {
       const lines = state.answer.split("\n");
-      if (lines.length > MAX_ASK_LINES) {
+      if (lines.length > askDisplayCap()) {
         try {
           askTempDir = mkdtempSync(join(tmpdir(), "overnight-ask-"));
           this.askTempFile = join(askTempDir, "answer.txt");
           writeFileSync(this.askTempFile, state.answer, "utf8");
         } catch {}
       }
+      // Also populate the panel with the Q&A content
+      const preview = state.answer.split("\n")[0]?.slice(0, 120) || "(answered)";
+      this.panel.set({
+        mode: "ask",
+        header: `Ask`,
+        preview,
+        body: `Q: ${state.question}\n\nA: ${state.answer}`,
+      });
+    } else if (state && state.error) {
+      this.panel.set({ mode: "ask", header: "Ask", preview: state.error, body: `Q: ${state.question}\n\nError: ${state.error}` });
+    } else if (!state && this.panel.state.mode === "ask") {
+      this.panel.set({ mode: "none", header: "", preview: "", body: "" });
     }
   }
 
@@ -413,23 +434,25 @@ export class RunDisplay {
   }
 
   private render(maxRows?: number): string {
-    // Compute how many rows the input prompt + ask panel need so the
-    // main frame can shrink its content area to leave room.
+    // Compute how many rows the bottom area (input prompt + collapsed panel) need.
     const inputPrompt = this.renderInputPrompt();
-    const askPanel = this.renderAskPanel();
-    const bottom = inputPrompt + askPanel;
-    const bottomRows = bottom ? (bottom.match(/\n/g) || []).length : 0;
+    const panelCollapsed = this.panel.visible && !this.panel.state.expanded
+      ? this.panel.renderCollapsed(Math.max((process.stdout.columns ?? 80) || 80, 60))
+      : "";
+    const panelExpanded = this.panel.visible && this.panel.state.expanded ? 1 : 0; // 1 = header row, content handled by frame
+    const bottom = inputPrompt + (panelCollapsed ? "\n" + panelCollapsed : "");
+    const bottomRows = bottom ? (bottom.match(/\n/g) || []).length + 1 : 0;
     const frameBudget = maxRows != null ? maxRows - bottomRows : undefined;
 
     let frame = "";
     if (this.swarm) {
-      frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo, this.selectedAgentId, frameBudget, this.debriefText);
+      frame = renderFrame(this.swarm, this.hasHotkeys(), this.runInfo, this.selectedAgentId, frameBudget, this.panel);
     } else if (this.steeringActive) {
       frame = renderSteeringFrame(this.runInfo, {
         statusLine: this.steeringStatusLine,
         events: this.steeringEvents,
         context: this.steeringContext,
-      }, this.hasHotkeys(), this.rlGetter, frameBudget, this.debriefText);
+      }, this.hasHotkeys(), this.rlGetter, frameBudget, this.panel);
     } else {
       return "";
     }
@@ -458,31 +481,6 @@ export class RunDisplay {
       return `\n  ${chalk.cyan(">")} ${chalk.bold("Ask the planner")} ${chalk.dim("(Enter to send, Esc to cancel)")}\n  ${rendered}\u2588`;
     }
     return "";
-  }
-
-  private renderAskPanel(): string {
-    const a = this.askState;
-    if (!a) return "";
-    const out: string[] = ["", chalk.gray("  \u2500\u2500\u2500 Ask " + "\u2500".repeat(40))];
-    out.push(`  ${chalk.bold.cyan("Q:")} ${a.question}`);
-    if (a.error) {
-      out.push(`  ${chalk.red("A:")} ${chalk.red(a.error)}`);
-    } else if (a.streaming) {
-      out.push(`  ${chalk.dim("A: " + (a.answer || "thinking..."))}`);
-    } else {
-      const allLines = a.answer.split("\n");
-      const showLines = allLines.slice(0, MAX_ASK_LINES);
-      out.push(`  ${chalk.bold.green("A:")} ${showLines[0] || ""}`);
-      for (const ln of showLines.slice(1)) out.push(`     ${ln}`);
-      if (allLines.length > MAX_ASK_LINES) {
-        const overflow = allLines.length - MAX_ASK_LINES;
-        out.push(chalk.dim(`     \u2026 + ${overflow} more lines`));
-        if (this.askTempFile) {
-          out.push(chalk.dim("  \u23CE Enter to reveal full answer in Finder"));
-        }
-      }
-    }
-    return "\n" + out.join("\n");
   }
 
   private hasHotkeys(): boolean {
@@ -543,6 +541,15 @@ export class RunDisplay {
     // ── 1. Arrow keys: \x1B[A = up, \x1B[B = down, \x1B[C = right, \x1B[D = left ──
     if (s.startsWith("\x1B[")) {
       const dir = s[2];
+      // When panel is expanded, arrows scroll the panel content
+      if (this.panel.state.expanded) {
+        const rows = Math.max(4, (process.stdout.rows || 40) - 10);
+        if (dir === "A") { this.panel.scroll("up", rows); return true; }
+        if (dir === "B") { this.panel.scroll("down", rows); return true; }
+        // Left/right: collapse or pass through
+        if (dir === "D") { this.panel.collapse(); return true; }
+        return true;
+      }
       if (dir === "A") { this.navigate("up"); return true; }
       if (dir === "B") { this.navigate("down"); return true; }
       if (dir === "C") { this.navigate("right"); return true; }
@@ -676,6 +683,15 @@ export class RunDisplay {
       if (this.swarm && !this.swarm.aborted) { this.swarm.abort(); }
       else { process.exit(0); }
       return true;
+    }
+
+    // Ctrl+O: toggle interactive panel expand/collapse
+    if (s === "\x0F") {
+      if (this.panel.visible) {
+        this.panel.toggle();
+        return true;
+      }
+      return false;
     }
 
     // Only single printable ASCII characters reach hotkey matching
