@@ -136,13 +136,12 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
     const statusUpdate = parsed.statusUpdate || undefined;
     const estRaw = parsed.estimatedSessionsRemaining;
     const estimatedSessionsRemaining = typeof estRaw === "number" && estRaw >= 0 ? Math.round(estRaw) : undefined;
-    // Resolve steering role strings ("worker"/"fast"/"planner"/"default") to actual model IDs.
+    // Resolve steering role strings ("worker"/"fast"/"planner") to actual model IDs.
     const resolveModel = (role) => {
         switch (role.toLowerCase()) {
             case "worker": return workerModel;
             case "planner": return plannerModel;
             case "fast": return fastModel ?? workerModel;
-            case "default": return workerModel;
             default: return role; // already a real model ID
         }
     };

@@ -124,7 +124,7 @@ export const FALLBACK_MODEL = "claude-opus-4-7"; // used for planner + worker re
  * exact → substring match. Falls back to "unknown" entry.
  */
 export function getModelCapability(model) {
-    const m = (model === "default" ? DEFAULT_MODEL : model).toLowerCase();
+    const m = model.toLowerCase();
     if (MODEL_CAPABILITIES[m])
         return MODEL_CAPABILITIES[m];
     for (const [key, cap] of Object.entries(MODEL_CAPABILITIES)) {
@@ -135,7 +135,7 @@ export function getModelCapability(model) {
 }
 /** Human-readable model name for display (e.g. in run labels). */
 export function modelDisplayName(model) {
-    const resolved = model === "default" ? DEFAULT_MODEL : model;
+    const resolved = model;
     const m = resolved.toLowerCase();
     if (MODEL_CAPABILITIES[m]?.displayName)
         return MODEL_CAPABILITIES[m].displayName;

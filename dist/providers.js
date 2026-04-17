@@ -196,8 +196,8 @@ export async function pickModel(label, anthropicModels, currentModelId) {
         if (anthropicModels.length === 0) {
             items.push({
                 name: DEFAULT_MODEL,
-                value: { kind: "anthropic", model: { value: DEFAULT_MODEL, displayName: DEFAULT_MODEL, description: "default (model list unavailable)" } },
-                hint: "default  -- Anthropic model list unavailable",
+                value: { kind: "anthropic", model: { value: DEFAULT_MODEL, displayName: DEFAULT_MODEL, description: DEFAULT_MODEL + " (model list unavailable)" } },
+                hint: DEFAULT_MODEL + "  -- Anthropic model list unavailable",
             });
         }
         for (const p of saved) {

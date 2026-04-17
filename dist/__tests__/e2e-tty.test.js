@@ -26,7 +26,7 @@ e2e("E2E TTY  -- header bar", () => {
         p = new PTYProcess("node", [BIN, "--file", taskFile("e2e-tasks.json")]);
         await waitForSwarm(p);
         const text = p.text();
-        // Header shows model name or "default" in the brackets
+        // Header shows model name in the brackets
         assert.match(text, /CLAUDE OVERNIGHT \[.+\]/);
         p.kill();
     });

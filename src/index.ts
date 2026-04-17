@@ -525,7 +525,7 @@ async function main() {
         const qwenProviders = providers.filter(p => p.model?.toLowerCase().includes("qwen"));
 
         const options: { key: string; desc: string }[] = [];
-        if (hasAnthropicKey) options.push({ key: "1", desc: ` — ${COACH_MODEL} (default, cheapest)` });
+        if (hasAnthropicKey) options.push({ key: "1", desc: ` — ${COACH_MODEL} (cheapest)` });
         if (qwenProviders.length > 0) options.push({ key: "2", desc: ` — ${qwenProviders[0].displayName} (${qwenProviders[0].model})` });
         if (cursorProviders.length > 0) options.push({ key: "3", desc: ` — ${cursorProviders[0].displayName} (${cursorProviders[0].model})` });
         options.push({ key: "o", desc: "ther…" });
