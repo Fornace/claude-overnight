@@ -41,6 +41,36 @@ export function renderWaitingIndicator(label, startedAt, opts = {}) {
 export function truncate(s, max) {
     return s.length <= max ? s : s.slice(0, max - 1) + "\u2026";
 }
+/** Word-wrap text into lines of at most `max` chars.
+ *  Splits on spaces; if a single word exceeds `max` it is hard-broken.
+ *  Ignores ANSI escape codes for length calculation. */
+export function wrap(s, max) {
+    if (s.length <= max)
+        return [s];
+    // Strip ANSI for length calculation
+    const stripped = s.replace(/\x1b\[[0-9;]*m/g, "");
+    if (stripped.length <= max)
+        return [s];
+    const lines = [];
+    const words = stripped.split(/\s+/);
+    let cur = "";
+    for (const w of words) {
+        if (cur.length === 0) {
+            cur = w;
+            continue;
+        }
+        if (cur.length + 1 + w.length <= max) {
+            cur += " " + w;
+        }
+        else {
+            lines.push(cur);
+            cur = w;
+        }
+    }
+    if (cur)
+        lines.push(cur);
+    return lines;
+}
 export function fmtTokens(n) {
     if (n >= 1_000_000)
         return `${(n / 1_000_000).toFixed(1)}M`;
@@ -412,12 +442,6 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
     // Build footer
     let hotkeyRow;
     const extraFooterRows = [];
-    // Collapsed panel bar shown in footer area
-    if (panel?.visible && !panel.state.expanded) {
-        const bar = panel.renderCollapsed(Math.max((process.stdout.columns ?? 80) || 80, 60));
-        if (bar)
-            extraFooterRows.push(bar);
-    }
     if (showHotkeys) {
         const pending = runInfo?.pendingSteer ?? 0;
         const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
@@ -530,8 +554,12 @@ function renderStatusBlock(out, w, status) {
     if (lines.length === 0)
         return;
     section(out, w, "Status");
-    for (const ln of lines)
-        out.push(`  ${chalk.dim(truncate(ln.trim(), w - 4))}`);
+    const indent = "  ";
+    const maxW = w - indent.length;
+    for (const ln of lines) {
+        for (const wl of wrap(ln.trim(), maxW))
+            out.push(`${indent}${chalk.dim(wl)}`);
+    }
 }
 export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRows, panel) {
     const totalUsed = runInfo.accCompleted + runInfo.accFailed;
@@ -609,12 +637,6 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
     // Footer
     let hotkeyRow;
     const extraFooterRows = [];
-    // Collapsed panel bar shown in footer area
-    if (panel?.visible && !panel.state.expanded) {
-        const bar = panel.renderCollapsed(Math.max((process.stdout.columns ?? 80) || 80, 60));
-        if (bar)
-            extraFooterRows.push(bar);
-    }
     if (showHotkeys) {
         const pending = runInfo?.pendingSteer ?? 0;
         const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";

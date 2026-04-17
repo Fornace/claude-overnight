@@ -104,14 +104,14 @@ Respond with ONLY a JSON object (no markdown fences):
   "estimatedSessionsRemaining": 15,
   "tasks": [
     {"prompt": "task instruction...", "model": "worker"},
-    {"prompt": "review task...", "model": "planner"},
-    {"prompt": "verify the app end-to-end...", "model": "planner", "noWorktree": true}
+    {"prompt": "quick icon fix, verified by worker next wave...", "model": "fast"},
+    {"prompt": "verify the app end-to-end...", "model": "worker", "noWorktree": true}
   ]
 }
 
 "estimatedSessionsRemaining" is REQUIRED. Your best honest estimate of how many MORE agent sessions (beyond the wave you just composed above) are needed to reach 'amazing'  -- include follow-up fixes, polish, verification, and anything else you'd want before shipping. Be realistic, not optimistic. Use 0 only if truly done.
 
-The "model" field on each task: use "worker" (${workerModel}) for implementation tasks, "planner" (${plannerModel}) for review/analysis/verification tasks, "fast" (${fastModel ?? workerModel}) for quick, well-scoped changes that will be checked by the worker model in the next wave. Default is "worker".
+The "model" field on each task: use "worker" (${workerModel}) for all tasks. Use "fast" (${fastModel ?? "not set"}) for small, single-file changes that will be checked by the worker in the next wave.
 Set "noWorktree": true for verify/user-test tasks  -- they need the real project directory with env files, dependencies, and local config.
 
 If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSessionsRemaining": 0, "tasks": []}`;

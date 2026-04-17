@@ -27,7 +27,7 @@ import {
 } from "./providers.js";
 import type { ProviderConfig } from "./providers.js";
 import { RunDisplay } from "./ui.js";
-import { renderSummary } from "./render.js";
+import { renderSummary, wrap } from "./render.js";
 import { executeRun } from "./run.js";
 import type { Task, PermMode, MergeStrategy, RunState, WaveSummary } from "./types.js";
 import {
@@ -365,9 +365,11 @@ async function main() {
         const obj = prev.objective?.slice(0, 50) || "";
         const ago = formatTimeAgo(prev.startedAt);
         let lastStatus = "";
-        try { lastStatus = readFileSync(join(run.dir, "status.md"), "utf-8").trim().slice(0, 120); } catch {}
+        try { lastStatus = readFileSync(join(run.dir, "status.md"), "utf-8").trim().slice(0, 200); } catch {}
         const planTaskCount = prev.phase === "planning" ? countTasksInFile(join(run.dir, "tasks.json")) : 0;
         console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
+        const termW = Math.max(process.stdout.columns ?? 80, 60);
+        const statusMaxW = Math.min(termW - 8, 80);
         const boxLines = prev.phase === "planning" ? [
           `${obj}${obj.length >= 50 ? "…" : ""}`,
           `Plan ready · ${planTaskCount} tasks · budget ${prev.budget} · ${prev.concurrency}× concurrent`,
@@ -377,7 +379,9 @@ async function main() {
           `${prev.accCompleted}/${prev.budget} sessions · ${Math.max(1, (prev.budget ?? 0) - prev.accCompleted)} remaining · $${prev.accCost.toFixed(2)}`,
           `Wave ${prev.waveNum + 1} · ${prev.phase}`,
         ];
-        if (lastStatus) boxLines.push(lastStatus);
+        if (lastStatus) {
+          for (const wl of wrap(lastStatus, statusMaxW)) boxLines.push(wl);
+        }
         if (merged + unmerged + failed > 0) boxLines.push(`${merged} merged · ${unmerged} unmerged · ${failed} failed`);
         const boxW = Math.max(...boxLines.map(l => l.length)) + 4;
         console.log(chalk.dim(`  ╭${"─".repeat(boxW)}╮`));
@@ -398,7 +402,7 @@ async function main() {
           const obj = s.objective?.slice(0, 50) || "";
           const merged = s.branches.filter(b => b.status === "merged").length;
           let lastStatus = "";
-          try { lastStatus = readFileSync(join(shown[i].dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}
+          try { lastStatus = readFileSync(join(shown[i].dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 120); } catch {}
           console.log(chalk.cyan(`  ${i + 1}`) + `  ${obj}${obj.length >= 50 ? "…" : ""}`);
           if (s.phase === "planning") {
             const n = countTasksInFile(join(shown[i].dir, "tasks.json"));
@@ -406,7 +410,10 @@ async function main() {
           } else {
             console.log(chalk.dim(`     ${s.accCompleted}/${s.budget} · $${s.accCost.toFixed(2)} · ${ago} · ${s.phase} at wave ${s.waveNum + 1}${merged ? ` · ${merged} merged` : ""}`));
           }
-          if (lastStatus) console.log(chalk.dim(`     ${lastStatus}`));
+          if (lastStatus) {
+            const termW = Math.max(process.stdout.columns ?? 80, 60);
+            for (const wl of wrap(lastStatus, termW - 6)) console.log(chalk.dim(`     ${wl}`));
+          }
           console.log("");
         }
         const action = await selectKey(`  ${chalk.dim(`[1-${shown.length}] resume`)}`, [

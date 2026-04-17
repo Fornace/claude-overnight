@@ -564,8 +564,12 @@ export class RunDisplay {
       if (s === "\x1B[F" || s === "\x1B[4~") { this.panel.scrollToBottom(bodyRows); return true; }
       return false; // swallow other CSIs silently
     }
-    // Bare ESC: collapse
-    if (s === "\x1B") { this.panel.collapse(); return true; }
+    // Bare ESC: collapse if expanded, close if collapsed
+    if (s === "\x1B") {
+      if (this.panel.state.expanded) { this.panel.collapse(); }
+      else { this.panel.close(); }
+      return true;
+    }
     // Ctrl-O: toggle (collapse)
     if (s === "\x0F") { this.panel.toggle(); return true; }
     // Ctrl-C: keep the usual abort / exit behavior even while expanded

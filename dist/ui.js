@@ -550,9 +550,14 @@ export class RunDisplay {
             }
             return false; // swallow other CSIs silently
         }
-        // Bare ESC: collapse
+        // Bare ESC: collapse if expanded, close if collapsed
         if (s === "\x1B") {
-            this.panel.collapse();
+            if (this.panel.state.expanded) {
+                this.panel.collapse();
+            }
+            else {
+                this.panel.close();
+            }
             return true;
         }
         // Ctrl-O: toggle (collapse)

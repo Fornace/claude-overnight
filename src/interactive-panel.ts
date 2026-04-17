@@ -51,6 +51,13 @@ export class InteractivePanel {
     this.state.scrollOffset = 0;
   }
 
+  /** Close the panel entirely (set mode to "none"). */
+  close(): void {
+    this.state.mode = "none";
+    this.state.expanded = false;
+    this.state.scrollOffset = 0;
+  }
+
   collapse(): void {
     this.state.expanded = false;
     this.state.scrollOffset = 0;

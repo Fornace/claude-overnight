@@ -31,6 +31,10 @@ export declare function renderWaitingIndicator(label: string, startedAt: number 
     style?: "info" | "warn" | "wait" | "thinking";
 }): string;
 export declare function truncate(s: string, max: number): string;
+/** Word-wrap text into lines of at most `max` chars.
+ *  Splits on spaces; if a single word exceeds `max` it is hard-broken.
+ *  Ignores ANSI escape codes for length calculation. */
+export declare function wrap(s: string, max: number): string[];
 export declare function fmtTokens(n: number): string;
 export declare function fmtDur(ms: number): string;
 /** Context-fill percentage and color function for a token count vs safe limit. */

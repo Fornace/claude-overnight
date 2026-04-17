@@ -17,6 +17,8 @@ export declare class InteractivePanel {
         preview: string;
         body: string;
     }): void;
+    /** Close the panel entirely (set mode to "none"). */
+    close(): void;
     collapse(): void;
     toggle(): void;
     scroll(direction: "up" | "down", visibleRows: number): void;
