@@ -81,7 +81,49 @@ async function throttlePlanner(onLog, aborted) {
 const NUDGE_MS = 15 * 60 * 1000;
 const HARD_TIMEOUT_MS = 30 * 60 * 1000;
 const WALL_CLOCK_LIMIT_MS = 45 * 60 * 1000;
+// ── Cursor proxy: direct HTTP bypass ──
+//
+// When the env routes to a cursor proxy (CURSOR_API_KEY present, no ANTHROPIC_API_KEY),
+// the claude-agent-sdk wrapper is harmful, not helpful:
+//   - The SDK spawns a `claude` subprocess that makes 4+ sequential HTTP calls to the proxy.
+//   - Each call spawns a fresh cursor-agent subprocess (~15s overhead each).
+//   - Total: 4 × 15s = 60s for what should be a single 10-15s completion.
+// The SDK features (local tool loop, session resume, rate-limit headers) do not apply:
+//   - cursor-agent runs its own internal tool loop; local tool_use never fires.
+//   - cursor proxy doesn't expose session IDs or rate-limit headers.
+// One direct POST is always correct and 4-10× faster.
+function isCursorProxyEnv(env) {
+    return !!env?.CURSOR_API_KEY && !env?.ANTHROPIC_API_KEY;
+}
+async function runViaDirectFetch(prompt, opts, onLog) {
+    const env = opts.env ?? _envResolver?.(opts.model);
+    const baseUrl = (env?.ANTHROPIC_BASE_URL ?? "http://127.0.0.1:8765").replace(/\/$/, "");
+    const authToken = env?.ANTHROPIC_AUTH_TOKEN ?? "";
+    const MAX_RETRIES = 3;
+    const BACKOFF = [30_000, 60_000, 120_000];
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        const res = await fetch(`${baseUrl}/v1/messages`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
+            body: JSON.stringify({ model: opts.model, max_tokens: 8192, messages: [{ role: "user", content: prompt }] }),
+        });
+        if (res.status === 429 && attempt < MAX_RETRIES) {
+            const waitMs = BACKOFF[attempt];
+            onLog(`Cursor proxy rate limited — waiting ${Math.round(waitMs / 1000)}s`, "event");
+            await new Promise(r => setTimeout(r, waitMs));
+            continue;
+        }
+        if (!res.ok)
+            throw new Error(`Cursor proxy ${res.status}: ${(await res.text().catch(() => ""))}`);
+        const data = await res.json();
+        return data.content?.[0]?.text ?? "";
+    }
+    throw new Error("Cursor proxy direct fetch failed after retries");
+}
 export async function runPlannerQuery(prompt, opts, onLog) {
+    const env = opts.env ?? _envResolver?.(opts.model);
+    if (isCursorProxyEnv(env))
+        return runViaDirectFetch(prompt, opts, onLog);
     const MAX_RETRIES = 3;
     const BACKOFF = [30_000, 60_000, 120_000];
     let currentPrompt = prompt;

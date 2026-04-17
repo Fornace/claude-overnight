@@ -5,9 +5,10 @@ import { execSync } from "child_process";
 import { homedir } from "os";
 import chalk from "chalk";
 import { runPlannerQuery, attemptJsonParse } from "./planner-query.js";
+import { renderWaitingIndicator } from "./render.js";
 import { createTurn, beginTurn, endTurn } from "./turns.js";
 import { selectKey, ask } from "./cli.js";
-import { envFor } from "./providers.js";
+import { envFor, isCursorProxyProvider, ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "./providers.js";
 // ── URL fetching for plan links in the objective ──
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
 async function fetchUrlContent(url, timeoutMs = 5_000) {
@@ -56,7 +57,7 @@ export function saveUserSettings(s) {
 }
 // ── Coach model (separate from DEFAULT_MODEL so the coach can stay cheap) ──
 export const COACH_MODEL = "claude-haiku-4-5";
-const COACH_TIMEOUT_MS = 15_000;
+const COACH_TIMEOUT_MS = 60_000;
 const COACH_SOFT_STATUS_MS = 5_000;
 // ── Raw schema matching the SKILL.md invocation contract ──
 const COACH_SCHEMA = {
@@ -342,18 +343,31 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
     }
     const userMessage = renderRepoFacts(facts, rawObjective, ctx.providers, ctx.cliFlags, planContent);
     const prompt = `${skill}\n\n---\n\n${userMessage}\n\nRespond with the JSON object defined in "Invocation contract" only.`;
-    const model = ctx.coachModel ?? COACH_MODEL;
+    // cursor "auto" maps to a slow thinking-class model for large prompts (182s observed).
+    // composer-2-fast gives the same quality for structured JSON at ~8s.
+    const CURSOR_FAST_MODEL = "composer-2-fast";
+    let model = ctx.coachModel ?? COACH_MODEL;
     const startedAt = Date.now();
     const spinner = setInterval(() => {
-        const elapsed = Math.round((Date.now() - startedAt) / 1000);
-        const hint = elapsed >= Math.round(COACH_SOFT_STATUS_MS / 1000) ? " · still thinking…" : "";
-        process.stdout.write(`\x1B[2K\r  ${chalk.cyan("⚡")} ${chalk.dim(`coach ${elapsed}s${hint}`)}`);
-    }, 500);
+        const indicator = renderWaitingIndicator("coach", startedAt, { style: "thinking" });
+        process.stdout.write(`\x1B[2K\r  ${indicator}`);
+    }, 120);
+    if (ctx.coachProvider && isCursorProxyProvider(ctx.coachProvider)) {
+        const proxyUrl = ctx.coachProvider.baseURL || PROXY_DEFAULT_URL;
+        const proxyUp = await ensureCursorProxyRunning(proxyUrl);
+        if (!proxyUp) {
+            clearInterval(spinner);
+            process.stdout.write(`\x1B[2K\r`);
+            console.log(chalk.dim("  coach skipped: proxy failed to start"));
+            return null;
+        }
+        if (model === "auto")
+            model = CURSOR_FAST_MODEL;
+    }
     let raw;
     const turn = createTurn("coach", "Coach", "coach-0", model);
     beginTurn(turn);
     try {
-        const coachEnv = ctx.coachProvider ? envFor(ctx.coachProvider) : undefined;
         const queryPromise = runPlannerQuery(prompt, {
             cwd,
             model,
@@ -362,7 +376,7 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
             transcriptName: "coach",
             maxTurns: 3,
             tools: [],
-            env: coachEnv,
+            env: ctx.coachProvider ? envFor(ctx.coachProvider) : undefined,
             turnId: turn.id,
         }, () => { });
         const timeout = new Promise((_, reject) => {
