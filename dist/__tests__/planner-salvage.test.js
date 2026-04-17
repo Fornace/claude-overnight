@@ -60,16 +60,19 @@ describe("salvageFromFile", () => {
         assert.ok(result);
         assert.equal(result.length, 2);
     });
-    it("filters tasks with fewer than 3 words via postProcess", () => {
+    it("filters tasks with empty prompts via postProcess but keeps single-word prompts", () => {
         const p = writeTasks("short.json", JSON.stringify({
             tasks: [
+                { prompt: "" },
+                { prompt: "   " },
                 { prompt: "fix" },
                 { prompt: "implement new feature properly end-to-end" },
             ],
         }));
         const result = salvageFromFile(p, 10, onLog, "x");
         assert.ok(result);
-        assert.equal(result.length, 1);
+        assert.equal(result.length, 2);
+        assert.deepEqual(result.map(t => t.prompt), ["fix", "implement new feature properly end-to-end"]);
     });
     it("logs a salvage event when recovery succeeds", () => {
         logs.length = 0;

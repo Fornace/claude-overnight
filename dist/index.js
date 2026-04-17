@@ -843,20 +843,36 @@ async function main() {
          *  preflight now also runs a write-capability probe (see probeCursorWriteCapability) that
          *  asks cursor to Bash a marker file — so the total budget must cover auth ping + write turn. */
         const preflightMs = (p) => isCursorProxyProvider(p) ? 90_000 : 20_000;
-        const results = await Promise.all(pending.map(async ([role, p]) => {
+        // Cursor's composer-2 pipeline intermittently stalls for 100s+ on a write-tool turn
+        // even though the tool succeeded (proxy logs it as "SLOW response"). A single retry
+        // almost always clears it — so we retry once on timeout-style failures for cursor
+        // proxy providers before giving up.
+        const isTimeoutError = (err) => /^timeout after /.test(err) || /: timeout after /.test(err);
+        const runPreflight = async (role, p) => {
             statuses.set(role, "connecting…");
             renderStatus();
-            const result = await preflightProvider(p, cwd, preflightMs(p), {
+            let result = await preflightProvider(p, cwd, preflightMs(p), {
                 onProgress: (msg) => { statuses.set(role, msg); renderStatus(); },
             });
+            if (!result.ok && isCursorProxyProvider(p) && isTimeoutError(result.error)) {
+                statuses.set(role, "retrying after timeout…");
+                renderStatus();
+                result = await preflightProvider(p, cwd, preflightMs(p), {
+                    onProgress: (msg) => { statuses.set(role, `retry: ${msg}`); renderStatus(); },
+                });
+            }
             statuses.delete(role);
             renderStatus();
             return { role, provider: p, result };
-        }));
+        };
+        const results = await Promise.all(pending.map(([role, p]) => runPreflight(role, p)));
         clearStatusLine();
+        let fastDegraded = false;
         for (const { role, provider, result } of results) {
             if (!result.ok) {
-                console.error(chalk.red(`  ✗ ${role} preflight failed: ${chalk.dim(result.error)}`));
+                const degradable = role === "fast";
+                const prefix = degradable ? chalk.yellow(`  ⚠ ${role} preflight failed`) : chalk.red(`  ✗ ${role} preflight failed`);
+                console.error(`${prefix}: ${chalk.dim(result.error)}`);
                 if (isCursorProxyProvider(provider)) {
                     const tail = readCursorProxyLogTail(25);
                     if (tail) {
@@ -865,15 +881,28 @@ async function main() {
                             console.error(chalk.dim(`    ${line}`));
                     }
                     const cmd = bundledComposerProxyShellCommand();
-                    console.error(chalk.yellow(`  The proxy at ${PROXY_DEFAULT_URL} may have crashed or timed out (e.g. keychain/UI). Retry, or start the bundled proxy: ${cmd ?? "npm install in the claude-overnight package, then re-run"}`));
+                    const proxyUrl = provider.baseURL || PROXY_DEFAULT_URL;
+                    console.error(chalk.yellow(`  The proxy at ${proxyUrl} may have crashed or timed out (e.g. keychain/UI). Retry, or start the bundled proxy: ${cmd ?? "npm install in the claude-overnight package, then re-run"}`));
                 }
-                else {
+                else if (!degradable) {
                     console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));
+                }
+                if (degradable) {
+                    console.error(chalk.yellow(`  Continuing without fast — fast-eligible tasks will run on the worker model instead.`));
+                    console.error("");
+                    fastDegraded = true;
+                    continue;
                 }
                 console.error("");
                 process.exit(1);
             }
             console.log(`  ${chalk.green(`✓ ${role} ready`)} ${chalk.dim(`· ${provider.displayName} · ${provider.model}`)}`);
+        }
+        if (fastDegraded) {
+            fastModel = undefined;
+            fastProvider = undefined;
+            const rebuilt = buildEnvResolver({ plannerModel, plannerProvider, workerModel, workerProvider, fastModel, fastProvider });
+            setPlannerEnvResolver(rebuilt);
         }
     }
     if (nonInteractive) {
