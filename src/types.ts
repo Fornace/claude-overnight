@@ -248,6 +248,10 @@ export interface RunState extends RunConfigBase {
   startedAt: string;
   /** Working directory for the run. */
   cwd: string;
+  /** Original raw objective the user typed, before the setup coach rewrote it. Optional — only present when the coach ran and was accepted. */
+  coachedObjective?: string;
+  /** Unix timestamp (ms) when the coach produced the accepted rewrite. */
+  coachedAt?: number;
 }
 
 /** Function that returns a rate-limit snapshot with optional context token info. */

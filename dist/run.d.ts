@@ -45,5 +45,9 @@ export interface RunConfig extends RunConfigBase {
     thinkingHistory?: WaveSummary;
     /** Unix timestamp (ms) when the run started. */
     runStartedAt: number;
+    /** Original raw objective before the setup coach rewrote it. */
+    coachedObjective?: string;
+    /** Unix timestamp (ms) when the coach produced the accepted rewrite. */
+    coachedAt?: number;
 }
 export declare function executeRun(cfg: RunConfig): Promise<void>;

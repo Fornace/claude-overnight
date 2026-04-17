@@ -69,6 +69,10 @@ export interface RunConfig extends RunConfigBase {
   thinkingHistory?: WaveSummary;
   /** Unix timestamp (ms) when the run started. */
   runStartedAt: number;
+  /** Original raw objective before the setup coach rewrote it. */
+  coachedObjective?: string;
+  /** Unix timestamp (ms) when the coach produced the accepted rewrite. */
+  coachedAt?: number;
 }
 
 export async function executeRun(cfg: RunConfig): Promise<void> {
@@ -278,6 +282,8 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     currentTasks: varying.currentTasks,
     accCost, accCompleted, accFailed, accIn, accOut, accTools,
     branches, phase: varying.phase, startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
+    coachedObjective: cfg.coachedObjective,
+    coachedAt: cfg.coachedAt,
   });
 
   let stopping = false;

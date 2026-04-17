@@ -229,6 +229,8 @@ export async function executeRun(cfg) {
         currentTasks: varying.currentTasks,
         accCost, accCompleted, accFailed, accIn, accOut, accTools,
         branches, phase: varying.phase, startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
+        coachedObjective: cfg.coachedObjective,
+        coachedAt: cfg.coachedAt,
     });
     let stopping = false;
     const gracefulStop = () => {

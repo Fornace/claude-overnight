@@ -41,6 +41,7 @@ import {
   createRunDir, updateLatestSymlink, readMdDir, saveRunState,
   autoMergeBranches,
 } from "./state.js";
+import { runSetupCoach, loadUserSettings, type CoachResult } from "./coach.js";
 
 function countTasksInFile(path: string): number {
   try {
@@ -224,6 +225,7 @@ async function main() {
     --merge=MODE           Merge strategy: yolo or branch ${chalk.dim("(default: yolo)")}
     --perm=MODE            Permission mode: auto, bypassPermissions, default ${chalk.dim("(default: auto)")}
     --yolo                 Shorthand for --perm=bypassPermissions --no-worktrees
+    --no-coach             Skip the setup coach ${chalk.dim("(raw objective, no preflight rewrite)")}
 
   ${chalk.cyan("Defaults")} ${chalk.dim("(non-interactive)")}
     model: first available    concurrency: 5    worktrees: auto    merge: yolo    perms: auto
@@ -492,6 +494,8 @@ async function main() {
   let permissionMode: PermMode = "auto";
   let useWorktrees = false;
   let mergeStrategy: MergeStrategy = "yolo";
+  let coachedOriginal: string | undefined;
+  let coachedAt: number | undefined;
 
   if (resuming) {
     workerModel = resumeState!.workerModel; plannerModel = resumeState!.plannerModel;
@@ -517,6 +521,8 @@ async function main() {
     permissionMode = resumeState!.permissionMode;
     useWorktrees = resumeState!.useWorktrees;
     mergeStrategy = resumeState!.mergeStrategy;
+    coachedOriginal = resumeState!.coachedObjective;
+    coachedAt = resumeState!.coachedAt;
   } else if (!nonInteractive) {
     if (continueObjective) {
       console.log(`\n  ${chalk.cyan("①")} ${chalk.bold("What should the agents do?")} ${chalk.dim("(Enter to continue last)")}\n  ${chalk.dim(continueObjective.slice(0, 80))}${continueObjective.length > 80 ? "…" : ""}`);
@@ -527,16 +533,30 @@ async function main() {
     )).trim();
     objective = objInput || continueObjective;
     if (!objective) { console.error(chalk.red("\n  No objective provided.")); process.exit(1); }
+
+    // ── Setup coach (advisory, any failure falls through to manual flow) ──
+    const coachEnabled = !argv.includes("--no-coach") && !loadUserSettings().skipCoach;
+    let coachResult: CoachResult | null = null;
+    if (coachEnabled) {
+      coachResult = await runSetupCoach(objective, cwd, { providers: loadProviders(), cliFlags });
+      if (coachResult) {
+        coachedOriginal = objective;
+        coachedAt = Date.now();
+        objective = coachResult.improvedObjective;
+      }
+    }
+
     const modelsPromise = fetchModels();
-    const budgetAns = await ask(`\n  ${chalk.cyan("②")} ${chalk.dim("Budget")} ${chalk.dim("[")}${chalk.white("10")}${chalk.dim("]:")} `);
-    budget = parseInt(budgetAns) || 10;
+    const defaultBudget = coachResult?.recommended.budget ?? 10;
+    const budgetAns = await ask(`\n  ${chalk.cyan("②")} ${chalk.dim("Budget")} ${chalk.dim("[")}${chalk.white(String(defaultBudget))}${chalk.dim("]:")} `);
+    budget = parseInt(budgetAns) || defaultBudget;
     if (budget < 1) { console.error(chalk.red(`  Budget must be a positive number`)); process.exit(1); }
 
     // ③ Max concurrency (skip if --concurrency set)
     if (cliFlags.concurrency) {
       concurrency = parseInt(cliFlags.concurrency);
     } else {
-      const defaultC = Math.min(5, budget);
+      const defaultC = Math.min(coachResult?.recommended.concurrency ?? 5, budget);
       const concAns = await ask(`\n  ${chalk.cyan("③")} ${chalk.dim("Max concurrency")} ${chalk.dim("[")}${chalk.white(String(defaultC))}${chalk.dim("]:")} `);
       concurrency = parseInt(concAns) || defaultC;
       if (concurrency < 1) concurrency = 1;
@@ -548,27 +568,34 @@ async function main() {
     }, 120);
     let models: Awaited<ReturnType<typeof fetchModels>>;
     try { models = await modelsPromise; } finally { clearInterval(modelSpinner); process.stdout.write(`\x1B[2K\r`); }
-    const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering  -- use your strongest)")}:`, models);
+    const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering  -- use your strongest)")}:`, models, coachResult?.recommended.plannerModel);
     plannerModel = plannerPick.model; plannerProvider = plannerPick.provider;
-    const workerPick = await pickModel(`${chalk.cyan("⑤")} Worker model ${chalk.dim("(what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models);
+    const workerPick = await pickModel(`${chalk.cyan("⑤")} Worker model ${chalk.dim("(what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models, coachResult?.recommended.workerModel);
     workerModel = workerPick.model; workerProvider = workerPick.provider;
 
     // ⑤b Optional fast model for quick tasks that will be verified
+    const suggestFast = !!coachResult?.recommended.fastModel;
     const fastChoice = await select(`${chalk.cyan("⑤b")} Fast model ${chalk.dim("(optional  -- Haiku/Qwen for quick tasks, checked by worker)")}:`, [
       { name: "Skip", value: "skip" as const, hint: "two-tier mode only (current setup)" },
       { name: "Pick a fast model", value: "pick" as const, hint: "Haiku, Qwen, or any provider  -- for well-scoped tasks" },
-    ]);
+    ], suggestFast ? 1 : 0);
     if (fastChoice === "pick") {
-      const fastPick = await pickModel(`${chalk.cyan("⑤c")} Fast model:`, models);
+      const fastPick = await pickModel(`${chalk.cyan("⑤c")} Fast model:`, models, coachResult?.recommended.fastModel ?? undefined);
       fastModel = fastPick.model; fastProvider = fastPick.provider;
     }
 
-    usageCap = await select(`${chalk.cyan("⑥")} Usage cap:`, [
+    const usageCapItems = [
       { name: "Unlimited", value: undefined as any, hint: "full capacity, wait through rate limits" },
       { name: "90%", value: 0.9, hint: "leave 10% for other work" },
       { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
       { name: "50%", value: 0.5, hint: "use half, keep the rest" },
-    ]);
+    ];
+    const coachCap = coachResult?.recommended.usageCap;
+    const usageCapDefault = coachCap == null ? 0
+      : coachCap >= 0.85 ? 1
+      : coachCap >= 0.6 ? 2
+      : 3;
+    usageCap = await select(`${chalk.cyan("⑥")} Usage cap:`, usageCapItems, usageCapDefault);
     const extraChoice = await select(`${chalk.cyan("⑦")} Allow extra usage ${chalk.dim("(billed separately)")}:`, [
       { name: "No", value: "no", hint: "stop when plan limits are reached" },
       { name: "Yes, with $ limit", value: "budget", hint: "set a spending cap" },
@@ -588,11 +615,14 @@ async function main() {
     } else if (cliYolo) {
       permissionMode = "bypassPermissions";
     } else {
-      permissionMode = await select(`${chalk.cyan("⑧")} Permissions:`, [
+      const permItems = [
         { name: "Auto", value: "auto" as PermMode, hint: "accept low-risk, reject high-risk" },
         { name: "Bypass all", value: "bypassPermissions" as PermMode, hint: "agents can run anything (yolo)" },
         { name: "Prompt each", value: "default" as PermMode, hint: "ask for every dangerous op" },
-      ]);
+      ];
+      const permDefault = coachResult?.recommended.permissionMode === "bypassPermissions" ? 1
+        : coachResult?.recommended.permissionMode === "default" ? 2 : 0;
+      permissionMode = await select(`${chalk.cyan("⑧")} Permissions:`, permItems, permDefault);
     }
 
     // ⑨ Worktrees + merge (skip if --yolo, --worktrees, --no-worktrees, or --merge set)
@@ -953,6 +983,8 @@ async function main() {
                 phase: "planning",
                 startedAt: new Date().toISOString(),
                 cwd,
+                coachedObjective: coachedOriginal,
+                coachedAt,
               });
             } catch {}
           };
@@ -1049,6 +1081,7 @@ async function main() {
     resuming, resumeState: resumeState ?? undefined,
     thinkingUsed, thinkingCost, thinkingIn, thinkingOut, thinkingTools, thinkingHistory,
     runStartedAt: resuming && resumeState?.startedAt ? new Date(resumeState.startedAt).getTime() : Date.now(),
+    coachedObjective: coachedOriginal, coachedAt,
   });
 }
 
