@@ -7,6 +7,29 @@ import chalk from "chalk";
 import { runPlannerQuery, attemptJsonParse, type PlannerLog } from "./planner-query.js";
 import { selectKey, ask } from "./cli.js";
 import type { ProviderConfig } from "./providers.js";
+import { envFor } from "./providers.js";
+
+// ── URL fetching for plan links in the objective ──
+
+const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
+
+async function fetchUrlContent(url: string, timeoutMs = 5_000): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const resp = await fetch(url, { signal: controller.signal, redirect: "follow" });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const ct = resp.headers.get("content-type") || "";
+    if (ct.includes("json")) return await resp.text();
+    // For HTML, extract body text (rough); for .md/.txt, return raw
+    if (ct.includes("text/html")) {
+      const html = await resp.text();
+      return html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 4000);
+    }
+    return (await resp.text()).slice(0, 4000);
+  } catch { return null; }
+}
 
 // ── User settings (~/.claude/claude-overnight/settings.json) ──
 
@@ -16,6 +39,8 @@ const SETTINGS_PATH = join(SETTINGS_DIR, "settings.json");
 export interface UserSettings {
   skipCoach?: boolean;
   lastCoachedAt?: number;
+  coachModel?: string;
+  coachProviderId?: string;
 }
 
 export function loadUserSettings(): UserSettings {
@@ -281,10 +306,22 @@ function renderProviders(providers: ProviderConfig[]): string {
   return lines.join("\n");
 }
 
-function renderRepoFacts(f: RepoFacts, rawObjective: string, providers: ProviderConfig[]): string {
+function renderRepoFacts(
+  f: RepoFacts,
+  rawObjective: string,
+  providers: ProviderConfig[],
+  cliFlags: Record<string, string>,
+  planContent: string | null,
+): string {
   const sections: string[] = [];
   sections.push(`# Raw user objective\n\n${rawObjective}`);
+  if (planContent) sections.push(`# Linked plan (fetched from URL in objective)\n\n${planContent}`);
   sections.push(`# Repo facts\n\n- cwd: ${f.cwd}\n- git branch: ${f.gitBranch || "(unknown)"}\n- source files (src|app|lib): ${f.srcFileCount}\n- prior claude-overnight runs: ${f.priorRuns}\n- .env present: ${f.hasEnv}\n- tests dir: ${f.hasTests}\n- lockfiles: ${f.lockfiles.join(", ") || "(none)"}`);
+  // CLI flags encode user intent — surface them so the coach can respect constraints.
+  if (Object.keys(cliFlags).length > 0) {
+    const flagLines = Object.entries(cliFlags).map(([k, v]) => `  --${k}=${v}`).join("\n");
+    sections.push(`# CLI flags (user-specified constraints)\n\n${flagLines}`);
+  }
   sections.push(`# Available providers (recommend ONLY models the user can reach)\n\n${renderProviders(providers)}`);
   if (f.packageJson) {
     const scripts = f.packageJson.scripts ? Object.entries(f.packageJson.scripts).slice(0, 15).map(([k, v]) => `  ${k}: ${v}`).join("\n") : "(none)";
@@ -303,6 +340,8 @@ export interface CoachContext {
   providers: ProviderConfig[];
   cliFlags: Record<string, string>;
   log?: PlannerLog;
+  coachModel?: string;
+  coachProvider?: ProviderConfig;
 }
 
 export async function runSetupCoach(
@@ -325,9 +364,21 @@ export async function runSetupCoach(
   const facts = collectRepoFacts(cwd);
   if (facts.srcFileCount > 1_000_000) return null;
 
-  const userMessage = renderRepoFacts(facts, rawObjective, ctx.providers);
+  // Fetch any URLs found in the objective so the coach sees plan content, not dead links.
+  const urls = rawObjective.match(URL_REGEX) ?? [];
+  let planContent: string | null = null;
+  if (urls.length > 0) {
+    const results = await Promise.all(urls.map(u => fetchUrlContent(u, 4_000)));
+    const fetched = results.filter(Boolean) as string[];
+    if (fetched.length > 0) {
+      planContent = fetched.map((c, i) => `[URL ${i + 1}: ${urls[i]}]\n${c}`).join("\n\n---\n\n");
+    }
+  }
+
+  const userMessage = renderRepoFacts(facts, rawObjective, ctx.providers, ctx.cliFlags, planContent);
   const prompt = `${skill}\n\n---\n\n${userMessage}\n\nRespond with the JSON object defined in "Invocation contract" only.`;
 
+  const model = ctx.coachModel ?? COACH_MODEL;
   const startedAt = Date.now();
   const spinner = setInterval(() => {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
@@ -337,14 +388,16 @@ export async function runSetupCoach(
 
   let raw: string;
   try {
+    const coachEnv = ctx.coachProvider ? envFor(ctx.coachProvider) : undefined;
     const queryPromise = runPlannerQuery(prompt, {
       cwd,
-      model: COACH_MODEL,
+      model,
       permissionMode: "bypassPermissions",
       outputFormat: COACH_SCHEMA,
       transcriptName: "coach",
       maxTurns: 3,
       tools: [],
+      env: coachEnv,
     }, () => {});
     const timeout = new Promise<string>((_, reject) => {
       setTimeout(() => reject(new Error(`coach timed out after ${Math.round(COACH_TIMEOUT_MS / 1000)}s`)), COACH_TIMEOUT_MS);
@@ -375,9 +428,8 @@ export async function runSetupCoach(
   // We don't auto-spawn anything (cursor proxy, key prompts, etc.) because
   // the user hasn't picked a provider yet — that happens in the pickers,
   // and each provider flow already runs its own setup when actually selected.
-  void ctx.cliFlags; // reserved for future use
 
-  renderCoachBlock(result, elapsedMs);
+  renderCoachBlock(result, elapsedMs, model);
 
   const choice = await selectKey("", [
     { key: "y", desc: " accept" },
@@ -395,17 +447,19 @@ export async function runSetupCoach(
     if (!amend) return null;
     const amendedPrompt = `${prompt}\n\n---\n\nUser amendment (apply and return a revised JSON object):\n${amend}`;
     try {
+      const coachEnv = ctx.coachProvider ? envFor(ctx.coachProvider) : undefined;
       const raw2 = await Promise.race([
         runPlannerQuery(amendedPrompt, {
-          cwd, model: COACH_MODEL, permissionMode: "bypassPermissions",
+          cwd, model, permissionMode: "bypassPermissions",
           outputFormat: COACH_SCHEMA, transcriptName: "coach-retry", maxTurns: 3, tools: [],
+          env: coachEnv,
         }, () => {}),
         new Promise<string>((_, reject) => setTimeout(() => reject(new Error("coach amendment timed out")), COACH_TIMEOUT_MS)),
       ]);
       const parsed2 = attemptJsonParse(raw2);
       const result2 = validateCoachOutput(parsed2);
       if (result2) {
-        renderCoachBlock(result2, Date.now() - startedAt);
+        renderCoachBlock(result2, Date.now() - startedAt, model);
         const confirm = await selectKey("", [
           { key: "y", desc: " accept" },
           { key: "s", desc: "kip coach" },
@@ -432,9 +486,9 @@ export async function runSetupCoach(
 
 // ── Rendering ──
 
-function renderCoachBlock(r: CoachResult, elapsedMs: number): void {
+function renderCoachBlock(r: CoachResult, elapsedMs: number, model: string): void {
   const elapsed = (elapsedMs / 1000).toFixed(1);
-  console.log(`\n  ${chalk.cyan("⚡")} ${chalk.bold("Coach")} ${chalk.dim(`(${COACH_MODEL}, ${elapsed}s)`)}\n`);
+  console.log(`\n  ${chalk.cyan("⚡")} ${chalk.bold("Coach")} ${chalk.dim(`(${model}, ${elapsed}s)`)}\n`);
   console.log(`  ${chalk.cyan("✦")} ${chalk.bold("Objective")}`);
   for (const line of r.improvedObjective.split("\n")) {
     console.log(`    ${line}`);

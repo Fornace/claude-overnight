@@ -49,6 +49,11 @@ export interface PlannerOpts {
    * Tools the planner agent may use. Defaults to the full Claude tool suite.
    */
   tools?: string[];
+  /**
+   * Explicit env overrides for this query. Takes precedence over the shared env resolver.
+   * Useful for one-off queries (e.g. coach) before the main resolver is built.
+   */
+  env?: Record<string, string>;
 }
 
 const DEFAULT_MAX_TURNS = 20;
@@ -190,7 +195,7 @@ async function runPlannerQueryOnce(
   let structuredOutput: unknown;
   const startedAt = Date.now();
   const isResume = !!opts.resumeSessionId;
-  const envOverride = _envResolver?.(opts.model);
+  const envOverride = opts.env ?? _envResolver?.(opts.model);
   const tname = opts.transcriptName;
   if (tname) {
     writeTranscriptEvent(tname, {

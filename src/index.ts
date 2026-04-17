@@ -13,6 +13,7 @@ import { setTranscriptRunDir } from "./transcripts.js";
 import {
   pickModel,
   loadProviders,
+  envFor,
   preflightProvider,
   buildEnvResolver,
   healthCheckCursorProxy,
@@ -41,7 +42,7 @@ import {
   createRunDir, updateLatestSymlink, readMdDir, saveRunState,
   autoMergeBranches,
 } from "./state.js";
-import { runSetupCoach, loadUserSettings, type CoachResult } from "./coach.js";
+import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL, type CoachResult } from "./coach.js";
 
 function countTasksInFile(path: string): number {
   try {
@@ -226,6 +227,7 @@ async function main() {
     --perm=MODE            Permission mode: auto, bypassPermissions, default ${chalk.dim("(default: auto)")}
     --yolo                 Shorthand for --perm=bypassPermissions --no-worktrees
     --no-coach             Skip the setup coach ${chalk.dim("(raw objective, no preflight rewrite)")}
+    --coach-model          Re-pick coach model ${chalk.dim("(overrides saved choice)")}
 
   ${chalk.cyan("Defaults")} ${chalk.dim("(non-interactive)")}
     model: first available    concurrency: 5    worktrees: auto    merge: yolo    perms: auto
@@ -538,7 +540,42 @@ async function main() {
     const coachEnabled = !argv.includes("--no-coach") && !loadUserSettings().skipCoach;
     let coachResult: CoachResult | null = null;
     if (coachEnabled) {
-      coachResult = await runSetupCoach(objective, cwd, { providers: loadProviders(), cliFlags });
+      const settings = loadUserSettings();
+      let coachModel = settings.coachModel;
+      let coachProvider: ProviderConfig | undefined;
+
+      if (!coachModel || argv.includes("--coach-model")) {
+        const hasAnthropicKey = !!(process.env.ANTHROPIC_API_KEY?.trim() || process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim());
+        const providers = loadProviders();
+        const cursorProviders = providers.filter(isCursorProxyProvider);
+        const qwenProviders = providers.filter(p => p.model?.toLowerCase().includes("qwen"));
+
+        const options: { key: string; desc: string }[] = [];
+        if (hasAnthropicKey) options.push({ key: "1", desc: ` — ${COACH_MODEL} (default, cheapest)` });
+        if (qwenProviders.length > 0) options.push({ key: "2", desc: ` — ${qwenProviders[0].displayName} (${qwenProviders[0].model})` });
+        if (cursorProviders.length > 0) options.push({ key: "3", desc: ` — ${cursorProviders[0].displayName} (${cursorProviders[0].model})` });
+        options.push({ key: "o", desc: "ther…" });
+
+        const choice = await selectKey("  Which model should the coach use?", options);
+        if (choice === "o") {
+          const pick = await pickModel(`${chalk.cyan("①b")} Coach model:`, await fetchModels(5_000).catch(() => []), COACH_MODEL);
+          coachModel = pick.model;
+          if (pick.provider) {
+            coachProvider = pick.provider;
+          } else {
+            coachProvider = loadProviders().find(p => p.id === pick.providerId) ?? loadProviders().find(p => p.model === pick.model);
+          }
+        } else {
+          if (choice === "1") { coachModel = COACH_MODEL; }
+          else if (choice === "2") { coachModel = qwenProviders[0].model; coachProvider = qwenProviders[0]; }
+          else if (choice === "3") { coachModel = cursorProviders[0].model; coachProvider = cursorProviders[0]; }
+        }
+        saveUserSettings({ ...settings, coachModel, coachProviderId: coachProvider?.id });
+      } else if (settings.coachProviderId) {
+        coachProvider = loadProviders().find(p => p.id === settings.coachProviderId);
+      }
+
+      coachResult = await runSetupCoach(objective, cwd, { providers: loadProviders(), cliFlags, coachModel, coachProvider });
       if (coachResult) {
         coachedOriginal = objective;
         coachedAt = Date.now();
