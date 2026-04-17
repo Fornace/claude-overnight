@@ -161,10 +161,21 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
   const estRaw = parsed.estimatedSessionsRemaining;
   const estimatedSessionsRemaining = typeof estRaw === "number" && estRaw >= 0 ? Math.round(estRaw) : undefined;
 
+  // Resolve steering role strings ("worker"/"fast"/"planner"/"default") to actual model IDs.
+  const resolveModel = (role: string): string => {
+    switch (role.toLowerCase()) {
+      case "worker": return workerModel;
+      case "planner": return plannerModel;
+      case "fast": return fastModel ?? workerModel;
+      case "default": return workerModel;
+      default: return role; // already a real model ID
+    }
+  };
+
   let tasks: Task[] = (parsed.tasks || []).map((t: any, i: number) => ({
     id: String(i),
     prompt: typeof t === "string" ? t : t.prompt,
-    ...(t.model && { model: t.model }),
+    ...(t.model && { model: resolveModel(t.model) }),
     ...(t.noWorktree && { noWorktree: true }),
     ...(t.type && { type: t.type }),
   }));
