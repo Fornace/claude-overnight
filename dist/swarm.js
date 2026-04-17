@@ -451,7 +451,7 @@ export class Swarm {
             return;
         }
         const id = this.nextId++;
-        const agent = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0, contextTokens: 0 };
+        const agent = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0, contextTokens: 0, model: task.model || this.model };
         this.agents.push(agent);
         let agentCwd = task.agentCwd || task.cwd || this.config.cwd;
         if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree && !task.agentCwd) {
@@ -725,16 +725,16 @@ export class Swarm {
                 const u = m.message?.usage;
                 if (u) {
                     const turnTotal = sumUsageTokens(u);
-                    if (turnTotal > (agent.contextTokens ?? 0)) {
-                        agent.contextTokens = turnTotal;
-                        if (!this.ctxWarned.has(agent)) {
-                            const mdl = agent.task.model || this.config.model || "unknown";
-                            const safe = getModelCapability(mdl).safeContext;
-                            if (safe > 0 && turnTotal > safe * 0.8) {
-                                this.ctxWarned.add(agent);
-                                const pct = Math.round((turnTotal / safe) * 100);
-                                this.log(agent.id, `\u26A0 context ${pct}% of safe window — task may degrade`);
-                            }
+                    agent.contextTokens = turnTotal;
+                    if (turnTotal > (agent.peakContextTokens ?? 0))
+                        agent.peakContextTokens = turnTotal;
+                    if (!this.ctxWarned.has(agent)) {
+                        const mdl = agent.task.model || this.config.model || "unknown";
+                        const safe = getModelCapability(mdl).safeContext;
+                        if (safe > 0 && turnTotal > safe * 0.8) {
+                            this.ctxWarned.add(agent);
+                            const pct = Math.round((turnTotal / safe) * 100);
+                            this.log(agent.id, `\u26A0 context ${pct}% of safe window — task may degrade`);
                         }
                     }
                 }

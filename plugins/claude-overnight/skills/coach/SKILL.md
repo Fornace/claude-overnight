@@ -145,6 +145,13 @@ Common provider shapes you may see:
 - **Cursor proxy** — line includes `· cursor proxy` ⇒ Cursor model IDs are reachable (`auto`, `composer-2`, `claude-opus-4-7`, etc.).
 - **Custom Anthropic-compatible** — JWT or stored-key provider with its own `model="…"` ⇒ only that exact model ID is reachable.
 
+# CLI flags and linked content
+
+The input may include two optional sections before the provider list:
+
+- **`# CLI flags (user-specified constraints)`** — flags the user passed on the command line (e.g. `--budget=20`, `--model=qwen3.6-plus`, `--concurrency=3`). These encode explicit user intent. **Respect them**: do not recommend a different model if `--model` is set, do not suggest a budget far from `--budget`, and use `--concurrency` as the user's preferred concurrency unless the matrix strongly argues otherwise.
+- **`# Linked plan (fetched from URL in objective)`** — if the user's objective contained a URL (e.g. a link to a plan JSON, design doc, or task file), the host fetched it and appended the content here. Use this content to understand scope, deliverables, and constraints. Do NOT rewrite or discard deliverables the user already specified in the linked plan.
+
 If the recommended planner/worker requires a provider that is NOT in the input, emit a `warning` checklist item with the relevant `remediation` slug:
 
 | Slug                  | When to emit                                                                  |

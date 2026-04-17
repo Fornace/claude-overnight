@@ -336,18 +336,10 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     sections(): Section[] {
       const secs: Section[] = [];
 
-      // Expanded panel (debrief, ask, custom) — rendered as first section
-      if (panel?.visible && panel.state.expanded) {
-        const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
-        const panelRows = maxRows != null ? Math.max(4, maxRows - 6) : 12;
-        const lines = panel.renderExpanded(ww, panelRows);
-        if (lines.length > 0) secs.push({ title: "", rows: lines });
-      }
-
       // Agent table (undecorated  -- raw header + rows)
       if (show.length > 0) {
         const rows: string[] = [
-          chalk.gray("  #   Status   Task" + " ".repeat(Math.max(1, (process.stdout.columns ?? 80) || 80, 60) - 56)) + "Action",
+          chalk.gray("  #   Model              Status   Task" + " ".repeat(Math.max(1, (process.stdout.columns ?? 80) || 80, 60) - 68)) + "Action",
           chalk.gray("  " + "\u2500".repeat(Math.min(Math.max((process.stdout.columns ?? 80) || 80, 60) - 4, 100))),
         ];
         for (const a of show) rows.push(fmtRow(a, (process.stdout.columns ?? 80) || 80, a.id === (selectedAgentId ?? -1)));
@@ -371,10 +363,10 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
         if (detailAgent.filesChanged != null) meta.push(chalk.dim(`${detailAgent.filesChanged} files`));
         if (detailAgent.costUsd != null) meta.push(chalk.yellow(`$${detailAgent.costUsd.toFixed(3)}`));
         if (detailAgent.toolCalls > 0) meta.push(chalk.dim(`${detailAgent.toolCalls} tools`));
-        if ((detailAgent.contextTokens ?? 0) > 0) {
+        if ((detailAgent.peakContextTokens ?? detailAgent.contextTokens ?? 0) > 0) {
           const mdl = detailAgent.task.model || swarm.model || "unknown";
           const safe = getModelCapability(mdl).safeContext;
-          const tok = detailAgent.contextTokens ?? 0;
+          const tok = detailAgent.peakContextTokens ?? detailAgent.contextTokens ?? 0;
           const { pct, color } = contextFillInfo(tok, safe);
           meta.push(color(`ctx ${fmtTokens(tok)}/${fmtTokens(safe)} (${pct}%)`));
         }
@@ -567,13 +559,6 @@ export function renderSteeringFrame(
       const secs: Section[] = [];
       const ww = Math.max((process.stdout.columns ?? 80) || 80, 60);
 
-      // Expanded panel (debrief, ask, custom) — rendered as first section
-      if (panel?.visible && panel.state.expanded) {
-        const panelRows = maxRows != null ? Math.max(4, maxRows - 6) : 12;
-        const lines = panel.renderExpanded(ww, panelRows);
-        if (lines.length > 0) secs.push({ title: "", rows: lines });
-      }
-
       // Objective (undecorated  -- raw line)
       if (ctx?.objective) {
         const obj = ctx.objective.replace(/\s+/g, " ").trim();
@@ -604,6 +589,8 @@ export function renderSteeringFrame(
       // Planner activity (decorated)
       const plannerRows: string[] = [];
       const events = data.events.slice(-15);
+      const plannerModel = rlGetter ? rlGetter().model : runInfo.model;
+      const plannerModelTag = plannerModel ? chalk.dim(` \u00b7 ${modelDisplayName(plannerModel)}`) : "";
       if (events.length === 0) {
         plannerRows.push(chalk.dim("  (waiting for planner\u2026)"));
       } else {
@@ -620,7 +607,7 @@ export function renderSteeringFrame(
           }
         }
       }
-      secs.push({ title: "Planner activity", rows: plannerRows });
+      secs.push({ title: `Planner activity${plannerModelTag}`, rows: plannerRows });
 
       // Status line (undecorated)
       const liveClean = data.statusLine.replace(/\n/g, " ");
@@ -683,12 +670,13 @@ export function renderSummary(swarm: Swarm): string {
   const out: string[] = [];
 
   const ctxW = 5;
-  const fixedW = 3 + 6 + 8 + 5 + 5 + 8 + ctxW + 14;
+  const modelW = 16;
+  const fixedW = 3 + 6 + modelW + 8 + 5 + 5 + 8 + ctxW + 14;
   const taskW = Math.max(10, w - fixedW);
 
   out.push("");
   out.push(chalk.gray(
-    "  " + "#".padStart(3) + "  " + "Status".padEnd(6) + "  " + "Task".padEnd(taskW) +
+    "  " + "#".padStart(3) + "  " + "Status".padEnd(6) + "  " + "Model".padEnd(modelW) + "  " + "Task".padEnd(taskW) +
     "  " + "Duration".padStart(8) + "  " + "Files".padStart(5) + "  " + "Tools".padStart(5) + "  " + "Ctx%".padStart(ctxW) + "  " + "Cost".padStart(8),
   ));
   out.push(chalk.gray("  " + "\u2500".repeat(Math.min(w - 4, fixedW + taskW))));
@@ -713,21 +701,22 @@ export function renderSummary(swarm: Swarm): string {
         : a.status === "running" ? chalk.blue("~ run ")
         : a.status === "paused" ? chalk.yellow("\u23F8 paused")
         : chalk.red("\u2717 err ");
+      const mdl = a.model || a.task.model || swarm.model || "unknown";
+      const modelStr = chalk.dim(truncate(modelDisplayName(mdl), modelW)).padEnd(modelW);
       const task = truncate(a.task.prompt, taskW).padEnd(taskW);
       const durMs = a.startedAt != null ? (a.finishedAt ?? Date.now()) - a.startedAt : 0;
       const dur = fmtDur(durMs).padStart(8);
       const files = String(a.filesChanged ?? 0).padStart(5);
       const tools = String(a.toolCalls).padStart(5);
       const cost = a.costUsd != null ? `$${a.costUsd.toFixed(3)}`.padStart(8) : "".padStart(8);
-      const mdl = a.task.model || swarm.model || "unknown";
       const safe = getModelCapability(mdl).safeContext;
-      const ctxTok = a.contextTokens ?? 0;
+      const ctxTok = a.peakContextTokens ?? a.contextTokens ?? 0;
       const { pct: ctxPct, color: ctxColor } = ctxTok > 0 ? contextFillInfo(ctxTok, safe) : { pct: 0, color: chalk.gray };
       if (ctxPct > peakCtxPct) peakCtxPct = ctxPct;
       const ctxCell = ctxTok > 0 ? `${ctxPct}%`.padStart(ctxW) : "".padStart(ctxW);
       totalDurMs += durMs; totalFiles += a.filesChanged ?? 0; totalTools += a.toolCalls; totalCost += a.costUsd ?? 0;
       const color = ok ? chalk.white : a.status === "running" ? chalk.blue : a.status === "paused" ? chalk.yellow : chalk.red;
-      out.push(color(`  ${id}  ${status}  ${task}  ${dur}  ${files}  ${tools}  `) + (ctxTok > 0 ? ctxColor(ctxCell) : chalk.gray(ctxCell)) + color(`  ${cost}`));
+      out.push(color(`  ${id}  ${status}  `) + modelStr + color(`  ${task}  ${dur}  ${files}  ${tools}  `) + (ctxTok > 0 ? ctxColor(ctxCell) : chalk.gray(ctxCell)) + color(`  ${cost}`));
     }
   }
 
@@ -745,13 +734,16 @@ export function renderSummary(swarm: Swarm): string {
 
 function fmtRow(a: AgentState, w: number, selected = false): string {
   const id = selected ? chalk.cyan.bold(String(a.id).padStart(3)) : String(a.id).padStart(3);
+  const mdl = modelDisplayName(a.model || a.task.model || "unknown");
+  const modelW = 18;
+  const modelStr = truncate(mdl, modelW).padEnd(modelW);
   const elapsed = a.status === "running" && a.startedAt ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt)) : "";
   const spin = SPINNER[Math.floor(Date.now() / 250) % SPINNER.length];
   const icon = a.status === "running"
     ? (a.blockedAt ? chalk.yellow("\u25CF blk") : chalk.blue(`${spin} run`)) + elapsed
     : a.status === "paused" ? chalk.yellow("\u23F8 paused")
     : a.status === "done" ? chalk.green("\u2713 done") : chalk.red("\u2717 err ");
-  const taskW = Math.max(20, Math.min(36, w - 50));
+  const taskW = Math.max(20, Math.min(36, w - 50 - modelW - 6));
   const task = truncate(a.task.prompt, taskW).padEnd(taskW);
 
   let action: string;
@@ -772,5 +764,5 @@ function fmtRow(a: AgentState, w: number, selected = false): string {
   } else {
     action = chalk.red(truncate(a.error || "error", 24));
   }
-  return `  ${id}  ${icon}  ${task}  ${action}`;
+  return `  ${id}  ${modelStr}  ${icon}  ${task}  ${action}`;
 }

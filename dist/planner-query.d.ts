@@ -13,7 +13,7 @@ export interface PlannerRateLimitInfo {
     windows: Map<string, RateLimitWindow>;
     resetsAt?: number;
     costUsd: number;
-    /** Peak total input tokens (input + cache) in any single planner turn — proxy for context-window occupancy. */
+    /** Total input tokens (input + cache) from the most recent planner turn — proxy for context-window occupancy. */
     contextTokens?: number;
     /** Model used by the current planner query (for safeContext lookup). */
     model?: string;
@@ -37,6 +37,13 @@ export interface PlannerOpts {
      * Tools the planner agent may use. Defaults to the full Claude tool suite.
      */
     tools?: string[];
+    /**
+     * Explicit env overrides for this query. Takes precedence over the shared env resolver.
+     * Useful for one-off queries (e.g. coach) before the main resolver is built.
+     */
+    env?: Record<string, string>;
+    /** AITurn ID to update with token/cost info during streaming. */
+    turnId?: string;
 }
 export declare function setPlannerEnvResolver(fn: ((model?: string) => Record<string, string> | undefined) | undefined): void;
 export declare function getTotalPlannerCost(): number;

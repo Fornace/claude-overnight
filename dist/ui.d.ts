@@ -122,12 +122,17 @@ export declare class RunDisplay {
     private setupHotkeys;
     /** Handle a pasted block. Returns true if the frame needs a redraw. */
     private handlePaste;
+    /** Keyboard handler used only while the panel is expanded fullscreen.
+     *  Handles scroll + close. Swallows everything else so the normal hotkeys
+     *  (b/t/c/p/s/?/d/0-9) do not fire while the user is reading. */
+    private handlePanelKey;
     /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw.
      *
      * Demux pipeline  -- routes escape sequences and modifiers BEFORE hotkey matching:
      *   Raw stdin chunk → splitPaste
      *     ├─ paste → handlePaste
      *     └─ typed → demux
+     *          0. panel expanded  → handlePanelKey (steals all input)
      *          1. ESC + [A/B/C/D  → navigate; other CSI → swallow
      *          2. ESC + non-[     → Alt/Option+key → swallow
      *          3. ESC alone       → cancel input / close detail / dismiss panel

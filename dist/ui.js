@@ -389,12 +389,19 @@ export class RunDisplay {
         }
     }
     render(maxRows) {
+        const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
+        // Fullscreen panel takes over the entire terminal when expanded —
+        // all of the normal UI (header, agent list, footer, input prompt) is
+        // hidden behind it until the user presses Esc or Ctrl-O to collapse.
+        if (this.panel.visible && this.panel.state.expanded) {
+            const h = maxRows ?? ((process.stdout.rows || 40) - 1);
+            return this.panel.renderFullscreen(w, h);
+        }
         // Compute how many rows the bottom area (input prompt + collapsed panel) need.
         const inputPrompt = this.renderInputPrompt();
-        const panelCollapsed = this.panel.visible && !this.panel.state.expanded
-            ? this.panel.renderCollapsed(Math.max((process.stdout.columns ?? 80) || 80, 60))
+        const panelCollapsed = this.panel.visible
+            ? this.panel.renderCollapsed(w)
             : "";
-        const panelExpanded = this.panel.visible && this.panel.state.expanded ? 1 : 0; // 1 = header row, content handled by frame
         const bottom = inputPrompt + (panelCollapsed ? "\n" + panelCollapsed : "");
         const bottomRows = bottom ? (bottom.match(/\n/g) || []).length + 1 : 0;
         const frameBudget = maxRows != null ? maxRows - bottomRows : undefined;
@@ -489,12 +496,85 @@ export class RunDisplay {
         }
         return false;
     }
+    /** Keyboard handler used only while the panel is expanded fullscreen.
+     *  Handles scroll + close. Swallows everything else so the normal hotkeys
+     *  (b/t/c/p/s/?/d/0-9) do not fire while the user is reading. */
+    handlePanelKey(s) {
+        const bodyRows = Math.max(3, (process.stdout.rows || 40) - 7);
+        // CSI sequences: arrows, PgUp/PgDn, Home/End
+        if (s.startsWith("\x1B[")) {
+            if (s === "\x1B[A") {
+                this.panel.scroll("up", bodyRows);
+                return true;
+            }
+            if (s === "\x1B[B") {
+                this.panel.scroll("down", bodyRows);
+                return true;
+            }
+            if (s === "\x1B[5~") {
+                this.panel.pageScroll("up", bodyRows);
+                return true;
+            }
+            if (s === "\x1B[6~") {
+                this.panel.pageScroll("down", bodyRows);
+                return true;
+            }
+            if (s === "\x1B[H" || s === "\x1B[1~") {
+                this.panel.scrollToTop();
+                return true;
+            }
+            if (s === "\x1B[F" || s === "\x1B[4~") {
+                this.panel.scrollToBottom(bodyRows);
+                return true;
+            }
+            return false; // swallow other CSIs silently
+        }
+        // Bare ESC: collapse
+        if (s === "\x1B") {
+            this.panel.collapse();
+            return true;
+        }
+        // Ctrl-O: toggle (collapse)
+        if (s === "\x0F") {
+            this.panel.toggle();
+            return true;
+        }
+        // Ctrl-C: keep the usual abort / exit behavior even while expanded
+        if (s === "\x03") {
+            if (this.swarm && !this.swarm.aborted) {
+                this.swarm.abort();
+                return true;
+            }
+            process.exit(0);
+        }
+        // Vim-style jumps
+        if (s === "g") {
+            this.panel.scrollToTop();
+            return true;
+        }
+        if (s === "G") {
+            this.panel.scrollToBottom(bodyRows);
+            return true;
+        }
+        // Space / j / k as extra scroll conveniences
+        if (s === " " || s === "j") {
+            this.panel.scroll("down", bodyRows);
+            return true;
+        }
+        if (s === "k") {
+            this.panel.scroll("up", bodyRows);
+            return true;
+        }
+        // Swallow everything else
+        return false;
+    }
     /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw.
      *
      * Demux pipeline  -- routes escape sequences and modifiers BEFORE hotkey matching:
      *   Raw stdin chunk → splitPaste
      *     ├─ paste → handlePaste
      *     └─ typed → demux
+     *          0. panel expanded  → handlePanelKey (steals all input)
      *          1. ESC + [A/B/C/D  → navigate; other CSI → swallow
      *          2. ESC + non-[     → Alt/Option+key → swallow
      *          3. ESC alone       → cancel input / close detail / dismiss panel
@@ -504,27 +584,17 @@ export class RunDisplay {
      */
     handleTyped(s) {
         const lc = this.liveConfig;
+        // ── 0. Fullscreen panel owns the keyboard ──
+        // While the interactive panel is expanded it takes over the screen and
+        // steals every key except Esc, Ctrl-O (close), Ctrl-C (abort), and scroll.
+        // Hotkeys like b/t/c/p/s/? are intentionally swallowed so the user can
+        // read without triggering side effects.
+        if (this.panel.state.expanded) {
+            return this.handlePanelKey(s);
+        }
         // ── 1. Arrow keys: \x1B[A = up, \x1B[B = down, \x1B[C = right, \x1B[D = left ──
         if (s.startsWith("\x1B[")) {
             const dir = s[2];
-            // When panel is expanded, arrows scroll the panel content
-            if (this.panel.state.expanded) {
-                const rows = Math.max(4, (process.stdout.rows || 40) - 10);
-                if (dir === "A") {
-                    this.panel.scroll("up", rows);
-                    return true;
-                }
-                if (dir === "B") {
-                    this.panel.scroll("down", rows);
-                    return true;
-                }
-                // Left/right: collapse or pass through
-                if (dir === "D") {
-                    this.panel.collapse();
-                    return true;
-                }
-                return true;
-            }
             if (dir === "A") {
                 this.navigate("up");
                 return true;

@@ -80,8 +80,12 @@ export interface AgentState {
     filesChanged?: number;
     /** Unix timestamp (ms) when this agent entered a rate-limit wait inside its retry loop. Cleared when work resumes. */
     blockedAt?: number;
-    /** Peak total input tokens (input + cache_read + cache_creation) seen in any single turn — a proxy for current context-window occupancy. */
+    /** Total input tokens (input + cache_read + cache_creation) from the most recent turn — a proxy for current context-window occupancy. */
     contextTokens?: number;
+    /** Highest turn total ever seen for this agent (across all turns, including compaction peaks). */
+    peakContextTokens?: number;
+    /** Resolved model this agent is running (task override or swarm default). */
+    model?: string;
 }
 /** A timestamped log line from an agent's execution. */
 export interface LogEntry {
@@ -91,6 +95,37 @@ export interface LogEntry {
     agentId: number;
     /** The log message content. */
     text: string;
+}
+/**
+ * Which phase of the run an AI turn belongs to.
+ */
+export type AITurnPhase = "coach" | "identify-themes" | "thinking-wave" | "plan" | "orchestrate" | "plan-refine" | "plan-chat" | "ask" | "debrief" | "steer" | "swarm" | "review-wave" | "review-run" | "health-check";
+/** Lifecycle status of one AI turn. */
+export type AITurnStatus = "pending" | "running" | "done" | "error" | "stopped";
+/** One AI-powered invocation (coach query, planner call, swarm agent, etc.). */
+export interface AITurn {
+    /** Unique ID (e.g. "coach-0", "steer-2", "swarm-a7"). */
+    id: string;
+    /** High-level phase this turn belongs to. */
+    phase: AITurnPhase;
+    /** Human-readable label shown in the context meter. */
+    label: string;
+    /** Model used for this turn. */
+    model?: string;
+    /** Tokens consumed (input + cache_read + cache_creation) in the last/only turn. */
+    contextTokens?: number;
+    /** Peak context tokens seen during this turn's lifetime. */
+    peakContextTokens?: number;
+    /** Estimated cost in USD. */
+    costUsd?: number;
+    /** Current lifecycle status. */
+    status: AITurnStatus;
+    /** When this turn started (ms). */
+    startedAt?: number;
+    /** When this turn finished (ms). */
+    finishedAt?: number;
+    /** Error message if failed. */
+    error?: string;
 }
 /**
  * How the SDK handles permission prompts for potentially dangerous operations.

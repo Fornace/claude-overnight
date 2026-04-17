@@ -3,6 +3,8 @@ import type { ProviderConfig } from "./providers.js";
 export interface UserSettings {
     skipCoach?: boolean;
     lastCoachedAt?: number;
+    coachModel?: string;
+    coachProviderId?: string;
 }
 export declare function loadUserSettings(): UserSettings;
 export declare function saveUserSettings(s: UserSettings): void;
@@ -41,5 +43,7 @@ export interface CoachContext {
     providers: ProviderConfig[];
     cliFlags: Record<string, string>;
     log?: PlannerLog;
+    coachModel?: string;
+    coachProvider?: ProviderConfig;
 }
 export declare function runSetupCoach(rawObjective: string, cwd: string, ctx: CoachContext): Promise<CoachResult | null>;

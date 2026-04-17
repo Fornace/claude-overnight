@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { NudgeError, extractToolTarget, sumUsageTokens } from "./types.js";
 import type { Task, PermMode, RateLimitWindow } from "./types.js";
 import { writeTranscriptEvent } from "./transcripts.js";
+import { getTurn, updateTurn } from "./turns.js";
 
 /** Log a tool invocation with a short target for planner queries. */
 const logTool = (label: string, input: Record<string, unknown> | undefined): string => {
@@ -25,7 +26,7 @@ export interface PlannerRateLimitInfo {
   windows: Map<string, RateLimitWindow>;
   resetsAt?: number;
   costUsd: number;
-  /** Peak total input tokens (input + cache) in any single planner turn — proxy for context-window occupancy. */
+  /** Total input tokens (input + cache) from the most recent planner turn — proxy for context-window occupancy. */
   contextTokens?: number;
   /** Model used by the current planner query (for safeContext lookup). */
   model?: string;
@@ -54,6 +55,8 @@ export interface PlannerOpts {
    * Useful for one-off queries (e.g. coach) before the main resolver is built.
    */
   env?: Record<string, string>;
+  /** AITurn ID to update with token/cost info during streaming. */
+  turnId?: string;
 }
 
 const DEFAULT_MAX_TURNS = 20;
@@ -371,10 +374,20 @@ async function runPlannerQueryOnce(
         const u = (msg as any).message?.usage;
         if (u) {
           const turnTotal = sumUsageTokens(u);
-          if (turnTotal > (_plannerRateLimitInfo.contextTokens ?? 0)) _plannerRateLimitInfo.contextTokens = turnTotal;
+          _plannerRateLimitInfo.contextTokens = turnTotal;
           if (turnTotal > _peakPlannerContextTokens) {
             _peakPlannerContextTokens = turnTotal;
             _peakPlannerContextModel = opts.model;
+          }
+          if (opts.turnId) {
+            const turn = getTurn(opts.turnId);
+            if (turn) {
+              updateTurn(turn, {
+                contextTokens: turnTotal,
+                peakContextTokens: Math.max(turn.peakContextTokens ?? 0, turnTotal),
+                costUsd: typeof (msg as any).total_cost_usd === "number" ? (msg as any).total_cost_usd : undefined,
+              });
+            }
           }
         }
         const content = (msg as any).message?.content;

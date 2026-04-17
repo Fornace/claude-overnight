@@ -29,18 +29,21 @@ function fakeAssistant(input, cacheRead = 0, cacheCreate = 0) {
     };
 }
 describe("context token accumulation", () => {
-    it("tracks peak turn total (input + cache) across assistant messages", () => {
+    it("tracks the latest turn total (input + cache) across assistant messages", () => {
         const swarm = makeSwarm();
         const agent = makeAgent();
         swarm.agents.push(agent);
         swarm.handleMsg(agent, fakeAssistant(1000, 500, 0));
         assert.equal(agent.contextTokens, 1500);
-        // Smaller next turn must not decrease peak.
+        assert.equal(agent.peakContextTokens, 1500);
+        // A smaller next turn (e.g. post-compaction) must drop the reported value.
         swarm.handleMsg(agent, fakeAssistant(800, 200, 0));
-        assert.equal(agent.contextTokens, 1500);
-        // Larger turn replaces peak.
+        assert.equal(agent.contextTokens, 1000);
+        assert.equal(agent.peakContextTokens, 1500); // peak preserved
+        // A larger turn reflects the new occupancy and raises the peak.
         swarm.handleMsg(agent, fakeAssistant(2000, 1000, 100));
         assert.equal(agent.contextTokens, 3100);
+        assert.equal(agent.peakContextTokens, 3100);
     });
     it("is resilient to missing usage", () => {
         const swarm = makeSwarm();
@@ -48,6 +51,7 @@ describe("context token accumulation", () => {
         swarm.agents.push(agent);
         swarm.handleMsg(agent, { type: "assistant", message: { content: [] } });
         assert.equal(agent.contextTokens, 0);
+        assert.equal(agent.peakContextTokens ?? 0, 0);
     });
     it("logs a saturation warning when crossing 80% of safeContext", () => {
         const swarm = makeSwarm();

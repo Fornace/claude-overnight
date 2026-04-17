@@ -122,7 +122,7 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
     let structuredOutput;
     const startedAt = Date.now();
     const isResume = !!opts.resumeSessionId;
-    const envOverride = _envResolver?.(opts.model);
+    const envOverride = opts.env ?? _envResolver?.(opts.model);
     const tname = opts.transcriptName;
     if (tname) {
         writeTranscriptEvent(tname, {
@@ -307,8 +307,7 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
                 const u = msg.message?.usage;
                 if (u) {
                     const turnTotal = sumUsageTokens(u);
-                    if (turnTotal > (_plannerRateLimitInfo.contextTokens ?? 0))
-                        _plannerRateLimitInfo.contextTokens = turnTotal;
+                    _plannerRateLimitInfo.contextTokens = turnTotal;
                     if (turnTotal > _peakPlannerContextTokens) {
                         _peakPlannerContextTokens = turnTotal;
                         _peakPlannerContextModel = opts.model;

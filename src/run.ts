@@ -471,7 +471,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     accCompleted += swarm.completed; accFailed += swarm.failed;
     accTools += swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
     for (const a of swarm.agents) {
-      const tok = a.contextTokens ?? 0;
+      const tok = a.peakContextTokens ?? a.contextTokens ?? 0;
       if (tok <= 0) continue;
       const mdl = a.task.model || swarm.model || "unknown";
       const safe = getModelCapability(mdl).safeContext;

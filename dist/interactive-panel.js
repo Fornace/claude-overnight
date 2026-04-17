@@ -1,16 +1,21 @@
-import chalk from "chalk";
 const DARK_GREEN_BG = "\x1B[48;5;22m";
 const LIGHT_GREEN_FG = "\x1B[38;5;156m";
+const BRIGHT_WHITE_FG = "\x1B[38;5;231m";
+const SOFT_GREEN_FG = "\x1B[38;5;114m";
 const RESET = "\x1B[0m";
-function greenBg(text) {
-    return `${DARK_GREEN_BG}${LIGHT_GREEN_FG} ${text} ${RESET}`;
-}
-function greenBgLine(text, width) {
-    const padded = text.padEnd(Math.max(0, width));
-    return `${DARK_GREEN_BG}${LIGHT_GREEN_FG}${padded}${RESET}`;
+function padTo(s, width) {
+    if (s.length >= width)
+        return s.slice(0, width);
+    return s + " ".repeat(width - s.length);
 }
 function truncate(s, max) {
+    if (max <= 1)
+        return s.slice(0, Math.max(0, max));
     return s.length <= max ? s : s.slice(0, max - 1) + "\u2026";
+}
+/** Wrap a plain (ANSI-free) line in the dark-green bg, padded to width. */
+function bgLine(text, width) {
+    return `${DARK_GREEN_BG}${LIGHT_GREEN_FG}${padTo(text, width)}${RESET}`;
 }
 export class InteractivePanel {
     state = {
@@ -20,26 +25,20 @@ export class InteractivePanel {
         header: "",
         preview: "",
         body: "",
-        inputActive: false,
     };
-    /** Cached non-empty body lines — rebuilt when body changes. */
     _bodyLines = [];
-    /** Set or clear the panel content. Mode "none" hides it. */
     set(params) {
         this.state.mode = params.mode;
         this.state.header = params.header;
         this.state.preview = params.preview;
         this.state.body = params.body;
-        // Rebuild cached lines and reset scroll only when content changes
         this._bodyLines = params.body.split("\n").filter(l => l.length > 0);
         this.state.scrollOffset = 0;
     }
-    /** Collapse the panel back to the compact bar. */
     collapse() {
         this.state.expanded = false;
         this.state.scrollOffset = 0;
     }
-    /** Toggle expanded/collapsed state. */
     toggle() {
         if (this.state.mode === "none")
             return;
@@ -47,7 +46,6 @@ export class InteractivePanel {
         if (!this.state.expanded)
             this.state.scrollOffset = 0;
     }
-    /** Scroll up/down within the expanded body. */
     scroll(direction, visibleRows) {
         if (!this.state.expanded)
             return;
@@ -59,53 +57,92 @@ export class InteractivePanel {
             this.state.scrollOffset = Math.min(maxScroll, this.state.scrollOffset + 1);
         }
     }
-    /** Whether the panel is currently visible (any mode other than none). */
-    get visible() {
-        return this.state.mode !== "none";
+    pageScroll(direction, visibleRows) {
+        if (!this.state.expanded)
+            return;
+        const maxScroll = Math.max(0, this._bodyLines.length - visibleRows);
+        const delta = Math.max(1, visibleRows - 1);
+        if (direction === "up") {
+            this.state.scrollOffset = Math.max(0, this.state.scrollOffset - delta);
+        }
+        else {
+            this.state.scrollOffset = Math.min(maxScroll, this.state.scrollOffset + delta);
+        }
     }
-    /** Render the collapsed compact bar. Returns empty string if no content. */
+    scrollToTop() { this.state.scrollOffset = 0; }
+    scrollToBottom(visibleRows) {
+        this.state.scrollOffset = Math.max(0, this._bodyLines.length - visibleRows);
+    }
+    get visible() { return this.state.mode !== "none"; }
+    /** Compact card — padded green-bg block with title + preview. Multi-line. */
     renderCollapsed(width) {
         if (this.state.mode === "none" || !this.state.preview)
             return "";
-        const icon = this.state.expanded ? "\u25BC" : "\u25B6";
-        const modeLabel = this.state.header;
-        const hint = chalk.dim(`[Ctrl-O expand]`);
-        const content = truncate(this.state.preview, width - modeLabel.length - hint.length - 8);
-        return `  ${greenBg(`${icon} ${modeLabel}`)} ${content} ${hint}`;
+        const boxW = Math.min(Math.max(40, width - 4), 140);
+        const icon = "\u25B8"; // ▸
+        const title = ` ${icon}  ${this.state.header}`;
+        const hint = `Ctrl-O expand `;
+        const titleRoom = Math.max(4, boxW - hint.length - 2);
+        const titleTrim = truncate(title, titleRoom);
+        const gap = Math.max(1, boxW - titleTrim.length - hint.length);
+        const titleRow = titleTrim + " ".repeat(gap) + hint;
+        const previewText = this.state.preview.replace(/\s+/g, " ").trim();
+        const previewRow = `    ${truncate(previewText, boxW - 5)}`;
+        return [
+            "  " + bgLine("", boxW),
+            "  " + bgLine(titleRow, boxW),
+            "  " + bgLine(previewRow, boxW),
+            "  " + bgLine("", boxW),
+        ].join("\n");
     }
-    /** Render the expanded panel as an array of lines for the content area. */
-    renderExpanded(width, maxRows) {
+    /** Fullscreen expanded view — fills the entire terminal. */
+    renderFullscreen(width, height) {
         if (this.state.mode === "none")
-            return [];
-        const innerW = Math.max(20, width - 6);
-        const lines = [];
-        // Header bar — full-width dark green bg
-        const headerText = ` ${this.state.header}  ${chalk.dim("[Ctrl-O] collapse")}${this.state.inputActive ? chalk.dim("  [Esc] cancel") : ""}`;
-        lines.push(greenBgLine(headerText, Math.min(width - 4, innerW + 2)));
-        // Body content — scrolled
-        const headerSpace = this.state.inputActive ? 3 : 2; // header + footer + optional input
-        const visibleRows = Math.max(2, maxRows - headerSpace);
+            return "";
+        const total = this._bodyLines.length;
+        const headerRows = 3;
+        const footerRows = 3;
+        const bodyRows = Math.max(3, height - headerRows - footerRows);
+        const innerW = Math.max(20, width - 8);
+        // Clamp scroll to valid range whenever terminal resizes
+        const maxScroll = Math.max(0, total - bodyRows);
+        if (this.state.scrollOffset > maxScroll)
+            this.state.scrollOffset = maxScroll;
         const start = this.state.scrollOffset;
-        const end = Math.min(start + visibleRows, this._bodyLines.length);
+        const end = Math.min(start + bodyRows, total);
+        // Header bar: blank · title + position · blank
+        const icon = "\u25BE"; // ▾
+        const titleText = ` ${icon}  ${this.state.header}`;
+        const position = total > bodyRows
+            ? ` ${start + 1}\u2013${end} / ${total} `
+            : total > 0 ? ` ${total} lines ` : "";
+        const gap = Math.max(1, width - titleText.length - position.length);
+        const titleRow = titleText + " ".repeat(gap) + position;
+        const out = [];
+        out.push(bgLine("", width));
+        out.push(bgLine(titleRow, width));
+        out.push(bgLine("", width));
+        // Body with left/right padding
+        let emitted = 0;
         for (let i = start; i < end; i++) {
             const ln = truncate(this._bodyLines[i], innerW);
-            lines.push(`  ${chalk.greenBright(ln)}`);
+            out.push(`    ${BRIGHT_WHITE_FG}${ln}${RESET}`);
+            emitted++;
         }
-        if (end < this._bodyLines.length) {
-            lines.push(chalk.dim(`  \u2026 +${this._bodyLines.length - end} more`));
+        if (total === 0) {
+            out.push(`    ${SOFT_GREEN_FG}(empty)${RESET}`);
+            emitted = 1;
         }
-        if (this._bodyLines.length === 0) {
-            lines.push(chalk.dim("  (empty)"));
+        while (emitted < bodyRows) {
+            out.push("");
+            emitted++;
         }
-        // Footer hint
-        if (this.state.inputActive && this.state.inputPlaceholder) {
-            lines.push("");
-            lines.push(`  ${chalk.cyan(">")} ${this.state.inputPlaceholder}`);
-        }
-        else if (!this.state.inputActive) {
-            lines.push("");
-            lines.push(chalk.dim("  \u2191\u2193 scroll  [Ctrl-O] collapse"));
-        }
-        return lines;
+        // Footer bar: blank · hints · blank
+        const hints = " \u2191\u2193 scroll  \u00b7  PgUp/PgDn page  \u00b7  g/G top\u2022end  \u00b7  Esc or Ctrl-O close ";
+        const hintTrim = truncate(hints, width);
+        out.push(bgLine("", width));
+        out.push(bgLine(hintTrim, width));
+        out.push(bgLine("", width));
+        return out.join("\n");
     }
 }
