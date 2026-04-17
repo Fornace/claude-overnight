@@ -7,8 +7,8 @@ import type {
   SDKMessage, SDKResultMessage, SDKResultError, SDKAssistantMessage,
   SDKPartialAssistantMessage, SDKRateLimitEvent,
 } from "@anthropic-ai/claude-agent-sdk";
-import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "./types.js";
-import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow, AITurn } from "./types.js";
+import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens, type PermMode } from "./types.js";
+import type { Task, AgentState, SwarmPhase, MergeStrategy, RateLimitWindow, AITurn } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult, ErroredBranchEvaluator } from "./merge.js";
 import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "./providers.js";
@@ -121,12 +121,14 @@ export class Swarm {
   private pendingTools = new WeakMap<AgentState, { name: string; input: Record<string, unknown>; buf: string; logged: boolean }>();
   private ctxWarned = new WeakSet<AgentState>();
   logFile?: string;
-  readonly model: string | undefined;
+  model: string | undefined;
   usageCap: number | undefined;
   readonly allowExtraUsage: boolean;
   extraUsageBudget: number | undefined;
   readonly baseCostUsd: number;
   mergeBranch?: string;
+  /** Permission mode read from config on each agent dispatch. Writable for mid-run changes. */
+  private _permMode: PermMode | undefined;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) throw new Error("SwarmConfig: tasks array must not be empty");
@@ -148,6 +150,7 @@ export class Swarm {
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
     this.targetConcurrency = config.concurrency;
+    this._permMode = config.permissionMode;
   }
 
   get active() { return this.agents.filter(a => a.status === "running").length; }
@@ -239,6 +242,23 @@ export class Swarm {
     if (n != null && this.isUsingOverage && this.overageCostUsd >= n) {
       this.capForOverage(`Extra usage budget $${n} exceeded ($${this.overageCostUsd.toFixed(2)} spent)  -- stopping dispatch`);
     }
+  }
+
+  /** Live-adjust the worker model. Picked up by next agent dispatch. */
+  setModel(m: string): void {
+    if (this.model === m) return;
+    const prev = this.model;
+    this.model = m;
+    this.log(-1, `Worker model: ${prev} → ${m}`);
+  }
+
+  /** Live-adjust the SDK permission mode. Picked up by next agent dispatch. */
+  setPermissionMode(m: PermMode): void {
+    if (this._permMode === m) return;
+    const prev = this._permMode ?? "auto";
+    this._permMode = m;
+    const label = m === "bypassPermissions" ? "yolo" : m;
+    this.log(-1, `Permission mode: ${prev === "bypassPermissions" ? "yolo" : prev} → ${label}`);
   }
 
   async run(): Promise<void> {
@@ -536,7 +556,7 @@ export class Swarm {
       }
 
       try {
-        const perm = this.config.permissionMode ?? "auto";
+        const perm = this._permMode ?? "auto";
         let resumeSessionId: string | undefined = task.resumeSessionId;
         let resumePrompt = "Continue. Complete the task.";
 

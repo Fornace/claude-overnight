@@ -19,7 +19,8 @@ export async function executeRun(cfg) {
         process.stdout.write("\x1B[?25h\n");
     }
     catch { } };
-    const { objective, cwd, workerModel, plannerModel, fastModel, concurrency, permissionMode, allowedTools, beforeWave: beforeWaveCmds, afterWave: afterWaveCmds, afterRun: afterRunCmds, runDir, previousKnowledge, } = cfg;
+    const { objective, cwd, allowedTools, beforeWave: beforeWaveCmds, afterWave: afterWaveCmds, afterRun: afterRunCmds, runDir, previousKnowledge } = cfg;
+    let { workerModel, plannerModel, fastModel, concurrency, permissionMode } = cfg;
     const envForModel = buildEnvResolver({
         plannerModel, plannerProvider: cfg.plannerProvider,
         workerModel, workerProvider: cfg.workerProvider,
@@ -44,6 +45,7 @@ export async function executeRun(cfg) {
     const liveConfig = {
         remaining: 0, usageCap, concurrency, paused: false, dirty: false,
         extraUsageBudget: cfg.extraUsageBudget,
+        workerModel, plannerModel, fastModel, permissionMode,
     };
     let waveNum;
     const waveHistory = [];
@@ -530,6 +532,15 @@ export async function executeRun(cfg) {
                 remaining = liveConfig.remaining;
                 usageCap = liveConfig.usageCap;
                 cfg.extraUsageBudget = liveConfig.extraUsageBudget;
+                if (liveConfig.workerModel)
+                    workerModel = liveConfig.workerModel;
+                if (liveConfig.plannerModel)
+                    plannerModel = liveConfig.plannerModel;
+                if (liveConfig.fastModel !== undefined)
+                    fastModel = liveConfig.fastModel;
+                if (liveConfig.permissionMode)
+                    permissionMode = liveConfig.permissionMode;
+                concurrency = liveConfig.concurrency;
                 liveConfig.dirty = false;
             }
             liveConfig.remaining = remaining;

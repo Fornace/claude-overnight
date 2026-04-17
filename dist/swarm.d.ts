@@ -1,4 +1,5 @@
-import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow } from "./types.js";
+import { type PermMode } from "./types.js";
+import type { Task, AgentState, SwarmPhase, MergeStrategy, RateLimitWindow } from "./types.js";
 import type { MergeResult } from "./merge.js";
 export interface SwarmConfig {
     tasks: Task[];
@@ -77,12 +78,14 @@ export declare class Swarm {
     private pendingTools;
     private ctxWarned;
     logFile?: string;
-    readonly model: string | undefined;
+    model: string | undefined;
     usageCap: number | undefined;
     readonly allowExtraUsage: boolean;
     extraUsageBudget: number | undefined;
     readonly baseCostUsd: number;
     mergeBranch?: string;
+    /** Permission mode read from config on each agent dispatch. Writable for mid-run changes. */
+    private _permMode;
     constructor(config: SwarmConfig);
     get active(): number;
     get blocked(): number;
@@ -100,6 +103,10 @@ export declare class Swarm {
     retryRateLimitNow(): void;
     /** Live-adjust the overage spend cap. `undefined` = unlimited. If already over the new cap, stop dispatch. */
     setExtraUsageBudget(n: number | undefined): void;
+    /** Live-adjust the worker model. Picked up by next agent dispatch. */
+    setModel(m: string): void;
+    /** Live-adjust the SDK permission mode. Picked up by next agent dispatch. */
+    setPermissionMode(m: PermMode): void;
     run(): Promise<void>;
     abort(): void;
     /** Re-queue all errored agents' tasks for retry within this wave. */

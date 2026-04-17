@@ -7,7 +7,7 @@ import { VERSION } from "./_version.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "./swarm.js";
 import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
-import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
+import { formatContextWindow, DEFAULT_MODEL } from "./models.js";
 import { setPlannerEnvResolver } from "./planner-query.js";
 import { setTranscriptRunDir } from "./transcripts.js";
 import { getProxyPort, buildProxyUrl } from "./proxy-port.js";
@@ -15,9 +15,10 @@ import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCh
 import { RunDisplay } from "./ui.js";
 import { renderSummary, wrap } from "./render.js";
 import { executeRun } from "./run.js";
-import { parseCliFlags, isAuthError, fetchModels, ask, select, selectKey, loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo, showPlan, BRAILLE, makeProgressLog, } from "./cli.js";
+import { parseCliFlags, isAuthError, fetchModels, ask, select, selectKey, loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo, showPlan, makeProgressLog, } from "./cli.js";
 import { loadRunState, findIncompleteRuns, findOrphanedDesigns, backfillOrphanedPlans, formatTimeAgo, showRunHistory, readPreviousRunKnowledge, createRunDir, updateLatestSymlink, readMdDir, saveRunState, autoMergeBranches, } from "./state.js";
 import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL } from "./coach.js";
+import { editRunSettings, formatSettingsSummary } from "./settings.js";
 function countTasksInFile(path) {
     try {
         const parsed = JSON.parse(readFileSync(path, "utf-8"));
@@ -66,8 +67,6 @@ async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir) {
         catch { }
         return;
     }
-    // Kick off model fetch in the background so it's ready if the user picks Edit.
-    const modelsPromise = fetchModels(20_000).catch(() => []);
     // ── Interactive review ──
     const fmtSummary = () => {
         const remaining = Math.max(1, state.remaining);
@@ -90,6 +89,7 @@ async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir) {
         console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
         console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
         console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
+        console.log(`  ${chalk.dim("perms      ")}${chalk.white(state.permissionMode === "bypassPermissions" ? "yolo" : state.permissionMode)}`);
     };
     fmtSummary();
     const action = await selectKey("", [
@@ -101,64 +101,24 @@ async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir) {
         process.exit(0);
     if (action === "r")
         return;
-    // ── Edit walk ──
-    let modelFrame = 0;
-    const modelSpinner = setInterval(() => {
-        process.stdout.write(`\x1B[2K\r  ${chalk.cyan(BRAILLE[modelFrame++ % BRAILLE.length])} ${chalk.dim("loading models...")}`);
-    }, 120);
-    let models;
-    try {
-        models = await modelsPromise;
-    }
-    finally {
-        clearInterval(modelSpinner);
-        process.stdout.write(`\x1B[2K\r`);
-    }
-    const pick = await pickModel(`${chalk.cyan("①")} Worker model:`, models, state.workerProviderId ?? state.workerModel);
-    state.workerModel = pick.model;
-    state.workerProviderId = pick.providerId;
-    const remAns = await ask(`\n  ${chalk.cyan("②")} Remaining sessions ${chalk.dim(`[${state.remaining}]:`)} `);
-    const parsedRem = parseInt(remAns);
-    if (!isNaN(parsedRem) && parsedRem > 0) {
-        state.remaining = parsedRem;
-        state.budget = state.accCompleted + state.accFailed + parsedRem;
-    }
-    const concAns = await ask(`\n  ${chalk.cyan("③")} Concurrency ${chalk.dim(`[${state.concurrency}]:`)} `);
-    const parsedConc = parseInt(concAns);
-    if (!isNaN(parsedConc) && parsedConc >= 1)
-        state.concurrency = parsedConc;
-    const currentCap = state.usageCap != null ? String(Math.round(state.usageCap * 100)) : "off";
-    const capAns = await ask(`\n  ${chalk.cyan("④")} Usage cap % ${chalk.dim(`[${currentCap}]`)} ${chalk.dim("(0 = off):")} `);
-    if (capAns.trim()) {
-        const v = parseFloat(capAns);
-        if (!isNaN(v) && v >= 0 && v <= 100)
-            state.usageCap = v > 0 ? v / 100 : undefined;
-    }
-    const currentExtra = state.allowExtraUsage
-        ? (state.extraUsageBudget ? `$${state.extraUsageBudget}` : "unlimited")
-        : "off";
-    const extraChoice = await select(`${chalk.cyan("⑤")} Extra usage ${chalk.dim(`[current: ${currentExtra}]`)}:`, [
-        { name: "Keep current", value: "keep" },
-        { name: "Off", value: "off", hint: "stop at plan limit" },
-        { name: "With $ cap", value: "budget", hint: "set a spending cap" },
-        { name: "Unlimited", value: "unlimited", hint: "no cap, billed as overage" },
-    ]);
-    if (extraChoice === "off") {
-        state.allowExtraUsage = false;
-        state.extraUsageBudget = undefined;
-    }
-    else if (extraChoice === "budget") {
-        const bAns = await ask(`  ${chalk.dim("Max extra $:")} `);
-        const bVal = parseFloat(bAns);
-        if (!isNaN(bVal) && bVal > 0) {
-            state.extraUsageBudget = bVal;
-            state.allowExtraUsage = true;
-        }
-    }
-    else if (extraChoice === "unlimited") {
-        state.allowExtraUsage = true;
-        state.extraUsageBudget = undefined;
-    }
+    const settings = {
+        workerModel: state.workerModel,
+        plannerModel: state.plannerModel,
+        fastModel: state.fastModel,
+        workerProviderId: state.workerProviderId,
+        plannerProviderId: state.plannerProviderId,
+        fastProviderId: state.fastProviderId,
+        concurrency: state.concurrency,
+        usageCap: state.usageCap,
+        allowExtraUsage: state.allowExtraUsage ?? false,
+        extraUsageBudget: state.extraUsageBudget,
+        permissionMode: state.permissionMode,
+    };
+    await editRunSettings({
+        current: settings,
+        cliConcurrencySet: !!cliFlags.concurrency,
+    });
+    Object.assign(state, settings);
     try {
         saveRunState(runDir, state);
     }
@@ -637,7 +597,6 @@ async function main() {
                 objective = coachResult.improvedObjective;
             }
         }
-        const modelsPromise = fetchModels();
         const defaultBudget = coachResult?.recommended.budget ?? 10;
         const budgetAns = await ask(`\n  ${chalk.cyan("②")} ${chalk.dim("Budget")} ${chalk.dim("[")}${chalk.white(String(defaultBudget))}${chalk.dim("]:")} `);
         budget = parseInt(budgetAns) || defaultBudget;
@@ -645,91 +604,42 @@ async function main() {
             console.error(chalk.red(`  Budget must be a positive number`));
             process.exit(1);
         }
-        // ③ Max concurrency (skip if --concurrency set)
-        if (cliFlags.concurrency) {
-            concurrency = parseInt(cliFlags.concurrency);
-        }
-        else {
-            const defaultC = Math.min(coachResult?.recommended.concurrency ?? 5, budget);
-            const concAns = await ask(`\n  ${chalk.cyan("③")} ${chalk.dim("Max concurrency")} ${chalk.dim("[")}${chalk.white(String(defaultC))}${chalk.dim("]:")} `);
-            concurrency = parseInt(concAns) || defaultC;
-            if (concurrency < 1)
-                concurrency = 1;
-        }
-        let modelFrame = 0;
-        const modelSpinner = setInterval(() => {
-            process.stdout.write(`\x1B[2K\r  ${chalk.cyan(BRAILLE[modelFrame++ % BRAILLE.length])} ${chalk.dim("loading models...")}`);
-        }, 120);
-        let models;
-        try {
-            models = await modelsPromise;
-        }
-        finally {
-            clearInterval(modelSpinner);
-            process.stdout.write(`\x1B[2K\r`);
-        }
-        const plannerPick = await pickModel(`${chalk.cyan("④")} Planner model ${chalk.dim("(thinking, steering  -- use your strongest)")}:`, models, coachResult?.recommended.plannerModel);
-        plannerModel = plannerPick.model;
-        plannerProvider = plannerPick.provider;
-        const workerPick = await pickModel(`${chalk.cyan("⑤")} Worker model ${chalk.dim("(what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`, models, coachResult?.recommended.workerModel);
-        workerModel = workerPick.model;
-        workerProvider = workerPick.provider;
-        // ⑤b Optional fast model for quick tasks that will be verified
-        const suggestFast = !!coachResult?.recommended.fastModel;
-        const fastChoice = await select(`${chalk.cyan("⑤b")} Fast model ${chalk.dim("(optional  -- Haiku/Qwen for quick tasks, checked by worker)")}:`, [
-            { name: "Skip", value: "skip", hint: "two-tier mode only (current setup)" },
-            { name: "Pick a fast model", value: "pick", hint: "Haiku, Qwen, or any provider  -- for well-scoped tasks" },
-        ], suggestFast ? 1 : 0);
-        if (fastChoice === "pick") {
-            const fastPick = await pickModel(`${chalk.cyan("⑤c")} Fast model:`, models, coachResult?.recommended.fastModel ?? undefined);
-            fastModel = fastPick.model;
-            fastProvider = fastPick.provider;
-        }
-        const usageCapItems = [
-            { name: "Unlimited", value: undefined, hint: "full capacity, wait through rate limits" },
-            { name: "90%", value: 0.9, hint: "leave 10% for other work" },
-            { name: "75%", value: 0.75, hint: "conservative, plenty of headroom" },
-            { name: "50%", value: 0.5, hint: "use half, keep the rest" },
-        ];
-        const coachCap = coachResult?.recommended.usageCap;
-        const usageCapDefault = coachCap == null ? 0
-            : coachCap >= 0.85 ? 1
-                : coachCap >= 0.6 ? 2
-                    : 3;
-        usageCap = await select(`${chalk.cyan("⑥")} Usage cap:`, usageCapItems, usageCapDefault);
-        const extraChoice = await select(`${chalk.cyan("⑦")} Allow extra usage ${chalk.dim("(billed separately)")}:`, [
-            { name: "No", value: "no", hint: "stop when plan limits are reached" },
-            { name: "Yes, with $ limit", value: "budget", hint: "set a spending cap" },
-            { name: "Yes, unlimited", value: "unlimited", hint: "keep going no matter what" },
-        ]);
-        if (extraChoice === "budget") {
-            const budgetAns2 = await ask(`  ${chalk.dim("Max extra usage $:")} `);
-            extraUsageBudget = parseFloat(budgetAns2);
-            if (!extraUsageBudget || extraUsageBudget <= 0)
-                extraUsageBudget = 5;
-            allowExtraUsage = true;
-        }
-        else if (extraChoice === "unlimited")
-            allowExtraUsage = true;
-        // ⑧ Permission mode (skip if --yolo or --perm set)
         const cliYolo = argv.includes("--yolo");
-        if (cliFlags.perm) {
-            permissionMode = cliFlags.perm;
-        }
-        else if (cliYolo) {
-            permissionMode = "bypassPermissions";
-        }
-        else {
-            const permItems = [
-                { name: "Auto", value: "auto", hint: "accept low-risk, reject high-risk" },
-                { name: "Bypass all", value: "bypassPermissions", hint: "agents can run anything (yolo)" },
-                { name: "Prompt each", value: "default", hint: "ask for every dangerous op" },
-            ];
-            const permDefault = coachResult?.recommended.permissionMode === "bypassPermissions" ? 1
-                : coachResult?.recommended.permissionMode === "default" ? 2 : 0;
-            permissionMode = await select(`${chalk.cyan("⑧")} Permissions:`, permItems, permDefault);
-        }
-        // ⑨ Worktrees + merge (skip if --yolo, --worktrees, --no-worktrees, or --merge set)
+        const coach = coachResult?.recommended;
+        const settingsDefaults = {
+            workerModel: coach?.workerModel ?? DEFAULT_MODEL,
+            plannerModel: coach?.plannerModel ?? DEFAULT_MODEL,
+            fastModel: coach?.fastModel ?? undefined,
+            concurrency: Math.min(coach?.concurrency ?? 5, budget),
+            usageCap: coach?.usageCap ?? undefined,
+            allowExtraUsage: false,
+            permissionMode: cliYolo ? "bypassPermissions" : coach?.permissionMode ?? "auto",
+        };
+        const settings = await editRunSettings({
+            current: settingsDefaults,
+            cliConcurrencySet: !!cliFlags.concurrency,
+            defaults: coach ? {
+                plannerModel: coach.plannerModel,
+                workerModel: coach.workerModel,
+                fastModel: coach.fastModel ?? undefined,
+                concurrency: Math.min(coach.concurrency, budget),
+                usageCap: coach.usageCap,
+                permissionMode: cliYolo ? "bypassPermissions" : coach.permissionMode,
+            } : undefined,
+        });
+        plannerModel = settings.plannerModel;
+        workerModel = settings.workerModel;
+        fastModel = settings.fastModel;
+        concurrency = settings.concurrency;
+        usageCap = settings.usageCap;
+        allowExtraUsage = settings.allowExtraUsage;
+        extraUsageBudget = settings.extraUsageBudget;
+        permissionMode = cliFlags.perm ?? (cliYolo ? "bypassPermissions" : settings.permissionMode);
+        const savedProviders = loadProviders();
+        plannerProvider = settings.plannerProviderId ? savedProviders.find(p => p.id === settings.plannerProviderId) : undefined;
+        workerProvider = settings.workerProviderId ? savedProviders.find(p => p.id === settings.workerProviderId) : undefined;
+        fastProvider = settings.fastProviderId ? savedProviders.find(p => p.id === settings.fastProviderId) : undefined;
+        // ④ Worktrees + merge (skip if --yolo, --worktrees, --no-worktrees, or --merge set)
         const gitRepo = isGitRepo(cwd);
         if (cliYolo || argv.includes("--no-worktrees")) {
             useWorktrees = false;
@@ -740,7 +650,7 @@ async function main() {
             mergeStrategy = cliFlags.merge || "yolo";
         }
         else if (gitRepo) {
-            const wtChoice = await select(`${chalk.cyan("⑨")} Git isolation:`, [
+            const wtChoice = await select(`${chalk.cyan("④b")} Git isolation:`, [
                 { name: "Worktrees + yolo merge", value: "wt-yolo", hint: "isolate agents, merge into current branch" },
                 { name: "Worktrees + new branch", value: "wt-branch", hint: "isolate agents, merge into a new branch" },
                 { name: "No worktrees", value: "no-wt", hint: "all agents share the working directory" },
@@ -752,31 +662,20 @@ async function main() {
             useWorktrees = false;
             mergeStrategy = "yolo";
         }
-        const parts = [];
-        if (fastModel)
-            parts.push(`${modelDisplayName(plannerModel)} → ${modelDisplayName(workerModel)} + ${modelDisplayName(fastModel)}`);
-        else if (workerModel !== plannerModel)
-            parts.push(`${modelDisplayName(workerModel)} → ${modelDisplayName(plannerModel)}`);
-        else
-            parts.push(modelDisplayName(workerModel));
-        parts.push(`budget ${budget}`, `${concurrency}×`);
+        const inner = formatSettingsSummary({ ...settings, permissionMode });
+        const parts2 = [`budget ${budget}`, `${concurrency}×`];
         if (budget > 2)
-            parts.push("flex");
-        if (usageCap != null)
-            parts.push(`cap ${Math.round(usageCap * 100)}%`);
-        parts.push(allowExtraUsage ? (extraUsageBudget ? `extra $${extraUsageBudget}` : "extra ∞") : "no extra");
-        if (permissionMode !== "auto")
-            parts.push(permissionMode === "bypassPermissions" ? "yolo" : "prompt");
+            parts2.push("flex");
         if (useWorktrees)
-            parts.push(mergeStrategy === "branch" ? "wt→branch" : "wt→yolo");
+            parts2.push(mergeStrategy === "branch" ? "wt→branch" : "wt→yolo");
         else
-            parts.push("no wt");
+            parts2.push("no wt");
         if (completedRuns.length > 0)
-            parts.push(`${completedRuns.length} prior`);
-        const inner = parts.join(chalk.dim(" · "));
-        const innerLen = parts.join(" · ").length;
+            parts2.push(`${completedRuns.length} prior`);
+        const fullLine = inner + chalk.dim(" · ") + parts2.join(chalk.dim(" · "));
+        const innerLen = fullLine.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "").length;
         console.log(chalk.dim(`\n  ╭${"─".repeat(innerLen + 4)}╮`));
-        console.log(chalk.dim("  │") + `  ${inner}  ` + chalk.dim("│"));
+        console.log(chalk.dim("  │") + `  ${fullLine}  ` + chalk.dim("│"));
         console.log(chalk.dim(`  ╰${"─".repeat(innerLen + 4)}╯`));
     }
     else {

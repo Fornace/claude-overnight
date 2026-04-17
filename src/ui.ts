@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import type { Swarm } from "./swarm.js";
-import type { RateLimitWindow, RLGetter, WaveSummary } from "./types.js";
+import type { RateLimitWindow, RLGetter, WaveSummary, PermMode } from "./types.js";
 import { renderFrame, renderSteeringFrame } from "./render.js";
 import {
   type InputSegment,
@@ -51,8 +51,16 @@ export interface LiveConfig {
   concurrency: number;
   paused: boolean;
   dirty: boolean;
-  /** Overage spend cap ($)  -- undefined = unlimited. Synced from the [e] hotkey. */
+  /** Overage spend cap ($)  -- undefined = unlimited. Synced from the [s] hotkey. */
   extraUsageBudget?: number;
+  /** Worker model for agent tasks. Changed mid-run, picked up by next wave/agent dispatch. */
+  workerModel?: string;
+  /** Planner/steering model. Changed mid-run, picked up by next steer/planner call. */
+  plannerModel?: string;
+  /** Fast model for quick verification tasks. */
+  fastModel?: string;
+  /** SDK permission mode. Changed mid-run, picked up by next agent dispatch. */
+  permissionMode?: PermMode;
 }
 
 /** State of an in-flight or recently-completed ask side query. */
@@ -74,6 +82,10 @@ const MAX_STEERING_EVENTS = 60;
 const MAX_INPUT_LEN = 600;
 const MAX_ASK_LINES = 40;
 
+const SETTINGS_FIELDS = ["budget", "cap", "conc", "extra", "worker", "planner", "fast", "perms", "pause"] as const;
+type SettingsField = typeof SETTINGS_FIELDS[number];
+const NUMERIC_SETTINGS_FIELDS = new Set<SettingsField>(["budget", "cap", "conc", "extra"]);
+
 /** Visible lines for the ask panel, clamped to leave room for header/content/footer/input. */
 function askDisplayCap(): number {
   return Math.max(3, Math.min(MAX_ASK_LINES, (process.stdout.rows || 40) - 20));
@@ -92,7 +104,9 @@ export class RunDisplay {
   private rlGetter?: RLGetter;
   private interval?: ReturnType<typeof setInterval>;
   private keyHandler?: (buf: Buffer) => void;
-  private inputMode: "none" | "budget" | "threshold" | "concurrency" | "extra" | "steer" | "ask" = "none";
+  private inputMode: "none" | "settings" | "steer" | "ask" = "none";
+  /** Which field the settings editor is currently editing. Order: budget, cap, conc, extra, worker, planner, fast, perms, pause. */
+  private settingsField = 0;
   private inputSegs: InputSegment[] = [];
   private started = false;
   private readonly isTTY: boolean;
@@ -486,23 +500,54 @@ export class RunDisplay {
     return frame + bottom;
   }
 
+  /** Read the current value for a settings field from liveConfig/swarm. */
+  private currentFieldValue(field: string): string {
+    const lc = this.liveConfig;
+    const s = this.swarm;
+    switch (field) {
+      case "budget": return String(lc?.remaining ?? "—");
+      case "cap": return lc?.usageCap != null ? `${Math.round(lc.usageCap * 100)}%` : "unlimited";
+      case "conc": return String(lc?.concurrency ?? "—");
+      case "extra": return lc?.extraUsageBudget != null ? `$${lc.extraUsageBudget}` : "unlimited";
+      case "worker": return lc?.workerModel ?? s?.model ?? "—";
+      case "planner": return lc?.plannerModel ?? "—";
+      case "fast": return lc?.fastModel ?? "(none)";
+      case "perms": {
+        const p = lc?.permissionMode ?? "auto";
+        return p === "bypassPermissions" ? "yolo" : p;
+      }
+      case "pause": return s?.paused ? "paused" : "running";
+      default: return "";
+    }
+  }
+
   private renderInputPrompt(): string {
     if (this.inputMode === "none") return "";
     const rendered = renderSegments(this.inputSegs);
-    if (this.inputMode === "budget") {
-      return `\n  ${chalk.cyan(">")} New budget (remaining sessions): ${rendered}\u2588`;
-    }
-    if (this.inputMode === "threshold") {
-      return `\n  ${chalk.cyan(">")} New usage cap (0-100%): ${rendered}\u2588`;
-    }
-    if (this.inputMode === "concurrency") {
-      return `\n  ${chalk.cyan(">")} New concurrency (min 1): ${rendered}\u2588`;
-    }
-    if (this.inputMode === "extra") {
-      return `\n  ${chalk.cyan(">")} Extra usage $ cap (0 = stop on overage): ${rendered}\u2588`;
+    if (this.inputMode === "settings") {
+      const labels = [
+        "New budget (remaining sessions)",
+        "New usage cap (0-100%, 0=unlimited)",
+        "New concurrency (min 1)",
+        "Extra usage $ cap (0=stop on overage)",
+        "Worker model (for agent tasks)",
+        "Planner model (steering/thinking)",
+        "Fast model (optional, empty=skip)",
+        "Permission mode (auto/yolo/prompt)",
+        "Pause/resume workers",
+      ];
+      const total = SETTINGS_FIELDS.length;
+      const field = SETTINGS_FIELDS[this.settingsField % total];
+      const label = labels[this.settingsField % total];
+      const idx = this.settingsField + 1;
+      const currentValue = this.currentFieldValue(field);
+      const hint = field === "pause"
+        ? chalk.dim(` (Enter to toggle, Tab to skip, Esc to exit)`)
+        : chalk.dim(` [${idx}/${total}]  Tab=next  Esc=exit  current: ${chalk.white(currentValue)}`);
+      return `\n  ${chalk.cyan("◆")} ${chalk.bold(label)}${hint}\n  ${rendered}\u2588`;
     }
     if (this.inputMode === "steer") {
-      return `\n  ${chalk.cyan(">")} ${chalk.bold("Steer next wave")} ${chalk.dim("(Enter to queue, Esc to cancel)")}\n  ${rendered}\u2588`;
+      return `\n  ${chalk.cyan(">")} ${chalk.bold("Inject next wave")} ${chalk.dim("(Enter to queue, Esc to cancel)")}\n  ${rendered}\u2588`;
     }
     if (this.inputMode === "ask") {
       return `\n  ${chalk.cyan(">")} ${chalk.bold("Ask the planner")} ${chalk.dim("(Enter to send, Esc to cancel)")}\n  ${rendered}\u2588`;
@@ -536,10 +581,17 @@ export class RunDisplay {
 
   /** Handle a pasted block. Returns true if the frame needs a redraw. */
   private handlePaste(text: string): boolean {
-    if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency" || this.inputMode === "extra") {
-      const clean = text.replace(/[^0-9.]/g, "");
-      if (clean) appendCharToSegments(this.inputSegs, clean);
-      return !!clean;
+    if (this.inputMode === "settings") {
+      const field = SETTINGS_FIELDS[this.settingsField % SETTINGS_FIELDS.length];
+      if (NUMERIC_SETTINGS_FIELDS.has(field)) {
+        const clean = text.replace(/[^0-9.]/g, "");
+        if (clean) appendCharToSegments(this.inputSegs, clean);
+        return !!clean;
+      }
+      if (field !== "pause" && text.length + segmentsToString(this.inputSegs).length <= MAX_INPUT_LEN) {
+        appendPasteToSegments(this.inputSegs, text);
+        return true;
+      }
     }
     if (this.inputMode === "steer" || this.inputMode === "ask") {
       if (segmentsToString(this.inputSegs).length + text.length > MAX_INPUT_LEN) return false;
@@ -551,7 +603,7 @@ export class RunDisplay {
 
   /** Keyboard handler used only while the panel is expanded fullscreen.
    *  Handles scroll + close. Swallows everything else so the normal hotkeys
-   *  (b/t/c/p/s/?/d/0-9) do not fire while the user is reading. */
+   *  (s/p/i/?/d/0-9) do not fire while the user is reading. */
   private handlePanelKey(s: string): boolean {
     const bodyRows = Math.max(3, (process.stdout.rows || 40) - 7);
     // CSI sequences: arrows, PgUp/PgDn, Home/End
@@ -599,7 +651,7 @@ export class RunDisplay {
    *          3. ESC alone       → cancel input / close detail / dismiss panel
    *          4. numeric input   → digits, Enter, Backspace
    *          5. text input      → printable chars, Enter, Backspace, ESC (with lookahead)
-   *          6. hotkey mode     → b, t, c, e, p, s, q, ?, d, 0-9
+   *          6. hotkey mode     → s (settings), i (inject), q, ?, d, 0-9, f, r, p
    */
   private handleTyped(s: string): boolean {
     const lc = this.liveConfig!;
@@ -607,7 +659,7 @@ export class RunDisplay {
     // ── 0. Fullscreen panel owns the keyboard ──
     // While the interactive panel is expanded it takes over the screen and
     // steals every key except Esc, Ctrl-O (close), Ctrl-C (abort), and scroll.
-    // Hotkeys like b/t/c/p/s/? are intentionally swallowed so the user can
+    // Hotkeys like s/i/p are intentionally swallowed so the user can
     // read without triggering side effects.
     if (this.panel.state.expanded) {
       return this.handlePanelKey(s);
@@ -648,33 +700,83 @@ export class RunDisplay {
       return false;
     }
 
-    // ── 4. Input mode: budget / threshold / concurrency / extra ──
-    if (this.inputMode === "budget" || this.inputMode === "threshold" || this.inputMode === "concurrency" || this.inputMode === "extra") {
+    if (s === "\t" && this.inputMode === "settings") {
+      const field = SETTINGS_FIELDS[this.settingsField % SETTINGS_FIELDS.length];
+      if (field === "pause" && this.swarm) {
+        const next = !this.swarm.paused;
+        this.swarm.setPaused(next);
+        this.liveConfig!.paused = next;
+        this.liveConfig!.dirty = true;
+      }
+      this.settingsField++;
+      this.inputSegs = [];
+      if (this.settingsField >= SETTINGS_FIELDS.length) this.inputMode = "none";
+      return true;
+    }
+
+    // ── 4. Settings mode: all mutable fields ──
+    if (this.inputMode === "settings") {
       let dirty = false;
       for (const ch of s) {
         if (ch === "\r" || ch === "\n") {
-          const val = parseFloat(segmentsToString(this.inputSegs));
-          if (this.inputMode === "budget" && !isNaN(val) && val > 0) {
-            lc.remaining = Math.round(val);
+          const field = SETTINGS_FIELDS[this.settingsField % SETTINGS_FIELDS.length];
+          const raw = segmentsToString(this.inputSegs).trim();
+          if (field === "budget") {
+            const val = parseFloat(raw);
+            if (!isNaN(val) && val > 0) {
+              lc.remaining = Math.round(val);
+              lc.dirty = true;
+              this.swarm?.log(-1, `Budget changed to ${lc.remaining} remaining`);
+            }
+          } else if (field === "cap") {
+            const val = parseFloat(raw);
+            if (!isNaN(val) && val >= 0 && val <= 100) {
+              const frac = val / 100;
+              lc.usageCap = frac > 0 ? frac : undefined;
+              lc.dirty = true;
+              if (this.swarm) this.swarm.usageCap = lc.usageCap;
+              this.swarm?.log(-1, `Usage cap changed to ${val > 0 ? val + "%" : "unlimited"}`);
+            }
+          } else if (field === "conc") {
+            const val = parseFloat(raw);
+            if (!isNaN(val) && val >= 1) {
+              const n = Math.round(val);
+              lc.concurrency = n;
+              lc.dirty = true;
+              this.swarm?.setConcurrency(n);
+            }
+          } else if (field === "extra") {
+            const val = parseFloat(raw);
+            if (!isNaN(val) && val >= 0) {
+              lc.extraUsageBudget = val;
+              lc.dirty = true;
+              this.swarm?.setExtraUsageBudget(val);
+            }
+          } else if (field === "worker" && raw) {
+            lc.workerModel = raw;
             lc.dirty = true;
-            this.swarm?.log(-1, `Budget changed to ${lc.remaining} remaining`);
-          } else if (this.inputMode === "threshold" && !isNaN(val) && val >= 0 && val <= 100) {
-            const frac = val / 100;
-            lc.usageCap = frac > 0 ? frac : undefined;
+            this.swarm?.setModel(raw);
+          } else if (field === "planner" && raw) {
+            lc.plannerModel = raw;
             lc.dirty = true;
-            if (this.swarm) this.swarm.usageCap = lc.usageCap;
-            this.swarm?.log(-1, `Usage cap changed to ${val > 0 ? val + "%" : "unlimited"}`);
-          } else if (this.inputMode === "concurrency" && !isNaN(val) && val >= 1) {
-            const n = Math.round(val);
-            lc.concurrency = n;
+          } else if (field === "fast") {
+            lc.fastModel = raw || undefined;
             lc.dirty = true;
-            this.swarm?.setConcurrency(n);
-          } else if (this.inputMode === "extra" && !isNaN(val) && val >= 0) {
-            lc.extraUsageBudget = val;
+          } else if (field === "perms" && raw) {
+            const m = raw.toLowerCase();
+            const mode: PermMode = m.startsWith("yolo") || m.startsWith("bypass") ? "bypassPermissions"
+              : m.startsWith("prompt") || m === "default" ? "default" : "auto";
+            lc.permissionMode = mode;
             lc.dirty = true;
-            this.swarm?.setExtraUsageBudget(val);
+            this.swarm?.setPermissionMode(mode);
+          } else if (field === "pause" && this.swarm) {
+            const next = !this.swarm.paused;
+            this.swarm.setPaused(next);
+            lc.paused = next;
+            lc.dirty = true;
           }
-          this.inputMode = "none";
+          this.settingsField++;
+          if (this.settingsField >= SETTINGS_FIELDS.length) this.inputMode = "none";
           this.inputSegs = [];
           return true;
         }
@@ -684,7 +786,13 @@ export class RunDisplay {
           return true;
         }
         if (ch === "\x7F") { backspaceSegments(this.inputSegs); dirty = true; continue; }
-        if (/^[0-9.]$/.test(ch)) { appendCharToSegments(this.inputSegs, ch); dirty = true; }
+        const field = SETTINGS_FIELDS[this.settingsField % SETTINGS_FIELDS.length];
+        if (NUMERIC_SETTINGS_FIELDS.has(field)) {
+          if (/^[0-9.]$/.test(ch)) { appendCharToSegments(this.inputSegs, ch); dirty = true; }
+        } else if (field !== "pause") {
+          const code = ch.charCodeAt(0);
+          if (code >= 0x20 && code <= 0x7E) { appendCharToSegments(this.inputSegs, ch); dirty = true; }
+        }
       }
       return dirty;
     }
@@ -769,18 +877,12 @@ export class RunDisplay {
     const code = key.charCodeAt(0);
     if (code < 0x20 || code > 0x7E) return false;
 
-    if (key === "b" || key === "B") { this.inputMode = "budget"; this.inputSegs = []; return true; }
-    if (key === "t" || key === "T") {
-      if (this.swarm) { this.inputMode = "threshold"; this.inputSegs = []; return true; }
-      return false;
-    }
-    if (key === "c" || key === "C") {
-      if (this.swarm) { this.inputMode = "concurrency"; this.inputSegs = []; return true; }
-      return false;
-    }
-    if (key === "e" || key === "E") {
-      if (this.swarm) { this.inputMode = "extra"; this.inputSegs = []; return true; }
-      return false;
+    if (key === "s" || key === "S") {
+      if (!this.swarm) return false;
+      this.inputMode = "settings";
+      this.settingsField = 0;
+      this.inputSegs = [];
+      return true;
     }
     if (key === "p" || key === "P") {
       if (this.swarm) {
@@ -800,7 +902,7 @@ export class RunDisplay {
       this.swarm.retryRateLimitNow();
       return true;
     }
-    if ((key === "s" || key === "S") && this.onSteer) {
+    if ((key === "i" || key === "I") && this.onSteer) {
       this.inputMode = "steer"; this.inputSegs = []; return true;
     }
     if (key === "?" && this.onAsk && this.swarm && !this.askBusy) {

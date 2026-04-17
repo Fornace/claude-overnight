@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.25.30",
+  "version": "1.25.31",
   "description": "Parallel Claude agents in git worktrees with a usage cap that reserves headroom for your interactive Claude Code. Crash-safe resume. Provider-agnostic model catalog (Anthropic, Cursor, OpenAI, Gemini, DeepSeek, Llama, Qwen) with capability-based task scoping.",
   "type": "module",
   "bin": {

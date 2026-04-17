@@ -506,7 +506,7 @@ export function renderFrame(swarm: Swarm, showHotkeys: boolean, runInfo?: RunInf
     const detailChip = swarm.active > 0 ? chalk.dim("  [d] detail") : "";
     const selectChip = swarm.active > 0 && running.length <= 10 ? chalk.dim("  [0-9] select") : "";
     const panelChip = panel?.visible ? chalk.green(`  [Ctrl-O] ${panel.state.expanded ? "collapse" : "expand"}`) : "";
-    hotkeyRow = chalk.dim(`  [b] budget  [t] cap  [c] conc  [e] extra  ${pauseLabel}  [s] steer  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip + panelChip;
+    hotkeyRow = chalk.dim(`  [s] settings  ${pauseLabel}  [i] inject  [?] ask  [q] stop`) + fixChip + retryChip + chip + detailChip + selectChip + panelChip;
     if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
       extraFooterRows.push(chalk.yellow(`  all workers rate-limited  -- [r] retry-now, [c] reduce concurrency, [p] pause, [q] quit`));
     }
@@ -716,7 +716,7 @@ export function renderSteeringFrame(
     const pending = runInfo?.pendingSteer ?? 0;
     const chip = pending > 0 ? chalk.cyan(`  \u270E ${pending} steer queued`) : "";
     const panelChip = panel?.visible ? chalk.green(`  [Ctrl-O] ${panel.state.expanded ? "collapse" : "expand"}`) : "";
-    hotkeyRow = chalk.dim("  [b] budget  [s] steer  [q] stop") + chip + panelChip;
+    hotkeyRow = chalk.dim("  [s] settings  [i] inject  [q] stop") + chip + panelChip;
   }
 
   return renderUnifiedFrame({

@@ -1,5 +1,5 @@
 import type { Swarm } from "./swarm.js";
-import type { RLGetter, WaveSummary } from "./types.js";
+import type { RLGetter, WaveSummary, PermMode } from "./types.js";
 import { InteractivePanel } from "./interactive-panel.js";
 /** Short-lived context the steering view renders around its live log. */
 export interface SteeringContext {
@@ -34,8 +34,16 @@ export interface LiveConfig {
     concurrency: number;
     paused: boolean;
     dirty: boolean;
-    /** Overage spend cap ($)  -- undefined = unlimited. Synced from the [e] hotkey. */
+    /** Overage spend cap ($)  -- undefined = unlimited. Synced from the [s] hotkey. */
     extraUsageBudget?: number;
+    /** Worker model for agent tasks. Changed mid-run, picked up by next wave/agent dispatch. */
+    workerModel?: string;
+    /** Planner/steering model. Changed mid-run, picked up by next steer/planner call. */
+    plannerModel?: string;
+    /** Fast model for quick verification tasks. */
+    fastModel?: string;
+    /** SDK permission mode. Changed mid-run, picked up by next agent dispatch. */
+    permissionMode?: PermMode;
 }
 /** State of an in-flight or recently-completed ask side query. */
 export interface AskState {
@@ -57,6 +65,8 @@ export declare class RunDisplay {
     private interval?;
     private keyHandler?;
     private inputMode;
+    /** Which field the settings editor is currently editing. Order: budget, cap, conc, extra, worker, planner, fast, perms, pause. */
+    private settingsField;
     private inputSegs;
     private started;
     private readonly isTTY;
@@ -120,6 +130,8 @@ export declare class RunDisplay {
      *  The content area shrinks so input prompts are never clipped. */
     private flush;
     private render;
+    /** Read the current value for a settings field from liveConfig/swarm. */
+    private currentFieldValue;
     private renderInputPrompt;
     private hasHotkeys;
     private setupHotkeys;
@@ -127,7 +139,7 @@ export declare class RunDisplay {
     private handlePaste;
     /** Keyboard handler used only while the panel is expanded fullscreen.
      *  Handles scroll + close. Swallows everything else so the normal hotkeys
-     *  (b/t/c/p/s/?/d/0-9) do not fire while the user is reading. */
+     *  (s/p/i/?/d/0-9) do not fire while the user is reading. */
     private handlePanelKey;
     /** Handle a typed (non-pasted) chunk. Returns true if the frame needs a redraw.
      *
@@ -141,7 +153,7 @@ export declare class RunDisplay {
      *          3. ESC alone       → cancel input / close detail / dismiss panel
      *          4. numeric input   → digits, Enter, Backspace
      *          5. text input      → printable chars, Enter, Backspace, ESC (with lookahead)
-     *          6. hotkey mode     → b, t, c, e, p, s, q, ?, d, 0-9
+     *          6. hotkey mode     → s (settings), i (inject), q, ?, d, 0-9, f, r, p
      */
     private handleTyped;
     private plainTick;

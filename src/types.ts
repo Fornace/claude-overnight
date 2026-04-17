@@ -219,6 +219,24 @@ export interface RunMemory {
   userGuidance?: string;
 }
 
+/** Mutable subset of RunConfigBase — settings that can be changed at any point, including mid-run. */
+export interface MutableRunSettings {
+  workerModel: string;
+  plannerModel: string;
+  fastModel?: string;
+  workerProviderId?: string;
+  plannerProviderId?: string;
+  fastProviderId?: string;
+  concurrency: number;
+  usageCap?: number;
+  allowExtraUsage: boolean;
+  extraUsageBudget?: number;
+  permissionMode: PermMode;
+  beforeWave?: string | string[];
+  afterWave?: string | string[];
+  afterRun?: string | string[];
+}
+
 /** Shared configuration for a run  -- both live (RunConfig) and persisted (RunState). */
 export interface RunConfigBase {
   /** Total session budget. */

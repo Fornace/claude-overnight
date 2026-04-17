@@ -93,6 +93,8 @@ export class Swarm {
     extraUsageBudget;
     baseCostUsd;
     mergeBranch;
+    /** Permission mode read from config on each agent dispatch. Writable for mid-run changes. */
+    _permMode;
     constructor(config) {
         if (!config.tasks.length)
             throw new Error("SwarmConfig: tasks array must not be empty");
@@ -115,6 +117,7 @@ export class Swarm {
         this.queue = [...config.tasks];
         this.total = config.tasks.length;
         this.targetConcurrency = config.concurrency;
+        this._permMode = config.permissionMode;
     }
     get active() { return this.agents.filter(a => a.status === "running").length; }
     get blocked() { return this.agents.filter(a => a.status === "running" && a.blockedAt != null).length; }
@@ -209,6 +212,23 @@ export class Swarm {
         if (n != null && this.isUsingOverage && this.overageCostUsd >= n) {
             this.capForOverage(`Extra usage budget $${n} exceeded ($${this.overageCostUsd.toFixed(2)} spent)  -- stopping dispatch`);
         }
+    }
+    /** Live-adjust the worker model. Picked up by next agent dispatch. */
+    setModel(m) {
+        if (this.model === m)
+            return;
+        const prev = this.model;
+        this.model = m;
+        this.log(-1, `Worker model: ${prev} → ${m}`);
+    }
+    /** Live-adjust the SDK permission mode. Picked up by next agent dispatch. */
+    setPermissionMode(m) {
+        if (this._permMode === m)
+            return;
+        const prev = this._permMode ?? "auto";
+        this._permMode = m;
+        const label = m === "bypassPermissions" ? "yolo" : m;
+        this.log(-1, `Permission mode: ${prev === "bypassPermissions" ? "yolo" : prev} → ${label}`);
     }
     async run() {
         try {
@@ -528,7 +548,7 @@ export class Swarm {
                 agent.finishedAt = undefined;
             }
             try {
-                const perm = this.config.permissionMode ?? "auto";
+                const perm = this._permMode ?? "auto";
                 let resumeSessionId = task.resumeSessionId;
                 let resumePrompt = "Continue. Complete the task.";
                 const runOnce = async (isResume) => {
