@@ -96,7 +96,7 @@ export function autoCommit(agentId, taskPrompt, worktreeCwd, baseRef, log) {
         log(agentId, `${landed} file(s) changed`);
     return landed;
 }
-export function mergeAllBranches(agents, cwd, strategy, log) {
+export async function mergeAllBranches(agents, cwd, strategy, log, evalErroredBranch) {
     const mergeResults = [];
     let mergeBranch;
     if (agents.length === 0) {
@@ -141,6 +141,34 @@ export function mergeAllBranches(agents, cwd, strategy, log) {
         log(-1, `Merging ${agents.length} branch(es)...`);
         for (const agent of agents) {
             const result = { branch: agent.branch, ok: false, filesChanged: agent.filesChanged };
+            // Errored branch: let AI decide whether the partial work is worth keeping
+            if (agent.status === "error" && evalErroredBranch && agent.task) {
+                let evalResult;
+                try {
+                    const base = gitExec(`git merge-base HEAD "${agent.branch}"`, cwd).trim();
+                    const diff = gitExec(`git diff ${base}..${agent.branch}`, cwd);
+                    const truncated = diff.length > 50_000 ? diff.slice(0, 50_000) + "\n\n[diff truncated]" : diff;
+                    evalResult = await evalErroredBranch(agent.id, agent.task, truncated);
+                }
+                catch (evalErr) {
+                    // Eval itself failed — default to keep (never lose paid work)
+                    log(agent.id, `Errored branch eval failed, keeping by default: ${String(evalErr?.message || evalErr).slice(0, 120)}`);
+                    evalResult = { keep: true, reason: "eval error, keeping by default" };
+                }
+                if (!evalResult.keep) {
+                    result.discarded = true;
+                    result.evalReason = `Discarded: ${evalResult.reason}`;
+                    try {
+                        gitExec(`git branch -D "${agent.branch}"`, cwd);
+                    }
+                    catch { }
+                    log(agent.id, result.evalReason);
+                    mergeResults.push(result);
+                    continue;
+                }
+                result.evalReason = `Recovered: ${evalResult.reason}`;
+                log(agent.id, result.evalReason);
+            }
             try {
                 gitExec(`git merge --no-edit "${agent.branch}"`, cwd);
                 result.ok = true;
@@ -288,6 +316,7 @@ export function warnDirtyTree(cwd, log) {
     catch { }
 }
 export function cleanStaleWorktrees(cwd, log) {
+    const result = { recovered: 0, forceDeleted: 0 };
     try {
         const list = gitExec("git worktree list --porcelain", cwd);
         const stale = [];
@@ -323,25 +352,66 @@ export function cleanStaleWorktrees(cwd, log) {
             .split("\n")
             .map(b => b.trim().replace(/^\* /, ""))
             .filter(b => b.startsWith("swarm/task-") && !worktreeBranches.has(b));
-        // Use -d (safe delete) rather than -D: branches whose commits aren't in
-        // HEAD are orphaned work from a prior failed/unmerged run and must survive
-        // so the user can recover them. Only already-merged (ff) branches are
-        // actually deleted here.
-        let cleaned = 0;
+        // Merge orphaned branches before deletion. Tiers: safe-delete (already
+        // merged) → 3-tier merge → force-delete if merge fails. No branch survives
+        // — the user doesn't want manual merges.
         for (const b of branches) {
+            // Already-merged: fast forward delete
             try {
                 gitExec(`git branch -d "${b}"`, cwd);
-                cleaned++;
+                continue;
             }
             catch { }
+            // Attempt 3-tier merge into HEAD so the work lands
+            try {
+                gitExec(`git merge --no-edit "${b}"`, cwd);
+                gitExec(`git branch -d "${b}"`, cwd);
+                result.recovered++;
+                continue;
+            }
+            catch {
+                try {
+                    gitExec("git merge --abort", cwd);
+                }
+                catch { }
+            }
+            try {
+                gitExec(`git merge --no-edit -X theirs "${b}"`, cwd);
+                gitExec(`git branch -d "${b}"`, cwd);
+                result.recovered++;
+                continue;
+            }
+            catch {
+                try {
+                    gitExec("git merge --abort", cwd);
+                }
+                catch { }
+            }
+            if (forceMergeOverlay(b, cwd)) {
+                try {
+                    gitExec(`git branch -d "${b}"`, cwd);
+                }
+                catch {
+                    gitExec(`git branch -D "${b}"`, cwd);
+                }
+                result.recovered++;
+                continue;
+            }
+            // All tiers failed — force-delete to avoid permanent orphans
+            log(-1, `  ⚠ ${b} unmergeable, discarding`);
+            try {
+                gitExec(`git branch -D "${b}"`, cwd);
+            }
+            catch { }
+            result.forceDeleted++;
         }
-        if (cleaned > 0)
-            log(-1, `Cleaned ${cleaned} stale swarm branch(es)`);
-        const orphaned = branches.length - cleaned;
-        if (orphaned > 0)
-            log(-1, `Kept ${orphaned} orphaned swarm branch(es) with unmerged commits  -- resume to recover`);
+        if (result.recovered > 0)
+            log(-1, `[prior-wave] Recovered ${result.recovered} orphaned swarm branch(es)`);
+        if (result.forceDeleted > 0)
+            log(-1, `[prior-wave] Discarded ${result.forceDeleted} unmergeable swarm branch(es)`);
     }
     catch { }
+    return result;
 }
 export function writeSwarmLog(opts) {
     try {

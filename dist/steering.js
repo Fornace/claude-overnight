@@ -1,6 +1,7 @@
 import { runPlannerQuery, attemptJsonParse, postProcess } from "./planner-query.js";
 import { contextConstraintNote } from "./models.js";
 import { DESIGN_THINKING } from "./planner.js";
+import { createTurn, beginTurn, endTurn } from "./turns.js";
 const STEER_SCHEMA = {
     type: "json_schema",
     schema: {
@@ -15,7 +16,7 @@ const STEER_SCHEMA = {
                 type: "array",
                 items: {
                     type: "object",
-                    properties: { prompt: { type: "string" }, model: { type: "string" }, noWorktree: { type: "boolean" } },
+                    properties: { prompt: { type: "string" }, model: { type: "string" }, noWorktree: { type: "boolean" }, type: { type: "string", enum: ["execute", "explore", "critique", "synthesize", "verify", "user-test", "polish"] } },
                     required: ["prompt"],
                 },
             },
@@ -28,12 +29,14 @@ export async function steerWave(objective, history, remainingBudget, cwd, planne
     const recentWaves = history.slice(-3);
     const recentText = recentWaves.length > 0 ? recentWaves.map(w => {
         const lines = w.tasks.map(t => {
-            const files = t.filesChanged ? ` (${t.filesChanged} files)` : " (0 files)";
+            const isExecute = !t.type || t.type === "execute";
+            const files = t.filesChanged ? ` (${t.filesChanged} files)` : isExecute ? " (0 files)" : " (read-only)";
             const err = t.error ? `  -- ${t.error}` : "";
             return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
         }).join("\n");
-        const zeroChange = w.tasks.filter(t => t.status === "done" && !t.filesChanged).length;
-        const warn = zeroChange > w.tasks.length / 2 ? `\n  ⚠ ${zeroChange}/${w.tasks.length} agents changed 0 files  -- tasks may be mis-scoped or blocked` : "";
+        const zeroExecute = w.tasks.filter(t => t.status === "done" && (!t.type || t.type === "execute") && !t.filesChanged).length;
+        const totalExecute = w.tasks.filter(t => !t.type || t.type === "execute").length;
+        const warn = totalExecute > 0 && zeroExecute > totalExecute / 2 ? `\n  ⚠ ${zeroExecute}/${totalExecute} execute tasks changed 0 files  -- tasks may be mis-scoped or blocked` : "";
         return `Wave ${w.wave + 1}:\n${lines}${warn}`;
     }).join("\n\n") : "(first wave)";
     const cap = (s, max) => s.length > max ? s.slice(0, max) + "\n...(truncated)" : s;
@@ -114,14 +117,16 @@ Set "noWorktree": true for verify/user-test tasks  -- they need the real project
 If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSessionsRemaining": 0, "tasks": []}`;
     onLog("Assessing...", "status");
     onLog(`Reading codebase  -- wave ${history.length + 1}`, "event");
-    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName }, onLog);
+    const turn = createTurn("steer", `Steer wave ${history.length + 1}`, `steer-${history.length}`, plannerModel);
+    beginTurn(turn);
+    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName, turnId: turn.id }, onLog);
     const parsed = await (async () => {
         const first = attemptJsonParse(resultText);
         if (first)
             return first;
         onLog(`Steering parse failed (${resultText.length} chars). Asking model to fix...`, "event");
         const snippet = resultText.length > 2000 ? resultText.slice(0, 1000) + "\n...\n" + resultText.slice(-800) : resultText;
-        const retryText = await runPlannerQuery(`Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName: `${transcriptName}-retry` }, onLog);
+        const retryText = await runPlannerQuery(`Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName: `${transcriptName}-retry`, turnId: turn.id }, onLog);
         const retryParsed = attemptJsonParse(retryText);
         if (retryParsed)
             return retryParsed;
@@ -131,15 +136,17 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
     const statusUpdate = parsed.statusUpdate || undefined;
     const estRaw = parsed.estimatedSessionsRemaining;
     const estimatedSessionsRemaining = typeof estRaw === "number" && estRaw >= 0 ? Math.round(estRaw) : undefined;
-    if (isDone) {
-        return { done: true, tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate, statusUpdate, estimatedSessionsRemaining: estimatedSessionsRemaining ?? 0 };
-    }
     let tasks = (parsed.tasks || []).map((t, i) => ({
         id: String(i),
         prompt: typeof t === "string" ? t : t.prompt,
         ...(t.model && { model: t.model }),
         ...(t.noWorktree && { noWorktree: true }),
+        ...(t.type && { type: t.type }),
     }));
     tasks = postProcess(tasks, remainingBudget, onLog);
+    endTurn(turn, tasks.length === 0 && !isDone ? "error" : "done");
+    if (isDone) {
+        return { done: true, tasks: [], reasoning: parsed.reasoning || "Objective complete", goalUpdate: parsed.goalUpdate, statusUpdate, estimatedSessionsRemaining: estimatedSessionsRemaining ?? 0 };
+    }
     return { done: tasks.length === 0, tasks, reasoning: parsed.reasoning || "", goalUpdate: parsed.goalUpdate, statusUpdate, estimatedSessionsRemaining };
 }

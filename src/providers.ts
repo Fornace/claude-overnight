@@ -707,6 +707,18 @@ async function maybeRestartStaleProxy(baseUrl: string, url: URL, port: number): 
     return true;
   }
 
+  // Never kill an external proxy if the user explicitly allows it — just trust it.
+  if (process.env.CURSOR_OVERNIGHT_ALLOW_EXTERNAL_PROXY === "1" && info?.ok) {
+    console.log(chalk.yellow(`  ⚠ External proxy detected (v${runningV ?? "unknown"}) on port ${port} — trusting it (CURSOR_OVERNIGHT_ALLOW_EXTERNAL_PROXY=1)`));
+    return true;
+  }
+
+  // If the user opted out of auto-restart and the external proxy is healthy, skip.
+  if (process.env.CURSOR_OVERNIGHT_NO_PROXY_RESTART === "1" && info?.ok && runningV) {
+    console.log(chalk.yellow(`  ⚠ External proxy v${runningV} on port ${port} — skipping restart (CURSOR_OVERNIGHT_NO_PROXY_RESTART=1)`));
+    return true;
+  }
+
   const reason = !runningV
     ? `proxy does not report a version in /health — replacing with bundled v${embedded}`
     : `running proxy is v${runningV} but this install bundles cursor-composer-in-claude v${embedded}`;
@@ -1024,6 +1036,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     });
 
     child.unref(); // let it outlive this process
+    closeSync(logFd); // parent no longer needs the FD — child inherited it
 
     // Wait up to 15s for the proxy to become healthy, showing progress
     const HEALTH_POLL_MS = 500;
@@ -1032,8 +1045,12 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
       await new Promise(r => setTimeout(r, HEALTH_POLL_MS));
       const elapsed = ((i + 1) * HEALTH_POLL_MS / 1000).toFixed(1);
       if (await healthCheckCursorProxy(baseUrl)) {
-        console.log(chalk.green(`  ✓ Proxy started (PID ${child.pid}) and healthy after ${elapsed}s`));
-        return true;
+        // /health only checks the HTTP server — verify the agent subprocess is alive too
+        if (await verifyCursorProxy(baseUrl)) {
+          console.log(chalk.green(`  ✓ Proxy started (PID ${child.pid}) and healthy after ${elapsed}s`));
+          return true;
+        }
+        console.log(chalk.yellow(`  ⚠ /health ok but /v1/models failed — agent subprocess broken, continuing to retry…`));
       }
       // Show a dot every 2s to indicate we're still waiting
       if ((i + 1) % 4 === 0) {

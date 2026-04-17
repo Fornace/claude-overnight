@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./planner-query.js";
 import { contextConstraintNote } from "./models.js";
+import { createTurn, beginTurn, endTurn } from "./turns.js";
 // Resilience: if the planner query throws but the agent already wrote valid
 // tasks to `outFile` (via its Write tool), salvage them instead of discarding
 // expensive work. Returns salvaged tasks on success, null if nothing usable on
@@ -13,7 +14,7 @@ export function salvageFromFile(outFile, budget, onLog, why) {
         if (!parsed?.tasks?.length)
             return null;
         let tasks = parsed.tasks.map((t, i) => ({
-            id: String(i), prompt: typeof t === "string" ? t : t.prompt,
+            id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
         }));
         tasks = postProcess(tasks, budget, onLog);
         if (tasks.length === 0)
@@ -154,34 +155,48 @@ Respond with ONLY a JSON object (no markdown fences):
 // ── Planning functions ──
 export async function planTasks(objective, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, onLog, flexNote, outFile, transcriptName = "plan") {
     onLog("Analyzing codebase...");
+    const turn = createTurn("plan", "Plan", "plan-0", plannerModel);
+    beginTurn(turn);
     const prompt = plannerPrompt(objective, workerModel, budget, concurrency, flexNote);
     const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
     let resultText;
     try {
         resultText = await runPlannerQuery(prompt + fileInstruction, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 40,
-            tools: ["Read", "Glob", "Grep", "Write"] }, onLog);
+            tools: ["Read", "Glob", "Grep", "Write"], turnId: turn.id }, onLog);
     }
     catch (err) {
         const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
+        endTurn(turn, salvaged ? "done" : "error");
         if (salvaged)
             return salvaged;
         throw err;
     }
-    const parsed = await extractTaskJson(resultText, async () => {
-        onLog("Retrying...");
-        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15 }, onLog);
-    }, onLog, outFile);
-    let tasks = (parsed.tasks || []).map((t, i) => ({
-        id: String(i), prompt: typeof t === "string" ? t : t.prompt,
-    }));
-    tasks = postProcess(tasks, budget, onLog);
+    let tasks;
+    try {
+        const parsed = await extractTaskJson(resultText, async () => {
+            onLog("Retrying...");
+            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15, turnId: turn.id }, onLog);
+        }, onLog, outFile);
+        tasks = (parsed.tasks || []).map((t, i) => ({
+            id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
+        }));
+        tasks = postProcess(tasks, budget, onLog);
+    }
+    catch {
+        endTurn(turn, "error");
+        throw new Error("Planner generated 0 tasks");
+    }
+    endTurn(turn, tasks.length === 0 ? "error" : "done");
     if (tasks.length === 0)
         throw new Error("Planner generated 0 tasks");
     onLog(`${tasks.length} tasks`);
     return tasks;
 }
 export async function identifyThemes(objective, count, cwd, model, permissionMode, onLog = () => { }, transcriptName = "themes") {
-    const resultText = await runPlannerQuery(`You are picking ${count} research angles for architects who will deeply explore a codebase next.
+    const turn = createTurn("identify-themes", `Themes (${count})`, "themes-0", model);
+    beginTurn(turn);
+    try {
+        const resultText = await runPlannerQuery(`You are picking ${count} research angles for architects who will deeply explore a codebase next.
 
 First do a BRIEF recon (3-6 tool calls max, don't go deep): read package.json and README if present, glob the top-level directory, peek at one or two config files that reveal the stack. You are learning what this codebase actually IS -- not solving anything.
 
@@ -189,10 +204,16 @@ Then pick ${count} angles that carve up THIS specific codebase orthogonally. Pre
 
 Objective: ${objective}
 
-Return ONLY a JSON object: {"themes": ["angle description", ...]}`, { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12 }, onLog);
-    const parsed = attemptJsonParse(resultText);
-    if (parsed?.themes && Array.isArray(parsed.themes))
-        return parsed.themes.slice(0, count);
+Return ONLY a JSON object: {"themes": ["angle description", ...]}`, { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id }, onLog);
+        const parsed = attemptJsonParse(resultText);
+        endTurn(turn, "done");
+        if (parsed?.themes && Array.isArray(parsed.themes))
+            return parsed.themes.slice(0, count);
+    }
+    catch (err) {
+        endTurn(turn, "error");
+        throw err;
+    }
     const fallback = ["architecture, patterns, and conventions", "data models, state, and persistence", "user-facing flows, components, and UX", "APIs, integrations, and services", "testing, quality, and error handling", "security, performance, and infrastructure", "build, deployment, and configuration", "documentation and developer experience"];
     return Array.from({ length: count }, (_, i) => fallback[i % fallback.length]);
 }
@@ -258,25 +279,36 @@ Requirements:
 Respond with ONLY a JSON object (no markdown fences):
 {"tasks": [{"prompt": "..."}]}${fileInstruction}`;
     onLog("Synthesizing...");
+    const turn = createTurn("orchestrate", "Orchestrate", "orchestrate-0", plannerModel);
+    beginTurn(turn);
     let resultText;
     try {
         resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 25,
-            tools: ["Write"] }, onLog);
+            tools: ["Write"], turnId: turn.id }, onLog);
     }
     catch (err) {
         const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
+        endTurn(turn, salvaged ? "done" : "error");
         if (salvaged)
             return salvaged;
         throw err;
     }
-    const parsed = await extractTaskJson(resultText, async () => {
-        onLog("Retrying...");
-        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10 }, onLog);
-    }, onLog, outFile);
-    let tasks = (parsed.tasks || []).map((t, i) => ({
-        id: String(i), prompt: typeof t === "string" ? t : t.prompt,
-    }));
-    tasks = postProcess(tasks, budget, onLog);
+    let tasks;
+    try {
+        const parsed = await extractTaskJson(resultText, async () => {
+            onLog("Retrying...");
+            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10, turnId: turn.id }, onLog);
+        }, onLog, outFile);
+        tasks = (parsed.tasks || []).map((t, i) => ({
+            id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
+        }));
+        tasks = postProcess(tasks, budget, onLog);
+    }
+    catch {
+        endTurn(turn, "error");
+        throw new Error("Orchestration generated 0 tasks");
+    }
+    endTurn(turn, tasks.length === 0 ? "error" : "done");
     if (tasks.length === 0)
         throw new Error("Orchestration generated 0 tasks");
     onLog(`${tasks.length} tasks`);
@@ -284,6 +316,8 @@ Respond with ONLY a JSON object (no markdown fences):
 }
 export async function refinePlan(objective, previousTasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, onLog, transcriptName = "refine") {
     onLog("Refining plan...");
+    const turn = createTurn("plan-refine", "Refine plan", "refine-0", plannerModel);
+    beginTurn(turn);
     const prev = previousTasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n");
     const constraint = contextConstraintNote(workerModel);
     const b = budget ?? 10;
@@ -305,17 +339,33 @@ ${scaleNote} ${concurrency} agents run in parallel. Update the plan accordingly.
 
 Respond with ONLY a JSON object (no markdown):
 {"tasks":[{"prompt":"..."}]}`;
-    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15 }, onLog);
-    const parsed = await extractTaskJson(resultText, async () => {
-        onLog("Retrying...");
-        return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8 }, onLog);
-    }, onLog);
-    let tasks = (parsed.tasks || []).map((t, i) => ({
-        id: String(i), prompt: typeof t === "string" ? t : t.prompt,
-    }));
-    tasks = postProcess(tasks, budget, onLog);
+    let resultText;
+    try {
+        resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15, turnId: turn.id }, onLog);
+    }
+    catch (err) {
+        endTurn(turn, "error");
+        throw err;
+    }
+    let tasks;
+    try {
+        const parsed = await extractTaskJson(resultText, async () => {
+            onLog("Retrying...");
+            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8, turnId: turn.id }, onLog);
+        }, onLog);
+        tasks = (parsed.tasks || []).map((t, i) => ({
+            id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
+        }));
+        tasks = postProcess(tasks, budget, onLog);
+    }
+    catch {
+        endTurn(turn, "error");
+        throw new Error("Refinement produced 0 tasks");
+    }
+    endTurn(turn, tasks.length === 0 ? "error" : "done");
     if (tasks.length === 0)
         throw new Error("Refinement produced 0 tasks");
     onLog(`${tasks.length} tasks`);
+    return tasks;
     return tasks;
 }

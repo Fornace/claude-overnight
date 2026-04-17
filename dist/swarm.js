@@ -7,6 +7,7 @@ import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens 
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import { ensureCursorProxyRunning } from "./providers.js";
 import { getModelCapability } from "./models.js";
+import { createTurn, beginTurn, endTurn, updateTurn } from "./turns.js";
 const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
 
 Run \`git diff\` to see what you changed, then fix any issues:
@@ -34,6 +35,7 @@ export class Swarm {
     agents = [];
     logs = [];
     allLogs = [];
+    _agentTurns = new Map();
     startedAt = Date.now();
     total;
     completed = 0;
@@ -45,10 +47,16 @@ export class Swarm {
     aborted = false;
     cappedOut = false;
     mergeResults = [];
+    /** Prior-wave orphan branches recovered during stale worktree cleanup. */
+    staleRecovered = 0;
+    /** Prior-wave orphan branches discarded as unmergeable. */
+    staleForceDeleted = 0;
     rateLimitUtilization = 0;
     rateLimitResetsAt;
     rateLimitWindows = new Map();
     rateLimitPaused = 0;
+    /** Wall-clock ms the global rate-limit wait started. Reset to undefined once nothing is blocked. */
+    rateLimitBlockedSince;
     isUsingOverage = false;
     overageCostUsd = 0;
     rateLimitExplained = false;
@@ -206,7 +214,9 @@ export class Swarm {
         try {
             if (this.config.useWorktrees) {
                 warnDirtyTree(this.config.cwd, (id, text) => this.log(id, text));
-                cleanStaleWorktrees(this.config.cwd, (id, text) => this.log(id, text));
+                const staleResult = cleanStaleWorktrees(this.config.cwd, (id, text) => this.log(id, text));
+                this.staleRecovered = staleResult.recovered;
+                this.staleForceDeleted = staleResult.forceDeleted;
                 this.worktreeBase = mkdtempSync(join(tmpdir(), "claude-overnight-"));
                 this.log(-1, `Worktrees: ${this.worktreeBase}`);
             }
@@ -222,9 +232,10 @@ export class Swarm {
             }
             if (this.config.useWorktrees) {
                 this.phase = "merging";
-                const branches = this.agents.filter(a => a.branch && a.status === "done" && (a.filesChanged ?? 0) > 0)
-                    .map(a => ({ id: a.id, branch: a.branch, filesChanged: a.filesChanged ?? 0 }));
-                const result = mergeAllBranches(branches, this.config.cwd, this.config.mergeStrategy ?? "yolo", (id, text) => this.log(id, text));
+                const branches = this.agents.filter(a => a.branch && (a.filesChanged ?? 0) > 0)
+                    .map(a => ({ id: a.id, branch: a.branch, filesChanged: a.filesChanged ?? 0, status: a.status, task: a.task.prompt }));
+                const evalErrored = this.buildErroredBranchEvaluator();
+                const result = await mergeAllBranches(branches, this.config.cwd, this.config.mergeStrategy ?? "yolo", (id, text) => this.log(id, text), evalErrored);
                 this.mergeResults = result.mergeResults;
                 if (result.mergeBranch)
                     this.mergeBranch = result.mergeBranch;
@@ -420,9 +431,13 @@ export class Swarm {
                     ? `Near-critical utilization ${Math.round(this.rateLimitUtilization * 100)}%`
                     : `Rate limited${this.windowTag()}`;
             this.log(-1, `${reason}  -- waiting ${Math.ceil(waitMs / 1000)}s then retrying ([r] to retry now)`);
+            if (this.rateLimitPaused === 0)
+                this.rateLimitBlockedSince = Date.now();
             this.rateLimitPaused++;
             await this.rateLimitSleep(waitMs);
             this.rateLimitPaused--;
+            if (this.rateLimitPaused === 0)
+                this.rateLimitBlockedSince = undefined;
             this.rateLimitUtilization = 0;
             this.rateLimitResetsAt = undefined;
             consecutiveWaits++;
@@ -453,6 +468,9 @@ export class Swarm {
         const id = this.nextId++;
         const agent = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0, contextTokens: 0, model: task.model || this.model };
         this.agents.push(agent);
+        const turn = createTurn("swarm", `Agent ${id}`, `swarm-${id}`, agent.model);
+        beginTurn(turn);
+        this._agentTurns.set(id, turn);
         let agentCwd = task.agentCwd || task.cwd || this.config.cwd;
         if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree && !task.agentCwd) {
             const branch = `swarm/task-${id}`;
@@ -694,6 +712,9 @@ export class Swarm {
         if (this.config.useWorktrees && agent.branch) {
             agent.filesChanged = autoCommit(agent.id, agent.task.prompt, agentCwd, agent.baseRef, (id, text) => this.log(id, text));
         }
+        updateTurn(turn, { costUsd: agent.costUsd });
+        endTurn(turn, agent.status === "done" ? "done" : agent.status === "paused" ? "stopped" : "error");
+        this._agentTurns.delete(id);
         if (agent.status === "done")
             this.log(agent.id, this.agentSummary(agent));
     }
@@ -704,6 +725,90 @@ export class Swarm {
         const verb = agent.status === "error" ? "errored" : "done";
         const files = agent.filesChanged != null ? `, ${agent.filesChanged} files changed` : "";
         return `Agent ${agent.id} ${verb}: ${m}m ${s}s, ${agent.toolCalls} tools${files}`;
+    }
+    // ── Errored branch AI evaluator ──
+    /**
+     * Build an evaluator that calls the fast model (or worker fallback) to judge
+     * whether an errored agent's partial work is coherent enough to merge.
+     */
+    buildErroredBranchEvaluator() {
+        const evalModel = this.model;
+        if (!evalModel)
+            return undefined;
+        const envFor = this.config.envForModel;
+        return async (agentId, task, diff) => {
+            const prompt = `You are evaluating whether partial work from an agent that errored mid-task should be kept or discarded.
+
+Task: "${task}"
+
+Diff of changes:
+\`\`\`
+${diff}
+\`\`\`
+
+Is this partial work coherent enough to land? Consider:
+- Does it implement a meaningful portion of the task?
+- Are the changes self-consistent (no half-written functions, broken imports)?
+- Would merging this improve or degrade the codebase?
+
+Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
+            let eq;
+            try {
+                eq = query({
+                    prompt,
+                    options: {
+                        cwd: this.config.cwd,
+                        model: evalModel,
+                        permissionMode: "bypassPermissions",
+                        allowDangerouslySkipPermissions: true,
+                        maxTurns: 1,
+                        persistSession: false,
+                        ...(envFor?.(evalModel) && { env: envFor(evalModel) }),
+                    },
+                });
+                this.activeQueries.add(eq);
+                let output = "";
+                for await (const msg of eq) {
+                    if (msg.type === "assistant") {
+                        const am = msg;
+                        if (am.message?.content) {
+                            for (const block of am.message.content) {
+                                if (block.type === "text" && block.text)
+                                    output += block.text;
+                            }
+                        }
+                    }
+                    if (msg.type === "result")
+                        break;
+                }
+                // Parse JSON from the response
+                const jsonMatch = output.match(/\{[\s\S]*"keep"\s*:\s*(true|false)[\s\S]*"reason"\s*:\s*"[^"]*"[\s\S]*\}/);
+                if (jsonMatch) {
+                    try {
+                        const parsed = JSON.parse(jsonMatch[0]);
+                        if (typeof parsed.keep === "boolean" && typeof parsed.reason === "string")
+                            return parsed;
+                    }
+                    catch { }
+                }
+                // Fallback: couldn't parse structured output — keep by default
+                this.log(agentId, "Branch eval: could not parse model response, keeping by default");
+                return { keep: true, reason: "model response unparseable, keeping by default" };
+            }
+            catch (err) {
+                this.log(agentId, `Branch eval API error: ${String(err?.message || err).slice(0, 120)}`);
+                return { keep: true, reason: "eval API error, keeping by default" };
+            }
+            finally {
+                if (eq) {
+                    this.activeQueries.delete(eq);
+                    try {
+                        eq.close();
+                    }
+                    catch { }
+                }
+            }
+        };
     }
     // ── Message handler ──
     /** Log a tool invocation with a short target extracted from its input. */
@@ -728,6 +833,9 @@ export class Swarm {
                     agent.contextTokens = turnTotal;
                     if (turnTotal > (agent.peakContextTokens ?? 0))
                         agent.peakContextTokens = turnTotal;
+                    const turn = this._agentTurns.get(agent.id);
+                    if (turn)
+                        updateTurn(turn, { contextTokens: turnTotal, peakContextTokens: Math.max(turn.peakContextTokens ?? 0, turnTotal) });
                     if (!this.ctxWarned.has(agent)) {
                         const mdl = agent.task.model || this.config.model || "unknown";
                         const safe = getModelCapability(mdl).safeContext;

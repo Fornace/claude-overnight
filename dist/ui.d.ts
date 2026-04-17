@@ -50,6 +50,7 @@ export declare class RunDisplay {
     private swarm?;
     private steeringActive;
     private steeringStatusLine;
+    private steeringStartedAt;
     private steeringEvents;
     private steeringContext?;
     private rlGetter?;
@@ -69,6 +70,8 @@ export declare class RunDisplay {
     private navState;
     /** Interactive panel for debrief, Q&A, and other user-facing content. */
     readonly panel: InteractivePanel;
+    /** Cached frame string for deduplication — skip redraw when nothing changed. */
+    private lastFrame;
     private onSteer?;
     private onAsk?;
     /** Set or clear the debrief text shown in the interactive panel. */

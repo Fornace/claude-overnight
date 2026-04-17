@@ -13,6 +13,23 @@ export interface ContentRenderer {
     /** Returns an array of sections to render in the content area */
     sections(): Section[];
 }
+/** Single-frame character of a spinner. Exported so any caller can prefix its
+ *  own line with a consistent animation without importing SPINNER directly. */
+export declare function spinnerFrame(kind?: "line" | "dots"): string;
+/** Reusable indicator for any in-flight wait. Always shows animation + elapsed
+ *  time so no phase ever appears frozen. `eta` (future timestamp) adds a
+ *  countdown; `hint` appends a short secondary label.
+ *
+ *  style:
+ *    - "thinking" (cyan): planner/AI reasoning
+ *    - "wait"     (magenta): rate-limit / cooldown
+ *    - "warn"     (yellow): degraded / blocked
+ *    - "info"     (blue): default */
+export declare function renderWaitingIndicator(label: string, startedAt: number | undefined, opts?: {
+    eta?: number;
+    hint?: string;
+    style?: "info" | "warn" | "wait" | "thinking";
+}): string;
 export declare function truncate(s: string, max: number): string;
 export declare function fmtTokens(n: number): string;
 export declare function fmtDur(ms: number): string;
@@ -51,6 +68,8 @@ export interface SteeringViewData {
     events: SteeringEvent[];
     /** Optional context read from disk at setSteering() time. */
     context?: SteeringContext;
+    /** Wall-clock ms the steering phase started, for the live elapsed indicator. */
+    startedAt?: number;
 }
 export declare function renderSteeringFrame(runInfo: RunInfo, data: SteeringViewData, showHotkeys: boolean, rlGetter?: RLGetter, maxRows?: number, panel?: InteractivePanel): string;
 export declare function renderSummary(swarm: Swarm): string;

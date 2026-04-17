@@ -28,6 +28,7 @@ export declare class Swarm {
         text: string;
     }[];
     private readonly allLogs;
+    private readonly _agentTurns;
     readonly startedAt: number;
     readonly total: number;
     completed: number;
@@ -39,10 +40,16 @@ export declare class Swarm {
     aborted: boolean;
     cappedOut: boolean;
     mergeResults: MergeResult[];
+    /** Prior-wave orphan branches recovered during stale worktree cleanup. */
+    staleRecovered: number;
+    /** Prior-wave orphan branches discarded as unmergeable. */
+    staleForceDeleted: number;
     rateLimitUtilization: number;
     rateLimitResetsAt?: number;
     rateLimitWindows: Map<string, RateLimitWindow>;
     rateLimitPaused: number;
+    /** Wall-clock ms the global rate-limit wait started. Reset to undefined once nothing is blocked. */
+    rateLimitBlockedSince?: number;
     isUsingOverage: boolean;
     overageCostUsd: number;
     private rateLimitExplained;
@@ -118,6 +125,11 @@ export declare class Swarm {
     private windowRejectedReset;
     private runAgent;
     private agentSummary;
+    /**
+     * Build an evaluator that calls the fast model (or worker fallback) to judge
+     * whether an errored agent's partial work is coherent enough to merge.
+     */
+    private buildErroredBranchEvaluator;
     /** Log a tool invocation with a short target extracted from its input. */
     private logToolUse;
     private handleMsg;

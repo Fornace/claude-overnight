@@ -16,6 +16,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
 import { InteractivePanel, type PanelMode } from "./interactive-panel.js";
+import { allTurns, cycleFocused, focusedTurn } from "./turns.js";
 
 /** Short-lived context the steering view renders around its live log. */
 export interface SteeringContext {
@@ -85,6 +86,7 @@ export class RunDisplay {
   private swarm?: Swarm;
   private steeringActive = false;
   private steeringStatusLine = "Assessing...";
+  private steeringStartedAt = 0;
   private steeringEvents: SteeringEvent[] = [];
   private steeringContext?: SteeringContext;
   private rlGetter?: RLGetter;
@@ -104,6 +106,8 @@ export class RunDisplay {
   private navState: NavState = { focusSection: 0, focusRow: 0, scrollOffset: 0 };
   /** Interactive panel for debrief, Q&A, and other user-facing content. */
   readonly panel = new InteractivePanel();
+  /** Cached frame string for deduplication — skip redraw when nothing changed. */
+  private lastFrame = "";
   private onSteer?: (text: string) => void;
   private onAsk?: (text: string) => void;
   /** Set or clear the debrief text shown in the interactive panel. */
@@ -214,6 +218,9 @@ export class RunDisplay {
         if (this.selectedAgentId != null) {
           this.clearSelectedAgent();
           changed = true;
+        } else if (allTurns().length > 1) {
+          cycleFocused(-1);
+          changed = true;
         } else if (nav.focusSection > 0) {
           nav.focusSection--;
           nav.focusRow = 0;
@@ -228,6 +235,9 @@ export class RunDisplay {
             this.selectAgent(agent.id);
             changed = true;
           }
+        } else if (allTurns().length > 1) {
+          cycleFocused(1);
+          changed = true;
         } else if (nav.focusSection < sections.length - 1) {
           nav.focusSection++;
           nav.focusRow = 0;
@@ -355,6 +365,7 @@ export class RunDisplay {
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.lastFrame = "";
     this.setupHotkeys();
     this.resumeInterval();
   }
@@ -371,6 +382,7 @@ export class RunDisplay {
     this.swarm = undefined;
     this.steeringActive = true;
     this.steeringStatusLine = "Assessing...";
+    this.steeringStartedAt = Date.now();
     this.steeringEvents = [];
     this.steeringContext = ctx;
     this.rlGetter = rlGetter;
@@ -429,6 +441,8 @@ export class RunDisplay {
     try {
       const maxRows = (process.stdout.rows || 40) - 1;
       const frame = this.render(maxRows);
+      if (frame === this.lastFrame) return; // nothing changed
+      this.lastFrame = frame;
       process.stdout.write("\x1B[H\x1B[J" + frame);
     } catch { this.pause(); }
   }
@@ -450,7 +464,10 @@ export class RunDisplay {
       ? this.panel.renderCollapsed(w)
       : "";
     const bottom = inputPrompt + (panelCollapsed ? "\n" + panelCollapsed : "");
-    const bottomRows = bottom ? (bottom.match(/\n/g) || []).length + 1 : 0;
+    // `bottom` always starts with "\n" (renderInputPrompt prefixes, and the panel
+    // branch prepends "\n"). Each newline consumes exactly one visual row, so
+    // bottomRows == count of newlines — no +1.
+    const bottomRows = bottom ? (bottom.match(/\n/g) || []).length : 0;
     const frameBudget = maxRows != null ? maxRows - bottomRows : undefined;
 
     let frame = "";
@@ -461,6 +478,7 @@ export class RunDisplay {
         statusLine: this.steeringStatusLine,
         events: this.steeringEvents,
         context: this.steeringContext,
+        startedAt: this.steeringStartedAt,
       }, this.hasHotkeys(), this.rlGetter, frameBudget, this.panel);
     } else {
       return "";
@@ -670,8 +688,10 @@ export class RunDisplay {
     // ── 5. Input mode: steer / ask ──
     if (this.inputMode === "steer" || this.inputMode === "ask") {
       let dirty = false;
-      for (let ci = 0; ci < s.length; ci++) {
-        const ch = s[ci];
+      // Iterate by code point (Array.from) so emoji/surrogate pairs stay intact.
+      const chars = Array.from(s);
+      for (let ci = 0; ci < chars.length; ci++) {
+        const ch = chars[ci];
         if (ch === "\r" || ch === "\n") {
           const text = segmentsToString(this.inputSegs).trim();
           const wasAsk = this.inputMode === "ask";
@@ -688,10 +708,10 @@ export class RunDisplay {
           this.inputSegs = [];
           return true;
         }
-        // ESC: if next byte exists it's part of an Alt+key sequence — skip both.
+        // ESC: if another byte follows it's part of an Alt+key sequence — skip both.
         // Standalone ESC (no following byte) cancels input mode.
         if (ch === "\x1B") {
-          if (ci + 1 < s.length) { ci++; continue; }
+          if (ci + 1 < chars.length) { ci++; continue; }
           this.inputMode = "none";
           this.inputSegs = [];
           return true;
@@ -701,10 +721,11 @@ export class RunDisplay {
           dirty = true;
           continue;
         }
-        const code = ch.charCodeAt(0);
+        const code = ch.codePointAt(0) ?? 0;
+        // Reject C0/C1 control characters; accept everything else including Unicode.
         if (code < 0x20) continue;
         if (code >= 0x7F && code < 0xA0) continue;
-        if (code >= 0x20 && code <= 0x7E && segmentsToString(this.inputSegs).length < MAX_INPUT_LEN) {
+        if (segmentsToString(this.inputSegs).length + ch.length <= MAX_INPUT_LEN) {
           appendCharToSegments(this.inputSegs, ch);
           dirty = true;
         }

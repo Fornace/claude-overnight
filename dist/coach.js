@@ -5,6 +5,7 @@ import { execSync } from "child_process";
 import { homedir } from "os";
 import chalk from "chalk";
 import { runPlannerQuery, attemptJsonParse } from "./planner-query.js";
+import { createTurn, beginTurn, endTurn } from "./turns.js";
 import { selectKey, ask } from "./cli.js";
 import { envFor } from "./providers.js";
 // ── URL fetching for plan links in the objective ──
@@ -349,6 +350,8 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
         process.stdout.write(`\x1B[2K\r  ${chalk.cyan("⚡")} ${chalk.dim(`coach ${elapsed}s${hint}`)}`);
     }, 500);
     let raw;
+    const turn = createTurn("coach", "Coach", "coach-0", model);
+    beginTurn(turn);
     try {
         const coachEnv = ctx.coachProvider ? envFor(ctx.coachProvider) : undefined;
         const queryPromise = runPlannerQuery(prompt, {
@@ -360,15 +363,18 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
             maxTurns: 3,
             tools: [],
             env: coachEnv,
+            turnId: turn.id,
         }, () => { });
         const timeout = new Promise((_, reject) => {
             setTimeout(() => reject(new Error(`coach timed out after ${Math.round(COACH_TIMEOUT_MS / 1000)}s`)), COACH_TIMEOUT_MS);
         });
         raw = await Promise.race([queryPromise, timeout]);
+        endTurn(turn, "done");
     }
     catch (err) {
         clearInterval(spinner);
         process.stdout.write(`\x1B[2K\r`);
+        endTurn(turn, "error");
         const msg = String(err?.message ?? err).toLowerCase();
         const reason = msg.includes("timed out") ? "timeout"
             : (msg.includes("401") || msg.includes("auth")) ? "auth"
@@ -405,6 +411,8 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
         if (!amend)
             return null;
         const amendedPrompt = `${prompt}\n\n---\n\nUser amendment (apply and return a revised JSON object):\n${amend}`;
+        const amendTurn = createTurn("coach", "Coach (amended)", "coach-amend-0", model);
+        beginTurn(amendTurn);
         try {
             const coachEnv = ctx.coachProvider ? envFor(ctx.coachProvider) : undefined;
             const raw2 = await Promise.race([
@@ -412,9 +420,11 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
                     cwd, model, permissionMode: "bypassPermissions",
                     outputFormat: COACH_SCHEMA, transcriptName: "coach-retry", maxTurns: 3, tools: [],
                     env: coachEnv,
+                    turnId: amendTurn.id,
                 }, () => { }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error("coach amendment timed out")), COACH_TIMEOUT_MS)),
             ]);
+            endTurn(amendTurn, "done");
             const parsed2 = attemptJsonParse(raw2);
             const result2 = validateCoachOutput(parsed2);
             if (result2) {
@@ -434,6 +444,7 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
         }
         catch {
             console.log(chalk.dim("  coach amendment failed — falling through"));
+            endTurn(amendTurn, "error");
         }
         return null;
     }

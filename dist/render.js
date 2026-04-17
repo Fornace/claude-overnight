@@ -1,8 +1,43 @@
 import chalk from "chalk";
 import { RATE_LIMIT_WINDOW_SHORT } from "./types.js";
 import { getModelCapability, modelDisplayName } from "./models.js";
+import { allTurns, focusedTurn } from "./turns.js";
 const SPINNER = ["|", "/", "-", "\\"];
+/** Braille dot spinner — higher frame count, smoother motion. Used by the
+ *  reusable waiting indicator so long silent waits always feel alive. */
+const DOTS = ["\u2846", "\u2807", "\u280B", "\u2819", "\u2838", "\u28B0", "\u28E0", "\u28C4"];
 // ── Shared helpers ──
+/** Single-frame character of a spinner. Exported so any caller can prefix its
+ *  own line with a consistent animation without importing SPINNER directly. */
+export function spinnerFrame(kind = "dots") {
+    const arr = kind === "line" ? SPINNER : DOTS;
+    return arr[Math.floor(Date.now() / 120) % arr.length];
+}
+/** Reusable indicator for any in-flight wait. Always shows animation + elapsed
+ *  time so no phase ever appears frozen. `eta` (future timestamp) adds a
+ *  countdown; `hint` appends a short secondary label.
+ *
+ *  style:
+ *    - "thinking" (cyan): planner/AI reasoning
+ *    - "wait"     (magenta): rate-limit / cooldown
+ *    - "warn"     (yellow): degraded / blocked
+ *    - "info"     (blue): default */
+export function renderWaitingIndicator(label, startedAt, opts = {}) {
+    const color = opts.style === "warn" ? chalk.yellow
+        : opts.style === "wait" ? chalk.magenta
+            : opts.style === "thinking" ? chalk.cyan
+                : chalk.blue;
+    const spin = color(spinnerFrame("dots"));
+    let out = `${spin} ${label}`;
+    if (startedAt)
+        out += `  ${chalk.dim(fmtDur(Math.max(0, Date.now() - startedAt)))}`;
+    if (opts.eta && opts.eta > Date.now()) {
+        out += chalk.dim(`${startedAt ? " · " : "  "}${fmtDur(opts.eta - Date.now())} left`);
+    }
+    if (opts.hint)
+        out += chalk.dim(` · ${opts.hint}`);
+    return out;
+}
 export function truncate(s, max) {
     return s.length <= max ? s : s.slice(0, max - 1) + "\u2026";
 }
@@ -98,18 +133,32 @@ function renderUsageBars(out, w, swarm, selectedAgentId) {
     const windows = Array.from(swarm.rateLimitWindows.values());
     const rlPct = swarm.rateLimitUtilization;
     const hasRL = !(rlPct <= 0 && !swarm.rateLimitResetsAt && !swarm.cappedOut && swarm.rateLimitPaused <= 0 && windows.length === 0);
-    // Context bar — prefer the selected agent when detail view is open, else the peak running agent.
-    let ctx = null;
-    if (selectedAgentId != null) {
-        const a = swarm.agents.find(x => x.id === selectedAgentId);
-        if (a && (a.contextTokens ?? 0) > 0) {
-            const model = a.task.model || swarm.model || "unknown";
-            ctx = { tokens: a.contextTokens ?? 0, safe: getModelCapability(model).safeContext, agentId: a.id, model };
+    // Context fullness bar — use the turns registry.
+    // Prefer the focused turn (from arrow-key navigation or auto-cycle), fall back
+    // to the selected agent's context, then the peak running agent.
+    const turns = allTurns();
+    const cycleIdx = turns.length > 1 ? Math.floor(Date.now() / 4000) % turns.length : 0;
+    let ctxTurn = turns.length > 1 ? (turns[cycleIdx] || null) : null;
+    const ft = focusedTurn();
+    if (ft && (ft.contextTokens ?? 0) > 0)
+        ctxTurn = ft;
+    // Fall back to selected agent or peak agent
+    let ctxAgent = null;
+    if (!ctxTurn) {
+        if (selectedAgentId != null) {
+            const a = swarm.agents.find(x => x.id === selectedAgentId);
+            if (a && (a.contextTokens ?? 0) > 0) {
+                const model = a.task.model || swarm.model || "unknown";
+                ctxAgent = { tokens: a.contextTokens ?? 0, safe: getModelCapability(model).safeContext, agentId: a.id, model };
+            }
+        }
+        if (!ctxAgent) {
+            const peak = peakAgentContext(swarm);
+            if (peak)
+                ctxAgent = peak;
         }
     }
-    if (!ctx)
-        ctx = peakAgentContext(swarm);
-    if (!hasRL && !ctx)
+    if (!hasRL && !ctxTurn && !ctxAgent)
         return;
     const barW = Math.min(30, w - 40);
     const capFrac = swarm.usageCap;
@@ -137,17 +186,10 @@ function renderUsageBars(out, w, swarm, selectedAgentId) {
                 : (swarm.rateLimitResetsAt && swarm.rateLimitResetsAt > Date.now()) ? swarm.rateLimitResetsAt
                     : undefined;
             const winName = mcw ? (RATE_LIMIT_WINDOW_SHORT[mcw.type] ?? mcw.type.replace(/_/g, " ")) : undefined;
-            let txt = winName
-                ? `Anthropic ${winName} limit hit`
-                : `Rate limited`;
-            if (when) {
-                const waitSec = Math.ceil((when - Date.now()) / 1000);
-                const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
-                txt += ` \u2014 resets in ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`;
-            }
-            if (swarm.rateLimitPaused > 0)
-                txt += ` (${swarm.rateLimitPaused} waiting)`;
-            label = chalk.yellow(txt);
+            const base = winName ? `Anthropic ${winName} limit hit` : `Rate limited`;
+            const hint = swarm.rateLimitPaused > 0 ? `${swarm.rateLimitPaused} waiting` : undefined;
+            const since = swarm.rateLimitBlockedSince ?? Date.now();
+            label = renderWaitingIndicator(base, since, { eta: when, hint, style: "wait" });
         }
         if (swarm.isUsingOverage && !swarm.cappedOut)
             label += chalk.red(" [OVERAGE]");
@@ -184,11 +226,25 @@ function renderUsageBars(out, w, swarm, selectedAgentId) {
             : `$${swarm.overageCostUsd.toFixed(2)}/$${swarm.extraUsageBudget}`;
         out.push(`  ${chalk.dim("Extra ")}${barStr}  ${label}`);
     }
-    // Context fullness bar (per peak-running-agent or selected agent).
-    if (ctx) {
-        const who = selectedAgentId != null && ctx.agentId === selectedAgentId ? `agent ${ctx.agentId}` : `peak a${ctx.agentId}`;
-        const label = `${fmtTokens(ctx.tokens)}/${fmtTokens(ctx.safe)} safe  ${chalk.dim(`${who} · ${modelDisplayName(ctx.model)}`)}`;
-        drawContextBar(out, w, ctx.tokens, ctx.safe, label);
+    // Context fullness bar
+    if (ctxTurn) {
+        const mdl = ctxTurn.model ?? "unknown";
+        const safe = getModelCapability(mdl).safeContext;
+        const tok = ctxTurn.contextTokens ?? 0;
+        const label = `${fmtTokens(tok)}/${fmtTokens(safe)} safe  ${chalk.dim(`${ctxTurn.label} · ${modelDisplayName(mdl)}`)}`;
+        drawContextBar(out, w, tok, safe, label);
+        if (turns.length > 1) {
+            const dots = turns.map((t, i) => {
+                const ch = t.status === "running" ? "\u25CF" : t.status === "done" ? "\u25CB" : "\u25D0";
+                return i === cycleIdx ? chalk.cyan(ch) : chalk.dim(ch);
+            }).join("");
+            out[out.length - 1] += chalk.dim(`  ${dots}`);
+        }
+    }
+    else if (ctxAgent) {
+        const who = selectedAgentId != null && ctxAgent.agentId === selectedAgentId ? `agent ${ctxAgent.agentId}` : `peak a${ctxAgent.agentId}`;
+        const label = `${fmtTokens(ctxAgent.tokens)}/${fmtTokens(ctxAgent.safe)} safe  ${chalk.dim(`${who} · ${modelDisplayName(ctxAgent.model)}`)}`;
+        drawContextBar(out, w, ctxAgent.tokens, ctxAgent.safe, label);
     }
 }
 // ── Unified frame renderer ──
@@ -330,7 +386,8 @@ export function renderFrame(swarm, showHotkeys, runInfo, selectedAgentId, maxRow
             const eventRows = [chalk.gray("  \u2500\u2500\u2500 Events " + "\u2500".repeat(Math.min(ww - 16, 90)))];
             // All-done indicator: visible immediately when swarm finishes, before summary / steering
             if (allDone && swarm.phase !== "done") {
-                eventRows.push(chalk.dim("  (all tasks done \u2014 processing)"));
+                const phaseLabel = swarm.phase === "merging" ? "Merging branches" : "Finalizing wave";
+                eventRows.push("  " + renderWaitingIndicator(phaseLabel, swarm.startedAt, { style: "thinking" }));
                 eventRows.push("");
             }
             const logN = Math.min(12, swarm.logs.length);
@@ -418,9 +475,7 @@ function renderSteeringUsageBar(out, w, rl) {
         if (rl.isUsingOverage)
             lbl += chalk.red(" [EXTRA USAGE]");
         if (rl.resetsAt && rl.resetsAt > Date.now()) {
-            const waitSec = Math.ceil((rl.resetsAt - Date.now()) / 1000);
-            const mm = Math.floor(waitSec / 60), ss = waitSec % 60;
-            lbl = chalk.red(`Waiting for reset ${mm > 0 ? `${mm}m ${ss}s` : `${ss}s`}`);
+            lbl = renderWaitingIndicator("Waiting for reset", undefined, { eta: rl.resetsAt, style: "warn" });
         }
         const prefix = label ? chalk.dim(label.padEnd(6)) : chalk.dim("RL    ");
         out.push(`  ${prefix}${barStr}  ${lbl}`);
@@ -514,8 +569,9 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
             const events = data.events.slice(-15);
             const plannerModel = rlGetter ? rlGetter().model : runInfo.model;
             const plannerModelTag = plannerModel ? chalk.dim(` \u00b7 ${modelDisplayName(plannerModel)}`) : "";
+            const started = data.startedAt ?? Date.now();
             if (events.length === 0) {
-                plannerRows.push(chalk.dim("  (waiting for planner\u2026)"));
+                plannerRows.push("  " + renderWaitingIndicator("Planner thinking", started, { style: "thinking" }));
             }
             else {
                 for (const e of events) {
@@ -533,9 +589,11 @@ export function renderSteeringFrame(runInfo, data, showHotkeys, rlGetter, maxRow
                 }
             }
             secs.push({ title: `Planner activity${plannerModelTag}`, rows: plannerRows });
-            // Status line (undecorated)
+            // Status line: animated spinner + live ticker text + elapsed time, so the
+            // phase never looks frozen even when the planner goes minutes without emitting.
             const liveClean = data.statusLine.replace(/\n/g, " ");
-            secs.push({ title: "", rows: [`  ${chalk.cyan("\u25B6")} ${chalk.dim(truncate(liveClean, ww - 6))}`] });
+            const liveLabel = truncate(liveClean || "thinking\u2026", Math.max(10, ww - 24));
+            secs.push({ title: "", rows: [`  ${renderWaitingIndicator(liveLabel, started, { style: "thinking" })}`] });
             return secs;
         },
     };
@@ -641,6 +699,9 @@ export function renderSummary(swarm) {
     const label = `${swarm.agents.length} tasks`.padEnd(taskW);
     const peakCell = peakCtxPct > 0 ? `${peakCtxPct}%`.padStart(ctxW) : "".padStart(ctxW);
     out.push(chalk.bold(`  ${"".padStart(3)}  ${"Total ".padEnd(6)}  ${label}  ${fmtDur(totalDurMs).padStart(8)}  ${String(totalFiles).padStart(5)}  ${String(totalTools).padStart(5)}  ${peakCell}  ${`$${totalCost.toFixed(3)}`.padStart(8)}`));
+    if (swarm.staleRecovered > 0 || swarm.staleForceDeleted > 0) {
+        out.push(chalk.dim(`  [prior-wave] ${swarm.staleRecovered} recovered + ${swarm.staleForceDeleted} discarded orphan branch(es)`));
+    }
     out.push("");
     return out.join("\n");
 }
@@ -651,9 +712,9 @@ function fmtRow(a, w, selected = false) {
     const modelW = 18;
     const modelStr = truncate(mdl, modelW).padEnd(modelW);
     const elapsed = a.status === "running" && a.startedAt ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt)) : "";
-    const spin = SPINNER[Math.floor(Date.now() / 250) % SPINNER.length];
+    const dot = spinnerFrame("dots");
     const icon = a.status === "running"
-        ? (a.blockedAt ? chalk.yellow("\u25CF blk") : chalk.blue(`${spin} run`)) + elapsed
+        ? (a.blockedAt ? chalk.yellow(`${dot} blk`) : chalk.blue(`${dot} run`)) + elapsed
         : a.status === "paused" ? chalk.yellow("\u23F8 paused")
             : a.status === "done" ? chalk.green("\u2713 done") : chalk.red("\u2717 err ");
     const taskW = Math.max(20, Math.min(36, w - 50 - modelW - 6));

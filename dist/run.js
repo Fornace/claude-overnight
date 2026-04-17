@@ -50,7 +50,7 @@ export async function executeRun(cfg) {
     let accCost, accCompleted, accFailed, accTools;
     let accIn = 0, accOut = 0;
     let peakWorkerCtxPct = 0, peakWorkerCtxTokens = 0;
-    let lastCapped = false, lastAborted = false, objectiveComplete = false, lastHealed = false;
+    let lastCapped = false, lastAborted = false, objectiveComplete = false;
     let lastEstimate;
     const branches = [];
     if (cfg.resuming && cfg.resumeState) {
@@ -184,9 +184,34 @@ export async function executeRun(cfg) {
             memory.reflections ? `Reflections:\n${cap(memory.reflections, 600)}` : "",
         ].filter(Boolean).join("\n\n");
         const prompt = `${label}\n\n${ctx}\n\nWrite one short sentence (max 120 chars) summarising progress and what's next. No preamble.`;
+        // Show in-flight feedback so the panel isn't empty while the planner thinks.
+        display.setDebrief(`Summarizing ${label.toLowerCase().replace(/\.$/, "")}\u2026`);
         void runPlannerQuery(prompt, { cwd, model: debriefModel, permissionMode }, () => { })
             .then(text => { display.setDebrief(text.trim().slice(0, 140)); })
-            .catch(() => { });
+            .catch(() => { display.setDebrief(undefined); });
+    };
+    /** Generate a longer narrative summary at run end. Awaited (not fire-and-forget)
+     *  because the caller wants the text inline in the final status block. */
+    const generateFinalNarrative = async (phase) => {
+        const debriefModel = fastModel || workerModel;
+        const memory = readRunMemory(runDir, previousKnowledge || undefined);
+        const cap = (s, n) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
+        const ctx = [
+            objective ? `Objective: ${objective}` : "",
+            memory.goal ? `Goal:\n${cap(memory.goal, 1200)}` : "",
+            memory.status ? `Status:\n${cap(memory.status, 1200)}` : "",
+            waveHistory.length ? `Waves completed: ${waveHistory.length}` : "",
+            memory.reflections ? `Reflections:\n${cap(memory.reflections, 800)}` : "",
+            memory.verifications ? `Verifications:\n${cap(memory.verifications, 800)}` : "",
+        ].filter(Boolean).join("\n\n");
+        const prompt = `The autonomous run just ended. Final phase: ${phase}.\n\n${ctx}\n\nWrite 3–5 plain sentences for the user: what was accomplished, what's still open, and any follow-ups they should do manually. No bullet points, no preamble, no markdown headers.`;
+        try {
+            const text = await runPlannerQuery(prompt, { cwd, model: debriefModel, permissionMode }, () => { });
+            return text.trim();
+        }
+        catch {
+            return "";
+        }
     };
     // For flex + branch strategy: create one target branch
     let runBranch;
@@ -306,7 +331,7 @@ export async function executeRun(cfg) {
                         currentTasks = [{
                                 id: "verify-0",
                                 prompt: `## Verification: Build, run, and test the application end-to-end\n\nYou are the final gatekeeper before this run is marked complete. The steerer believes the objective is done. Your job: prove it or disprove it.\n\n1. Run the build (npm run build, or whatever this project uses). Report ALL errors.\n2. Start the dev server. If a port is taken, try another. If a dependency is missing, install it.\n3. Navigate key flows as a real user would. Check that the main features work.\n4. Write your findings to .claude-overnight/latest/verifications/final-verify.md\n\nBe relentless. Do not give up if the first approach fails. Search the codebase for dev login routes, test tokens, seed users, env vars, CLI auth commands, or any bypass.`,
-                                noWorktree: true, model: plannerModel,
+                                noWorktree: true, model: plannerModel, type: "verify",
                             }];
                         steered = true;
                         break;
@@ -336,6 +361,7 @@ export async function executeRun(cfg) {
                 currentTasks = [{
                         id: "fallback-0",
                         prompt: `Steering couldn't decide the next step. Read the project, assess what's done vs. remaining, and do the most impactful work.\n\nObjective: ${objective}${fallbackStatus ? `\n\nStatus:\n${fallbackStatus}` : ""}`,
+                        type: "execute",
                     }];
                 steered = true;
                 break;
@@ -358,16 +384,15 @@ export async function executeRun(cfg) {
     while (runAnotherRound) {
         runAnotherRound = false;
         while (remaining > 0 && currentTasks.length > 0 && !stopping) {
-            // Health check: runs once per process start to fix a broken build before
-            // any real work begins. Only triggers when there's nothing else queued --
-            // it must NEVER override tasks that steering has already planned.
-            if (!lastHealed) {
-                lastHealed = true;
-                // Only replace tasks with health fix if the queue was essentially empty.
-                // Steering-planned tasks always take priority.
+            // Health check before each wave: a broken build poisons every subsequent
+            // agent context, so prepend a heal task when detected. Steering-planned
+            // tasks still run, just after the build is green again.
+            {
                 const healTask = checkProjectHealth(cwd);
-                if (healTask && remaining > 0 && currentTasks.length <= 1) {
-                    currentTasks = [healTask];
+                if (healTask && remaining > 0) {
+                    const withoutDup = currentTasks.filter(t => t.id !== "heal-0");
+                    currentTasks = [healTask, ...withoutDup];
+                    display.appendSteeringEvent(`Health check: build broken — queued heal task`);
                 }
             }
             if (currentTasks.length > remaining)
@@ -428,6 +453,56 @@ export async function executeRun(cfg) {
             }
             display.pause();
             console.log(renderSummary(swarm));
+            // Retry execute tasks that returned filesChanged=0. One retry with a nudge;
+            // if still 0, fail loudly so steering re-plans instead of silently dropping.
+            if (!swarm.aborted && !swarm.cappedOut && remaining > 0) {
+                const zeroWork = swarm.agents.filter(a => a.status === "done" && (!a.task.type || a.task.type === "execute") && (a.filesChanged ?? 0) === 0);
+                if (zeroWork.length > 0) {
+                    display.appendSteeringEvent(`Retry: ${zeroWork.length} execute task(s) with 0 file changes`);
+                    const retryTasks = zeroWork.map(a => ({
+                        id: `${a.task.id}-retry`,
+                        prompt: `${a.task.prompt}\n\nIMPORTANT: your last attempt made no file edits. If the fix truly needs no changes, say 'no-op:' at the start and explain why. Otherwise, make the actual edits.`,
+                        type: "execute",
+                    }));
+                    const retrySwarm = new Swarm({
+                        tasks: retryTasks, concurrency: Math.min(concurrency, retryTasks.length), cwd, model: workerModel,
+                        permissionMode, allowedTools, useWorktrees, mergeStrategy: waveMerge,
+                        agentTimeoutMs: cfg.agentTimeoutMs, usageCap, allowExtraUsage: cfg.allowExtraUsage,
+                        extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: accCost, envForModel,
+                        cursorProxy: [cfg.workerProvider, cfg.plannerProvider, cfg.fastProvider].some(p => p && isCursorProxyProvider(p)),
+                    });
+                    currentSwarm = retrySwarm;
+                    display.setWave(retrySwarm);
+                    display.resume();
+                    try {
+                        await retrySwarm.run();
+                    }
+                    catch { }
+                    display.pause();
+                    // Fold retry stats into main counters
+                    accIn += retrySwarm.totalInputTokens;
+                    accOut += retrySwarm.totalOutputTokens;
+                    accTools += retrySwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+                    // Any retry that still has 0 files → hard fail
+                    const stillZero = retrySwarm.agents.filter(a => a.status === "done" && (a.filesChanged ?? 0) === 0);
+                    for (const a of stillZero) {
+                        display.appendSteeringEvent(`RETRY FAILED: agent ${a.id} still changed 0 files after nudge — task dropped as error`);
+                        accFailed++;
+                        remaining = Math.max(0, remaining - 1);
+                    }
+                    accCompleted += retrySwarm.completed;
+                    remaining = Math.max(0, remaining - retrySwarm.completed);
+                    // Merge retry agents into the main swarm's agent list so they're
+                    // included in the wave summary.
+                    swarm.agents.push(...retrySwarm.agents);
+                    swarm.completed += retrySwarm.completed;
+                    swarm.failed += stillZero.length;
+                    swarm.totalCostUsd += retrySwarm.totalCostUsd;
+                    swarm.totalInputTokens += retrySwarm.totalInputTokens;
+                    swarm.totalOutputTokens += retrySwarm.totalOutputTokens;
+                    liveConfig.remaining = remaining;
+                }
+            }
             accCost += swarm.totalCostUsd;
             accIn += swarm.totalInputTokens;
             accOut += swarm.totalOutputTokens;
@@ -470,8 +545,24 @@ export async function executeRun(cfg) {
             saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks: neverStarted }));
             waveHistory.push({
                 wave: waveNum,
-                tasks: swarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, filesChanged: a.filesChanged, error: a.error })),
+                tasks: swarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, type: a.task.type, filesChanged: a.filesChanged, error: a.error })),
             });
+            // Hook-blocked work: agents that touched files but nothing landed on the
+            // branch (pre-commit hooks, gitignore, writes outside worktree). Surface
+            // as a wave-level warning so steering sees it, not just a per-agent log.
+            const hookBlocked = swarm.agents.filter(a => swarm.logs.some(l => l.agentId === a.id && l.text.includes("did NOT land")));
+            if (hookBlocked.length > 0) {
+                const msg = `⚠ ${hookBlocked.length} agent(s) touched files that didn't land — check hooks/gitignore/absolute paths`;
+                display.appendSteeringEvent(msg);
+                // Append to status.md so steering reads it on the next wave
+                try {
+                    const existing = readFileSync(join(runDir, "status.md"), "utf-8");
+                    if (!existing.includes(msg)) {
+                        writeFileSync(join(runDir, "status.md"), existing + `\n\n${msg}`, "utf-8");
+                    }
+                }
+                catch { }
+            }
             // Fire-and-forget debrief after each wave.
             runDebrief(`Wave ${waveNum + 1} just finished.`);
             // After-wave commands: run shell commands in cwd after each wave (e.g. "supabase db push").
@@ -494,11 +585,17 @@ export async function executeRun(cfg) {
             // Post-wave review: a single review agent against the consolidated diff.
             // Runs only when there was real work (not first wave, not abort/cap).
             if (flex && remaining > 0 && !swarm.aborted && !swarm.cappedOut && waveNum > 0) {
+                display.appendSteeringEvent(`Review: scanning wave ${waveNum + 1} diff\u2026`);
                 const reviewResult = await runPostWaveReview({
                     cwd, plannerModel, permissionMode, concurrency,
                     remaining, usageCap, allowExtraUsage: cfg.allowExtraUsage,
                     extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: accCost,
                     envForModel, mergeStrategy: waveMerge, useWorktrees,
+                }, (reviewSwarm) => {
+                    // Show the review agent live so the long wait isn't silent.
+                    currentSwarm = reviewSwarm;
+                    display.setWave(reviewSwarm);
+                    display.resume();
                 });
                 if (reviewResult) {
                     accCost += reviewResult.costUsd;
@@ -558,13 +655,22 @@ export async function executeRun(cfg) {
     const finalPhase = trulyDone ? "done" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
     saveRunState(runDir, buildRunState({ remaining, phase: finalPhase, currentTasks: [] }));
     // Post-run final review: comprehensive review of the entire diff before shipping.
+    // This can take several minutes — keep the display alive so the user sees the
+    // review agent working in real time instead of staring at a frozen terminal.
     if (flex && remaining > 0 && waveNum > 0) {
+        console.log(chalk.dim(`\n  Final review: scanning full run diff\u2026`));
+        display.start();
         const finalReview = await runPostRunReview(objective || "", {
             cwd, plannerModel, permissionMode, concurrency,
             remaining, usageCap, allowExtraUsage: cfg.allowExtraUsage,
             extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: accCost,
             envForModel, mergeStrategy: waveMerge, useWorktrees,
+        }, (reviewSwarm) => {
+            currentSwarm = reviewSwarm;
+            display.setWave(reviewSwarm);
+            display.resume();
         });
+        display.stop();
         if (finalReview) {
             accCost += finalReview.costUsd;
             accIn += finalReview.inputTokens;
@@ -621,21 +727,50 @@ export async function executeRun(cfg) {
     const totalMerged = branches.filter(b => b.status === "merged").length;
     const totalConflicts = branches.filter(b => b.status === "merge-failed").length;
     const termW = Math.max((process.stdout.columns ?? 80) || 80, 50);
+    const rule = (c = "─") => chalk.dim(`  ${c.repeat(Math.min(termW - 4, 60))}`);
+    // Generate the long-form debrief inline — the user sees a spinner while it
+    // runs, then the narrative is printed as part of the final status block.
+    const phaseWord = trulyDone ? "complete"
+        : remaining <= 0 || lastCapped ? "budget exhausted"
+            : stopping || lastAborted ? "interrupted"
+                : "stopped";
+    process.stdout.write(chalk.dim(`\n  Writing final summary…`));
+    const narrative = await generateFinalNarrative(phaseWord);
+    process.stdout.write("\r" + " ".repeat(40) + "\r");
     console.log("");
-    const bannerChar = accFailed === 0 ? "=" : "-";
-    console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+    const bannerChar = accFailed === 0 ? "━" : "─";
+    const bannerColor = trulyDone ? chalk.green : (stopping || lastAborted) ? chalk.yellow : chalk.magenta;
+    console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
     if (trulyDone)
-        console.log(chalk.bold.green(`  CLAUDE OVERNIGHT  -- COMPLETE`));
-    else if (remaining <= 0)
-        console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- BUDGET EXHAUSTED`));
-    else if (lastCapped)
-        console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- BUDGET EXHAUSTED`));
+        console.log(chalk.bold.green(`  ✓ CLAUDE OVERNIGHT  -- COMPLETE`));
+    else if (remaining <= 0 || lastCapped)
+        console.log(chalk.bold.yellow(`  ⚠ CLAUDE OVERNIGHT  -- BUDGET EXHAUSTED`));
     else if (stopping || lastAborted)
-        console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- INTERRUPTED`));
+        console.log(chalk.bold.yellow(`  ⚠ CLAUDE OVERNIGHT  -- INTERRUPTED`));
     else
-        console.log(chalk.bold.yellow(`  CLAUDE OVERNIGHT  -- STOPPED`));
-    console.log(chalk.green(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+        console.log(chalk.bold.yellow(`  ⚠ CLAUDE OVERNIGHT  -- STOPPED`));
+    console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
     console.log("");
+    if (objective) {
+        console.log(chalk.bold("  Objective"));
+        const objWrapped = objective.replace(/\s+/g, " ").trim();
+        const objW = Math.min(termW - 6, 76);
+        for (let i = 0; i < objWrapped.length; i += objW)
+            console.log(`  ${objWrapped.slice(i, i + objW)}`);
+        console.log("");
+    }
+    if (narrative) {
+        console.log(chalk.bold("  What happened"));
+        const narrW = Math.min(termW - 6, 76);
+        for (const para of narrative.split(/\n\n+/)) {
+            const clean = para.replace(/\s+/g, " ").trim();
+            if (!clean)
+                continue;
+            for (let i = 0; i < clean.length; i += narrW)
+                console.log(`  ${clean.slice(i, i + narrW)}`);
+            console.log("");
+        }
+    }
     const peakPlanner = getPeakPlannerContext();
     const plannerSafe = peakPlanner.model ? getModelCapability(peakPlanner.model).safeContext : 0;
     const plannerPct = plannerSafe > 0 && peakPlanner.tokens > 0 ? Math.round((peakPlanner.tokens / plannerSafe) * 100) : 0;
@@ -645,6 +780,9 @@ export async function executeRun(cfg) {
             return chalk.dim("—");
         return colorByPct(pct)(`${fmtTokens(tok)} (${pct}%)`);
     };
+    console.log(rule());
+    console.log(chalk.bold("  Stats"));
+    console.log("");
     const statRows = [
         [chalk.bold("Waves"), String(waves), chalk.bold("Sessions"), `${accCompleted} done${accFailed > 0 ? ` / ${accFailed} failed` : ""}${remaining > 0 ? ` (${remaining} remaining)` : ""}`],
         [chalk.bold("Cost"), chalk.green(`$${accCost.toFixed(2)}`), chalk.bold("Elapsed"), elapsedStr],
@@ -657,11 +795,39 @@ export async function executeRun(cfg) {
     if (lastCapped)
         console.log(`  ${chalk.yellow(`Overage budget exhausted`)}`);
     console.log("");
+    // Per-wave recap — a compact timeline so the user can see effort distribution at a glance.
+    if (waveHistory.length > 0) {
+        console.log(rule());
+        console.log(chalk.bold(`  Waves  `) + chalk.dim(`(${waveHistory.length} total)`));
+        console.log("");
+        for (const w of waveHistory) {
+            const done = w.tasks.filter(t => t.status === "done").length;
+            const failed = w.tasks.filter(t => t.status === "error").length;
+            const running = w.tasks.filter(t => t.status === "running").length;
+            const parts = [];
+            if (done)
+                parts.push(chalk.green(`✓ ${done}`));
+            if (failed)
+                parts.push(chalk.red(`✗ ${failed}`));
+            if (running)
+                parts.push(chalk.blue(`~ ${running}`));
+            if (parts.length === 0)
+                parts.push(chalk.dim("—"));
+            const head = `  ${chalk.dim(`wave ${String(w.wave + 1).padStart(2)}`)}  ${parts.join(" ")}`;
+            console.log(head);
+            const firstTask = w.tasks[0];
+            if (firstTask) {
+                const preview = firstTask.prompt.replace(/\s+/g, " ").trim().slice(0, Math.min(termW - 12, 70));
+                console.log(chalk.dim(`    ${preview}${w.tasks.length > 1 ? ` (+${w.tasks.length - 1} more)` : ""}`));
+            }
+        }
+        console.log("");
+    }
     const statusFile = join(runDir, "status.md");
     try {
         const statusContent = readFileSync(statusFile, "utf-8").trim();
         if (statusContent) {
-            console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
+            console.log(rule());
             console.log(chalk.bold("  Status"));
             console.log("");
             for (const line of statusContent.split("\n"))
@@ -671,7 +837,7 @@ export async function executeRun(cfg) {
     }
     catch { }
     if (totalConflicts > 0) {
-        console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
+        console.log(rule());
         const conflictBranches = branches.filter(b => b.status === "merge-failed");
         console.log(chalk.red(`  Unresolved conflicts:`));
         for (const c of conflictBranches)
@@ -679,12 +845,23 @@ export async function executeRun(cfg) {
         console.log(chalk.dim("  git merge <branch> to resolve"));
         console.log("");
     }
-    console.log(chalk.dim(`  ${"─".repeat(Math.min(termW - 4, 60))}`));
+    console.log(rule());
     if (runBranch)
         console.log(chalk.dim(`  Branch: ${runBranch}  -- git merge ${runBranch}`));
     console.log(chalk.dim(`  Run: ${runDir}`));
     if (currentSwarm?.logFile)
         console.log(chalk.dim(`  Log: ${currentSwarm.logFile}`));
+    console.log("");
+    console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+    if (trulyDone)
+        console.log(chalk.bold.green(`  Done. Review the diff, then ship it.`));
+    else if (remaining <= 0 || lastCapped)
+        console.log(chalk.bold.yellow(`  Paused on budget. Re-run with --resume to continue.`));
+    else if (stopping || lastAborted)
+        console.log(chalk.bold.yellow(`  Interrupted. --resume to pick up where this left off.`));
+    else
+        console.log(chalk.bold.yellow(`  Stopped. --resume to continue.`));
+    console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
     console.log("");
     if (accFailed > 0)
         process.exit(1);
@@ -722,14 +899,15 @@ ${close}
 
 No need to explain your changes  -- just fix them.`;
 }
-async function runReview(opts, scope, objective) {
+async function runReview(opts, scope, objective, onSwarm) {
     const swarm = new Swarm({
-        tasks: [{ id: `${scope}-review`, prompt: reviewPrompt(scope, objective), noWorktree: false }],
+        tasks: [{ id: `${scope}-review`, prompt: reviewPrompt(scope, objective), noWorktree: false, type: "review" }],
         concurrency: 1, cwd: opts.cwd, model: opts.plannerModel, permissionMode: opts.permissionMode,
         useWorktrees: opts.useWorktrees, mergeStrategy: opts.mergeStrategy, usageCap: opts.usageCap,
         allowExtraUsage: opts.allowExtraUsage, extraUsageBudget: opts.extraUsageBudget,
         baseCostUsd: opts.baseCostUsd, envForModel: opts.envForModel,
     });
+    onSwarm?.(swarm);
     try {
         await swarm.run();
         return { costUsd: swarm.totalCostUsd, inputTokens: swarm.totalInputTokens, outputTokens: swarm.totalOutputTokens, completed: swarm.completed, failed: swarm.failed };
@@ -738,11 +916,11 @@ async function runReview(opts, scope, objective) {
         return null;
     }
 }
-async function runPostWaveReview(opts) {
-    return runReview(opts, "wave");
+async function runPostWaveReview(opts, onSwarm) {
+    return runReview(opts, "wave", undefined, onSwarm);
 }
-async function runPostRunReview(objective, opts) {
-    return runReview(opts, "run", objective);
+async function runPostRunReview(objective, opts, onSwarm) {
+    return runReview(opts, "run", objective, onSwarm);
 }
 async function promptBudgetExtension(ctx) {
     const avg = ctx.sessionsUsed > 0 ? ctx.spent / ctx.sessionsUsed : 0;
@@ -776,27 +954,9 @@ async function promptBudgetExtension(ctx) {
     return n;
 }
 function checkProjectHealth(cwd) {
-    let pkg;
-    try {
-        pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8"));
-    }
-    catch {
+    const cmd = detectHealthCommand(cwd);
+    if (!cmd)
         return undefined;
-    }
-    const scripts = pkg.scripts || {};
-    let scriptName;
-    for (const name of ["typecheck", "check:types", "type-check", "build"]) {
-        if (scripts[name]) {
-            scriptName = name;
-            break;
-        }
-    }
-    if (!scriptName)
-        return undefined;
-    const pm = existsSync(join(cwd, "pnpm-lock.yaml")) ? "pnpm"
-        : existsSync(join(cwd, "bun.lockb")) || existsSync(join(cwd, "bun.lock")) ? "bun"
-            : existsSync(join(cwd, "yarn.lock")) ? "yarn" : "npm";
-    const cmd = `${pm} run ${scriptName}`;
     try {
         execSync(cmd, { cwd, encoding: "utf-8", stdio: "pipe", timeout: 60_000 });
         return undefined;
@@ -809,8 +969,36 @@ function checkProjectHealth(cwd) {
         return {
             id: "heal-0",
             prompt: `Fix the broken build. \`${cmd}\` fails after merging parallel work:\n\`\`\`\n${trimmed}\n\`\`\`\nFix every error. Run \`${cmd}\` when done to verify.`,
+            type: "heal",
         };
     }
+}
+function detectHealthCommand(cwd) {
+    const has = (p) => existsSync(join(cwd, p));
+    try {
+        const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8"));
+        const scripts = pkg.scripts || {};
+        for (const name of ["typecheck", "check:types", "type-check", "build"]) {
+            if (scripts[name]) {
+                const pm = has("pnpm-lock.yaml") ? "pnpm"
+                    : has("bun.lockb") || has("bun.lock") ? "bun"
+                        : has("yarn.lock") ? "yarn" : "npm";
+                return `${pm} run ${name}`;
+            }
+        }
+    }
+    catch { }
+    if (has("tsconfig.json"))
+        return "npx -y tsc --noEmit";
+    if (has("Cargo.toml"))
+        return "cargo check --quiet";
+    if (has("go.mod"))
+        return "go build ./...";
+    if (has("deno.json") || has("deno.jsonc"))
+        return "deno check .";
+    if (has("mix.exs"))
+        return "mix compile --warnings-as-errors";
+    return undefined;
 }
 // ── Pre-wave rate limit gate ──
 function sleep(ms) {

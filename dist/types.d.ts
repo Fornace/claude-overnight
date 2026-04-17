@@ -14,6 +14,8 @@ export interface Task {
     resumeSessionId?: string;
     /** Working directory preserved from a previous run (worktree dir for paused-and-resumed tasks). */
     agentCwd?: string;
+    /** The kind of work: "execute" modifies files, others are read-only/analysis. Defaults to "execute". */
+    type?: string;
 }
 /** Schema for a JSON task file that defines a batch of work for the swarm. */
 export interface TaskFile {
@@ -175,6 +177,7 @@ export interface WaveSummary {
     tasks: {
         prompt: string;
         status: string;
+        type?: string;
         filesChanged?: number;
         error?: string;
     }[];

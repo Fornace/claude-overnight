@@ -14,6 +14,8 @@ export interface Task {
   resumeSessionId?: string;
   /** Working directory preserved from a previous run (worktree dir for paused-and-resumed tasks). */
   agentCwd?: string;
+  /** The kind of work: "execute" modifies files, others are read-only/analysis. Defaults to "execute". */
+  type?: string;
 }
 
 /** Schema for a JSON task file that defines a batch of work for the swarm. */
@@ -191,7 +193,7 @@ export class NudgeError extends Error {
 /** Summary of one completed wave, used by steering to decide next actions. */
 export interface WaveSummary {
   wave: number;
-  tasks: { prompt: string; status: string; filesChanged?: number; error?: string }[];
+  tasks: { prompt: string; status: string; type?: string; filesChanged?: number; error?: string }[];
 }
 
 /** Result from the steering function. */
