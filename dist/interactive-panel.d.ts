@@ -1,4 +1,9 @@
 export type PanelMode = "debrief" | "ask" | "custom" | "none";
+export interface DebriefEntry {
+    label: string;
+    text: string;
+    time: number;
+}
 /** Mutable state of the interactive panel. */
 export interface PanelState {
     mode: PanelMode;
@@ -11,12 +16,16 @@ export interface PanelState {
 export declare class InteractivePanel {
     state: PanelState;
     private _bodyLines;
+    /** Accumulated debrief entries — each wave/phase appends one. */
+    private _debriefHistory;
     set(params: {
         mode: PanelMode;
         header: string;
         preview: string;
         body: string;
     }): void;
+    /** Append a debrief entry to the running history. Only meaningful in debrief mode. */
+    appendHistory(label: string, text: string): void;
     /** Close the panel entirely (set mode to "none"). */
     close(): void;
     collapse(): void;

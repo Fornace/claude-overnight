@@ -84,8 +84,10 @@ export declare class RunDisplay {
     private lastFrame;
     private onSteer?;
     private onAsk?;
-    /** Set or clear the debrief text shown in the interactive panel. */
-    setDebrief(text: string | undefined): void;
+    /** Set or clear the debrief text shown in the interactive panel.
+     *  When a label is provided alongside resolved text, it's appended to
+     *  the running history so expanded view shows all wave debriefs. */
+    setDebrief(text: string | undefined, label?: string): void;
     constructor(runInfo: RunInfo, liveConfig?: LiveConfig, callbacks?: {
         onSteer?: (text: string) => void;
         onAsk?: (text: string) => void;

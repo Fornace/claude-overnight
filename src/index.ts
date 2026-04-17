@@ -773,9 +773,11 @@ async function main() {
     const clearStatusLine = () => {
       if (isTTY && statusLineActive) { process.stdout.write(`\x1B[2K\r`); statusLineActive = false; }
     };
-    /** Cursor agent cold start + thinking-variant model latency can exceed 20s; API providers stay tight. */
+    /** Cursor agent cold start + thinking-variant model latency can exceed 20s, and the cursor
+     *  preflight now also runs a write-capability probe (see probeCursorWriteCapability) that
+     *  asks cursor to Bash a marker file — so the total budget must cover auth ping + write turn. */
     const preflightMs = (p: ProviderConfig) =>
-      isCursorProxyProvider(p) ? 60_000 : 20_000;
+      isCursorProxyProvider(p) ? 90_000 : 20_000;
     const results = await Promise.all(pending.map(async ([role, p]) => {
       statuses.set(role, "connecting…");
       renderStatus();

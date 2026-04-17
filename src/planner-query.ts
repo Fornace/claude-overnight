@@ -502,8 +502,8 @@ export function postProcess(raw: Task[], budget: number | undefined, onLog: (tex
   let tasks = raw;
 
   const before = tasks.length;
-  tasks = tasks.filter((t) => t.prompt && t.prompt.trim().split(/\s+/).length >= 3);
-  if (tasks.length < before) onLog(`Filtered ${before - tasks.length} task(s) with fewer than 3 words`);
+  tasks = tasks.filter((t) => t.prompt && t.prompt.trim().length >= 1);
+  if (tasks.length < before) onLog(`Filtered ${before - tasks.length} task(s) with empty prompt`);
 
   // Read-only tasks (verify/audit/user-test) shouldn't get a worktree: they
   // don't change files, so they'd just create empty swarm branches that show

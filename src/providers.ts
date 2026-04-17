@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync, openSync, statSync, readSync, closeSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, realpathSync, openSync, statSync, readSync, closeSync, unlinkSync } from "fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { homedir } from "os";
 import { join, dirname } from "path";
@@ -179,10 +180,10 @@ export function envFor(p: ProviderConfig): Record<string, string> {
     // SDK replaces env for subprocesses — force these so nothing inherits a bad CI / skip flag.
     base.CI = "true";
     base.CURSOR_SKIP_KEYCHAIN = "1";
-    // Bridge mode controls the agent behavior: "plan" enables tool use (Read,
-    // Glob, Grep, Write, Bash), "ask" gives a chat-only assistant. Planner
-    // agents and workers must use "plan" so they actually interact with the codebase.
-    base.CURSOR_BRIDGE_MODE = "plan";
+    // "agent" omits --mode so cursor-agent runs full agentic mode (Read,
+    // Glob, Grep, Write, Bash). Passing --mode plan or ask forces read-only —
+    // Write/Bash tool calls are silently dropped, exit 0, empty stdout.
+    base.CURSOR_BRIDGE_MODE = "agent";
     // Use system Node.js for agent subprocess to avoid macOS segfaults with
     // bundled Node.js. Resolve lazily.
     if (!_cachedAgentNode || !_cachedAgentScript) {
@@ -435,6 +436,10 @@ async function preflightCursorProxyViaHttp(
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (key) headers["authorization"] = `Bearer ${key}`;
 
+  // Shared deadline: auth ping + write probe split the total timeout budget.
+  const overallDeadlineAt = Date.now() + timeoutMs;
+  const remaining = () => Math.max(1_000, overallDeadlineAt - Date.now());
+  const authBudget = Math.max(5_000, Math.floor(timeoutMs / 2));
   const controller = new AbortController();
   let elapsed = 0;
   const PROGRESS_INTERVAL_MS = 3_000;
@@ -442,7 +447,7 @@ async function preflightCursorProxyViaHttp(
     elapsed += PROGRESS_INTERVAL_MS;
     opts?.onProgress?.(`still waiting… (${(elapsed / 1000).toFixed(1)}s)`);
   }, PROGRESS_INTERVAL_MS);
-  const deadline = setTimeout(() => controller.abort(), timeoutMs);
+  const deadline = setTimeout(() => controller.abort(), authBudget);
 
   try {
     // max_tokens must accommodate thinking tokens for `*-thinking-*` variants —
@@ -464,7 +469,6 @@ async function preflightCursorProxyViaHttp(
     }
     // Drain body so the connection closes cleanly; we don't care about content.
     await res.text().catch(() => "");
-    return { ok: true };
   } catch (err: any) {
     if (err?.name === "AbortError") {
       return { ok: false, error: `timeout after ${Math.round(timeoutMs / 1000)}s` };
@@ -474,6 +478,86 @@ async function preflightCursorProxyViaHttp(
     clearTimeout(deadline);
     clearInterval(progressTimer);
   }
+
+  // Write-capability probe — catches the --mode plan / ask regression where
+  // the proxy silently swallows Write/Bash tool calls (exit 0, empty body,
+  // no file changes). Ask cursor to write a unique marker file; fail if the
+  // file doesn't appear. Keeps the first wave from silently burning budget.
+  opts?.onProgress?.(`probing write capability…`);
+  const probeErr = await probeCursorWriteCapability(baseURL, key, p.model, remaining(), opts);
+  if (probeErr) return { ok: false, error: probeErr };
+  return { ok: true };
+}
+
+/**
+ * Ask the proxy to create a unique marker file via its Bash tool; verify the
+ * file appeared on disk. Returns an error string on failure, null on success.
+ *
+ * Failure modes caught:
+ * - `CURSOR_BRIDGE_MODE=plan|ask` silently drops Write/Bash (regression fixed in
+ *   cursor-composer-in-claude 0.9.3; this keeps older proxy versions actionable).
+ * - Workspace is untrusted or agent is otherwise nonfunctional — exit 0 with
+ *   no side effects.
+ */
+async function probeCursorWriteCapability(
+  baseURL: string,
+  key: string | null | undefined,
+  model: string,
+  timeoutMs: number,
+  opts?: { onProgress?: (msg: string) => void },
+): Promise<string | null> {
+  const marker = `co-probe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const probeFile = join(tmpdir(), `${marker}.txt`);
+  try { unlinkSync(probeFile); } catch {}
+  const prompt =
+    `Run this exact shell command via your Bash tool, then reply with only the word DONE:\n` +
+    `printf 'ok' > ${probeFile}`;
+
+  const controller = new AbortController();
+  let elapsed = 0;
+  const PROGRESS_INTERVAL_MS = 3_000;
+  const progressTimer = setInterval(() => {
+    elapsed += PROGRESS_INTERVAL_MS;
+    opts?.onProgress?.(`write probe… (${(elapsed / 1000).toFixed(1)}s)`);
+  }, PROGRESS_INTERVAL_MS);
+  const deadline = setTimeout(() => controller.abort(), timeoutMs);
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (key) headers["authorization"] = `Bearer ${key}`;
+
+  try {
+    const res = await fetch(`${baseURL}/v1/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        max_tokens: 4096,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return `write probe: HTTP ${res.status}: ${text.slice(0, 200)}`;
+    }
+    await res.text().catch(() => "");
+  } catch (err: any) {
+    if (err?.name === "AbortError") return `write probe: timeout after ${Math.round(timeoutMs / 1000)}s`;
+    return `write probe: ${String(err?.message || err).slice(0, 200)}`;
+  } finally {
+    clearTimeout(deadline);
+    clearInterval(progressTimer);
+  }
+
+  if (!existsSync(probeFile)) {
+    return (
+      `write probe: cursor returned without creating the marker file. ` +
+      `Most likely cause: CURSOR_BRIDGE_MODE=plan|ask (silent read-only mode). ` +
+      `Upgrade cursor-composer-in-claude to ≥0.9.3 and set CURSOR_BRIDGE_MODE=agent (or unset).`
+    );
+  }
+  try { unlinkSync(probeFile); } catch {}
+  return null;
 }
 
 // ── Cursor API Proxy ──
@@ -999,9 +1083,10 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     // the CLI path injects keychain-shim-inject.js via NODE_OPTIONS which no-ops
     // /usr/bin/security calls on macOS (cursor-composer/dist/lib/process.js).
     CURSOR_BRIDGE_USE_ACP: "0",
-    // Default bridge mode: "plan" enables tool use (Read, Glob, Grep, Write, Bash).
-    // "ask" gives a chat-only assistant that doesn't interact with the codebase.
-    CURSOR_BRIDGE_MODE: "plan",
+    // "agent" omits --mode so cursor-agent runs full agentic mode with
+    // Read/Glob/Grep/Write/Bash. --mode plan and --mode ask are both strictly
+    // read-only — Write/Bash calls exit 0 with empty stdout.
+    CURSOR_BRIDGE_MODE: "agent",
     // cursor-composer chat-only mode fakes HOME to a temp dir; on macOS the agent still waits on
     // Keychain (~30s) for `cursor-user` despite CURSOR_API_KEY. Use the real workspace profile.
     CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "false",
