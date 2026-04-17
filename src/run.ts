@@ -113,7 +113,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   let accCost: number, accCompleted: number, accFailed: number, accTools: number;
   let accIn = 0, accOut = 0;
   let peakWorkerCtxPct = 0, peakWorkerCtxTokens = 0;
-  let lastCapped = false, lastAborted = false, objectiveComplete = false, lastHealed = false;
+  let lastCapped = false, lastAborted = false, objectiveComplete = false;
   let lastEstimate: number | undefined;
   const branches: BranchRecord[] = [];
 
@@ -401,16 +401,15 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   while (runAnotherRound) {
     runAnotherRound = false;
   while (remaining > 0 && currentTasks.length > 0 && !stopping) {
-    // Health check: runs once per process start to fix a broken build before
-    // any real work begins. Only triggers when there's nothing else queued --
-    // it must NEVER override tasks that steering has already planned.
-    if (!lastHealed) {
-      lastHealed = true;
-      // Only replace tasks with health fix if the queue was essentially empty.
-      // Steering-planned tasks always take priority.
+    // Health check before each wave: a broken build poisons every subsequent
+    // agent context, so prepend a heal task when detected. Steering-planned
+    // tasks still run, just after the build is green again.
+    {
       const healTask = checkProjectHealth(cwd);
-      if (healTask && remaining > 0 && currentTasks.length <= 1) {
-        currentTasks = [healTask];
+      if (healTask && remaining > 0) {
+        const withoutDup = currentTasks.filter(t => t.id !== "heal-0");
+        currentTasks = [healTask, ...withoutDup];
+        display.appendSteeringEvent(`Health check: build broken — queued heal task`);
       }
     }
     if (currentTasks.length > remaining) currentTasks = currentTasks.slice(0, remaining);
@@ -834,18 +833,8 @@ async function promptBudgetExtension(ctx: {
 }
 
 function checkProjectHealth(cwd: string): Task | undefined {
-  let pkg: any;
-  try { pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8")); } catch { return undefined; }
-  const scripts = pkg.scripts || {};
-  let scriptName: string | undefined;
-  for (const name of ["typecheck", "check:types", "type-check", "build"]) {
-    if (scripts[name]) { scriptName = name; break; }
-  }
-  if (!scriptName) return undefined;
-  const pm = existsSync(join(cwd, "pnpm-lock.yaml")) ? "pnpm"
-    : existsSync(join(cwd, "bun.lockb")) || existsSync(join(cwd, "bun.lock")) ? "bun"
-    : existsSync(join(cwd, "yarn.lock")) ? "yarn" : "npm";
-  const cmd = `${pm} run ${scriptName}`;
+  const cmd = detectHealthCommand(cwd);
+  if (!cmd) return undefined;
   try {
     execSync(cmd, { cwd, encoding: "utf-8", stdio: "pipe", timeout: 60_000 });
     return undefined;
@@ -858,6 +847,28 @@ function checkProjectHealth(cwd: string): Task | undefined {
       prompt: `Fix the broken build. \`${cmd}\` fails after merging parallel work:\n\`\`\`\n${trimmed}\n\`\`\`\nFix every error. Run \`${cmd}\` when done to verify.`,
     };
   }
+}
+
+function detectHealthCommand(cwd: string): string | undefined {
+  const has = (p: string) => existsSync(join(cwd, p));
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8"));
+    const scripts = pkg.scripts || {};
+    for (const name of ["typecheck", "check:types", "type-check", "build"]) {
+      if (scripts[name]) {
+        const pm = has("pnpm-lock.yaml") ? "pnpm"
+          : has("bun.lockb") || has("bun.lock") ? "bun"
+          : has("yarn.lock") ? "yarn" : "npm";
+        return `${pm} run ${name}`;
+      }
+    }
+  } catch {}
+  if (has("tsconfig.json")) return "npx -y tsc --noEmit";
+  if (has("Cargo.toml")) return "cargo check --quiet";
+  if (has("go.mod")) return "go build ./...";
+  if (has("deno.json") || has("deno.jsonc")) return "deno check .";
+  if (has("mix.exs")) return "mix compile --warnings-as-errors";
+  return undefined;
 }
 
 // ── Pre-wave rate limit gate ──
