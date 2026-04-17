@@ -108,6 +108,11 @@ export declare function healthCheckCursorProxy(baseUrl?: string): Promise<boolea
  * Returns model IDs like ["auto", "composer", "composer-2", "opus-4.6", ...].
  */
 export declare function fetchCursorModels(baseUrl?: string): Promise<string[]>;
+/** Options for {@link ensureCursorProxyRunning}. */
+export interface EnsureProxyOptions {
+    forceRestart?: boolean;
+    projectRoot?: string;
+}
 /**
  * Auto-start the cursor-composer-in-claude as a detached background process.
  *
@@ -123,9 +128,13 @@ export declare function fetchCursorModels(baseUrl?: string): Promise<string[]>;
  * When `forceRestart` is true, any listener on the port is killed and the
  * bundled proxy is spawned (same as a version mismatch).
  *
- * Returns true when the proxy is reachable at PROXY_DEFAULT_URL.
+ * When `projectRoot` is provided and `baseUrl` is the default, a per-project
+ * port is resolved from `.claude-overnight/config.json` so concurrent runs
+ * in different repos don't collide on port 8765.
+ *
+ * Returns true when the proxy is reachable.
  */
-export declare function ensureCursorProxyRunning(baseUrl?: string, forceRestart?: boolean): Promise<boolean>;
+export declare function ensureCursorProxyRunning(baseUrl?: string, opts?: EnsureProxyOptions): Promise<boolean>;
 /**
  * Full install + configure flow for cursor-composer-in-claude.
  * Walks through CLI install, API key config, and proxy start.

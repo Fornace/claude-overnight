@@ -17,6 +17,7 @@ import {
   cursorModelHint,
 } from "./cursor-models.js";
 import { VERSION } from "./_version.js";
+import { getProxyPort, buildProxyUrl } from "./proxy-port.js";
 
 /** Cached system Node.js and agent script paths — resolved once, reused across envFor calls. */
 let _cachedAgentNode: string | null = null;
@@ -847,6 +848,12 @@ async function isPortInUse(port: number, host = "127.0.0.1"): Promise<boolean> {
   }
 }
 
+/** Options for {@link ensureCursorProxyRunning}. */
+export interface EnsureProxyOptions {
+  forceRestart?: boolean;
+  projectRoot?: string;
+}
+
 /**
  * Auto-start the cursor-composer-in-claude as a detached background process.
  *
@@ -862,14 +869,25 @@ async function isPortInUse(port: number, host = "127.0.0.1"): Promise<boolean> {
  * When `forceRestart` is true, any listener on the port is killed and the
  * bundled proxy is spawned (same as a version mismatch).
  *
- * Returns true when the proxy is reachable at PROXY_DEFAULT_URL.
+ * When `projectRoot` is provided and `baseUrl` is the default, a per-project
+ * port is resolved from `.claude-overnight/config.json` so concurrent runs
+ * in different repos don't collide on port 8765.
+ *
+ * Returns true when the proxy is reachable.
  */
-export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, forceRestart = false): Promise<boolean> {
+export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, opts?: EnsureProxyOptions): Promise<boolean> {
   warnMacCursorAgentShellPatchIfNeeded();
-  const url = new URL(baseUrl);
-  const port = parseInt(url.port, 10) || 80;
 
-  // Stale listener on :8765 may have been started without CURSOR_API_KEY for the agent child.
+  // Resolve per-project port if no explicit base URL was given and projectRoot is available
+  const resolvedPort: number | null = opts?.projectRoot && baseUrl === PROXY_DEFAULT_URL
+    ? getProxyPort(opts.projectRoot)
+    : null;
+  const effectiveBaseUrl = resolvedPort != null ? buildProxyUrl(resolvedPort) : baseUrl;
+  const url = new URL(effectiveBaseUrl);
+  const port = resolvedPort ?? (parseInt(url.port, 10) || 80);
+  const forceRestart = opts?.forceRestart ?? false;
+
+  // Stale listener may have been started without CURSOR_API_KEY for the agent child.
   // When we have a token, replace the listener by default so the bundled proxy always inherits it.
   // Opt out: CURSOR_OVERNIGHT_NO_PROXY_RESTART=1 (e.g. shared port / external proxy).
   const token = resolveCursorAgentToken();
@@ -1029,7 +1047,7 @@ async function startProxyProcess(baseUrl: string, url: URL, port: number): Promi
     try { mkdirSync(dirname(logPath), { recursive: true }); } catch {}
     const logFd = openSync(logPath, "a");
     console.log(chalk.dim(`  Spawning proxy… ${chalk.dim(`(logs: ${logPath})`)}`));
-    const child = spawn(process.execPath, [composerCli], {
+    const child = spawn(process.execPath, [composerCli, "--port", String(port)], {
       detached: true,
       stdio: ["ignore", logFd, logFd],
       env: proxyEnv,
@@ -1265,7 +1283,7 @@ export async function setupCursorProxy(): Promise<boolean> {
       { key: "c", desc: "ancel" },
     ]);
     if (choice === "r") {
-      if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, true)) {
+      if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { forceRestart: true })) {
         console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
         return true;
       }
@@ -1343,7 +1361,7 @@ async function pickCursorModel(): Promise<ModelPick | null> {
           { key: "c", desc: "ancel" },
         ]);
         if (choice === "r") {
-          if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, true)) {
+          if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { forceRestart: true })) {
             console.log(chalk.green("  ✓ Proxy started"));
             break;
           }

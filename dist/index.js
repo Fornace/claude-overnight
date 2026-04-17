@@ -10,6 +10,7 @@ import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate,
 import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "./models.js";
 import { setPlannerEnvResolver } from "./planner-query.js";
 import { setTranscriptRunDir } from "./transcripts.js";
+import { getProxyPort, buildProxyUrl } from "./proxy-port.js";
 import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, readCursorProxyLogTail, ensureCursorProxyRunning, bundledComposerProxyShellCommand, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, } from "./providers.js";
 import { RunDisplay } from "./ui.js";
 import { renderSummary, wrap } from "./render.js";
@@ -889,7 +890,18 @@ async function main() {
         }
         // Auto-start cursor proxy before pinging (restarts when a token exists so stale listeners get CURSOR_API_KEY).
         if (cursorProxies.length > 0) {
-            await ensureCursorProxyRunning();
+            const resolvedPort = getProxyPort(cwd);
+            const resolvedUrl = buildProxyUrl(resolvedPort);
+            await ensureCursorProxyRunning(resolvedUrl);
+            // Sync providers to the resolved port (may differ from default if per-project port was picked)
+            for (const p of cursorProxies) {
+                if (!p.baseURL || p.baseURL === PROXY_DEFAULT_URL) {
+                    p.baseURL = resolvedUrl;
+                }
+            }
+            if (resolvedUrl !== PROXY_DEFAULT_URL) {
+                console.log(chalk.dim(`  Proxy port: ${resolvedPort}`));
+            }
             if (!hasCursorAgentToken()) {
                 console.error(chalk.red(`  ✗ Cursor models require a User API key — add it via ${chalk.bold("Cursor…")} setup, or set ` +
                     `${chalk.bold("CURSOR_API_KEY")} / ${chalk.bold("CURSOR_BRIDGE_API_KEY")}, or ${chalk.bold("cursorApiKey")} in providers.json.`));

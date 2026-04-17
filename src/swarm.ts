@@ -11,7 +11,7 @@ import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens 
 import type { Task, AgentState, SwarmPhase, PermMode, MergeStrategy, RateLimitWindow, AITurn } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult, ErroredBranchEvaluator } from "./merge.js";
-import { ensureCursorProxyRunning } from "./providers.js";
+import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "./providers.js";
 import { getModelCapability } from "./models.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "./turns.js";
 
@@ -350,7 +350,7 @@ export class Swarm {
           // attempt to restart it before the next task.
           if (this.config.cursorProxy) {
             this.log(-1, "  Checking cursor proxy health…");
-            const restarted = await ensureCursorProxyRunning();
+            const restarted = await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { projectRoot: this.config.cwd });
             if (!restarted) {
               this.log(-1, chalk.yellow("  ⚠ Proxy still down — remaining tasks may fail"));
             }

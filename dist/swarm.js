@@ -5,7 +5,7 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
-import { ensureCursorProxyRunning } from "./providers.js";
+import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "./providers.js";
 import { getModelCapability } from "./models.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "./turns.js";
 const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
@@ -330,7 +330,7 @@ export class Swarm {
                     // attempt to restart it before the next task.
                     if (this.config.cursorProxy) {
                         this.log(-1, "  Checking cursor proxy health…");
-                        const restarted = await ensureCursorProxyRunning();
+                        const restarted = await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { projectRoot: this.config.cwd });
                         if (!restarted) {
                             this.log(-1, chalk.yellow("  ⚠ Proxy still down — remaining tasks may fail"));
                         }
