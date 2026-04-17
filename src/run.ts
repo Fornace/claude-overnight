@@ -231,11 +231,11 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       waveHistory.length ? `Waves done: ${waveHistory.length}` : "",
       memory.reflections ? `Reflections:\n${cap(memory.reflections, 600)}` : "",
     ].filter(Boolean).join("\n\n");
-    const prompt = `${label}\n\n${ctx}\n\nWrite one short sentence (max 120 chars) summarising progress and what's next. No preamble.`;
+    const prompt = `${label}\n\n${ctx}\n\nWrite one short sentence (max 180 chars) summarising progress and what's next. No preamble.`;
     // Show in-flight feedback so the panel isn't empty while the planner thinks.
     display.setDebrief(`Summarizing ${label.toLowerCase().replace(/\.$/, "")}\u2026`);
     void runPlannerQuery(prompt, { cwd, model: debriefModel, permissionMode }, () => {})
-      .then(text => { display.setDebrief(text.trim().slice(0, 140)); })
+      .then(text => { display.setDebrief(text.trim().slice(0, 210), label); })
       .catch(() => { display.setDebrief(undefined); });
   };
 
@@ -491,19 +491,45 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     display.pause();
     console.log(renderSummary(swarm));
 
-    // Retry execute tasks that returned filesChanged=0. One retry with a nudge;
-    // if still 0, fail loudly so steering re-plans instead of silently dropping.
+    // Retry execute tasks that returned filesChanged=0 OR whose postcondition
+    // shell-check failed after merge. One retry with a nudge that includes the
+    // failure output; if still failing, fail loudly so steering re-plans.
     if (!swarm.aborted && !swarm.cappedOut && remaining > 0) {
-      const zeroWork = swarm.agents.filter(a =>
-        a.status === "done" && (!a.task.type || a.task.type === "execute") && (a.filesChanged ?? 0) === 0
-      );
+      const failedBranches = new Set(swarm.mergeResults.filter(r => !r.ok).map(r => r.branch));
+      const postResults = new Map<number, { ok: boolean; output: string }>();
+      for (const a of swarm.agents) {
+        if (a.status !== "done" || !a.task.postcondition) continue;
+        if (a.branch && failedBranches.has(a.branch)) continue; // merge-failed: postcondition can't pass on main anyway
+        try {
+          const out = execSync(a.task.postcondition, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 });
+          postResults.set(a.id, { ok: true, output: out.trim().slice(0, 400) });
+        } catch (err: any) {
+          const output = ((err.stderr || "") + "\n" + (err.stdout || err.message || "")).trim().slice(0, 400);
+          postResults.set(a.id, { ok: false, output });
+        }
+      }
+      const zeroWork = swarm.agents.filter(a => {
+        if (a.status !== "done" || (a.task.type && a.task.type !== "execute")) return false;
+        if ((a.filesChanged ?? 0) === 0) return true;
+        const pr = postResults.get(a.id);
+        return pr && !pr.ok;
+      });
       if (zeroWork.length > 0) {
-        display.appendSteeringEvent(`Retry: ${zeroWork.length} execute task(s) with 0 file changes`);
-        const retryTasks = zeroWork.map(a => ({
-          id: `${a.task.id}-retry`,
-          prompt: `${a.task.prompt}\n\nIMPORTANT: your last attempt made no file edits. If the fix truly needs no changes, say 'no-op:' at the start and explain why. Otherwise, make the actual edits.`,
-          type: "execute" as const,
-        }));
+        const noFiles = zeroWork.filter(a => (a.filesChanged ?? 0) === 0).length;
+        const badPost = zeroWork.length - noFiles;
+        display.appendSteeringEvent(`Retry: ${zeroWork.length} task(s) (${noFiles} with 0 files, ${badPost} failed postcondition)`);
+        const retryTasks = zeroWork.map(a => {
+          const pr = postResults.get(a.id);
+          const postFailBlock = pr && !pr.ok
+            ? `\n\nThe postcondition \`${a.task.postcondition}\` failed after your last attempt:\n${pr.output || "(no output)"}\n\nFix what makes the check fail and try again.`
+            : `\n\nIMPORTANT: your last attempt made no file edits. If the fix truly needs no changes, say 'no-op:' at the start and explain why. Otherwise, make the actual edits.`;
+          return {
+            id: `${a.task.id}-retry`,
+            prompt: `${a.task.prompt}${postFailBlock}`,
+            type: "execute" as const,
+            postcondition: a.task.postcondition,
+          };
+        });
         const retrySwarm = new Swarm({
           tasks: retryTasks, concurrency: Math.min(concurrency, retryTasks.length), cwd, model: workerModel,
           permissionMode, allowedTools, useWorktrees, mergeStrategy: waveMerge,
@@ -521,12 +547,20 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         accIn += retrySwarm.totalInputTokens; accOut += retrySwarm.totalOutputTokens;
         accTools += retrySwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
 
-        // Any retry that still has 0 files → hard fail
-        const stillZero = retrySwarm.agents.filter(a =>
-          a.status === "done" && (a.filesChanged ?? 0) === 0
-        );
+        // Any retry that still has 0 files OR a still-failing postcondition → hard fail
+        const retryFailedBranches = new Set(retrySwarm.mergeResults.filter(r => !r.ok).map(r => r.branch));
+        const stillZero = retrySwarm.agents.filter(a => {
+          if (a.status !== "done") return false;
+          if ((a.filesChanged ?? 0) === 0) return true;
+          if (!a.task.postcondition) return false;
+          if (a.branch && retryFailedBranches.has(a.branch)) return true;
+          try { execSync(a.task.postcondition, { cwd, stdio: "ignore", timeout: 30_000 }); return false; }
+          catch { return true; }
+        });
         for (const a of stillZero) {
-          display.appendSteeringEvent(`RETRY FAILED: agent ${a.id} still changed 0 files after nudge — task dropped as error`);
+          const why = (a.filesChanged ?? 0) === 0 ? "still changed 0 files" : "postcondition still failing";
+          display.appendSteeringEvent(`RETRY FAILED: agent ${a.id} ${why} — task dropped as error`);
+          a.error = a.error ?? `retry failed: ${why}`;
           accFailed++;
           remaining = Math.max(0, remaining - 1);
         }
@@ -582,9 +616,22 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     const neverStarted = currentTasks.filter(t => !attemptedPrompts.has(t.prompt));
     saveRunState(runDir, buildRunState({ remaining, phase: "steering", currentTasks: neverStarted }));
 
+    // Overlay merge outcomes: if an agent's branch failed to merge, its changes
+    // did NOT land — tell steering the truth (filesChanged=0, error attached)
+    // so it can't declare victory on work that didn't reach the codebase.
+    const failedMergeBranches = new Set(swarm.mergeResults.filter(r => !r.ok).map(r => r.branch));
     waveHistory.push({
       wave: waveNum,
-      tasks: swarm.agents.map(a => ({ prompt: a.task.prompt, status: a.status, type: a.task.type, filesChanged: a.filesChanged, error: a.error })),
+      tasks: swarm.agents.map(a => {
+        const mergeFailed = a.branch && failedMergeBranches.has(a.branch);
+        return {
+          prompt: a.task.prompt,
+          status: a.status,
+          type: a.task.type,
+          filesChanged: mergeFailed ? 0 : a.filesChanged,
+          error: mergeFailed ? `merge-failed: branch ${a.branch} did not land` : a.error,
+        };
+      }),
     });
 
     // Hook-blocked work: agents that touched files but nothing landed on the
@@ -604,6 +651,32 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         }
       } catch {}
     }
+
+    // Merge-failed branches: changes never reached the codebase. Regenerate a
+    // pinned section in status.md every wave from live git state — resolved
+    // branches (deleted from git) drop off automatically; still-broken ones
+    // keep shouting at steering until a follow-up wave lands them or discards
+    // them. This is what turns merge-failed from a silent state into a
+    // first-class blocker.
+    try {
+      const unresolved = branches.filter(b => {
+        if (b.status !== "merge-failed") return false;
+        try { execSync(`git rev-parse --verify "${b.branch}"`, { cwd, stdio: "ignore" }); return true; }
+        catch { return false; } // branch gone → treat as resolved
+      });
+      const statusPath = join(runDir, "status.md");
+      const existing = existsSync(statusPath) ? readFileSync(statusPath, "utf-8") : "";
+      const marker = "## Unresolved merge failures";
+      const idx = existing.indexOf(marker);
+      const base = idx >= 0 ? existing.slice(0, idx).replace(/\n+$/, "") : existing;
+      let next = base;
+      if (unresolved.length > 0) {
+        const list = unresolved.map(b => `  - ${b.branch} — ${b.taskPrompt.slice(0, 120)}`).join("\n");
+        next = `${base}${base ? "\n\n" : ""}${marker}\n${unresolved.length} branch(es) contain unmerged agent work. Resolve or discard before relying on those changes:\n${list}\n`;
+        display.appendSteeringEvent(`⚠ ${unresolved.length} unresolved merge failure(s) — see status.md`);
+      }
+      if (next !== existing) writeFileSync(statusPath, next, "utf-8");
+    } catch {}
 
     // Fire-and-forget debrief after each wave.
     runDebrief(`Wave ${waveNum + 1} just finished.`);

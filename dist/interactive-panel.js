@@ -1,5 +1,5 @@
-const DARK_GREEN_BG = "\x1B[48;5;22m";
-const LIGHT_GREEN_FG = "\x1B[38;5;156m";
+const BLACK_BG = "\x1B[48;5;232m";
+const SUBTLE_FG = "\x1B[38;5;108m";
 const BRIGHT_WHITE_FG = "\x1B[38;5;231m";
 const SOFT_GREEN_FG = "\x1B[38;5;114m";
 const RESET = "\x1B[0m";
@@ -15,7 +15,7 @@ function truncate(s, max) {
 }
 /** Wrap a plain (ANSI-free) line in the dark-green bg, padded to width. */
 function bgLine(text, width) {
-    return `${DARK_GREEN_BG}${LIGHT_GREEN_FG}${padTo(text, width)}${RESET}`;
+    return `${BLACK_BG}${SUBTLE_FG}${padTo(text, width)}${RESET}`;
 }
 export class InteractivePanel {
     state = {
@@ -27,6 +27,8 @@ export class InteractivePanel {
         body: "",
     };
     _bodyLines = [];
+    /** Accumulated debrief entries — each wave/phase appends one. */
+    _debriefHistory = [];
     set(params) {
         this.state.mode = params.mode;
         this.state.header = params.header;
@@ -34,6 +36,19 @@ export class InteractivePanel {
         this.state.body = params.body;
         this._bodyLines = params.body.split("\n").filter(l => l.length > 0);
         this.state.scrollOffset = 0;
+        // Clear history when mode changes away from debrief
+        if (params.mode !== "debrief")
+            this._debriefHistory = [];
+    }
+    /** Append a debrief entry to the running history. Only meaningful in debrief mode. */
+    appendHistory(label, text) {
+        if (this.state.mode !== "debrief")
+            return;
+        this._debriefHistory.push({ label, text, time: Date.now() });
+        // Rebuild body from full history so expanded view shows everything
+        const historyBody = this._debriefHistory.map(e => `  ${e.label}\n  ${e.text}`).join("\n\n");
+        this.state.body = historyBody;
+        this._bodyLines = historyBody.split("\n");
     }
     /** Close the panel entirely (set mode to "none"). */
     close() {

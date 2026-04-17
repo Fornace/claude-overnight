@@ -49,10 +49,16 @@ export class RunDisplay {
     lastFrame = "";
     onSteer;
     onAsk;
-    /** Set or clear the debrief text shown in the interactive panel. */
-    setDebrief(text) {
+    /** Set or clear the debrief text shown in the interactive panel.
+     *  When a label is provided alongside resolved text, it's appended to
+     *  the running history so expanded view shows all wave debriefs. */
+    setDebrief(text, label) {
         if (text) {
             this.panel.set({ mode: "debrief", header: "Debrief", preview: text, body: text });
+            // Append to accumulated history when we have the final text (not loading message)
+            if (label && !text.startsWith("Summarizing")) {
+                this.panel.appendHistory(label, text);
+            }
         }
         else if (this.panel.state.mode === "debrief") {
             this.panel.set({ mode: "none", header: "", preview: "", body: "" });

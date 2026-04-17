@@ -1,5 +1,7 @@
 export type PanelMode = "debrief" | "ask" | "custom" | "none";
 
+export interface DebriefEntry { label: string; text: string; time: number }
+
 /** Mutable state of the interactive panel. */
 export interface PanelState {
   mode: PanelMode;
@@ -10,8 +12,8 @@ export interface PanelState {
   body: string;
 }
 
-const DARK_GREEN_BG = "\x1B[48;5;22m";
-const LIGHT_GREEN_FG = "\x1B[38;5;156m";
+const BLACK_BG = "\x1B[48;5;232m";
+const SUBTLE_FG = "\x1B[38;5;108m";
 const BRIGHT_WHITE_FG = "\x1B[38;5;231m";
 const SOFT_GREEN_FG = "\x1B[38;5;114m";
 const RESET = "\x1B[0m";
@@ -28,7 +30,7 @@ function truncate(s: string, max: number): string {
 
 /** Wrap a plain (ANSI-free) line in the dark-green bg, padded to width. */
 function bgLine(text: string, width: number): string {
-  return `${DARK_GREEN_BG}${LIGHT_GREEN_FG}${padTo(text, width)}${RESET}`;
+  return `${BLACK_BG}${SUBTLE_FG}${padTo(text, width)}${RESET}`;
 }
 
 export class InteractivePanel {
@@ -41,6 +43,8 @@ export class InteractivePanel {
     body: "",
   };
   private _bodyLines: string[] = [];
+  /** Accumulated debrief entries — each wave/phase appends one. */
+  private _debriefHistory: DebriefEntry[] = [];
 
   set(params: { mode: PanelMode; header: string; preview: string; body: string }): void {
     this.state.mode = params.mode;
@@ -49,6 +53,18 @@ export class InteractivePanel {
     this.state.body = params.body;
     this._bodyLines = params.body.split("\n").filter(l => l.length > 0);
     this.state.scrollOffset = 0;
+    // Clear history when mode changes away from debrief
+    if (params.mode !== "debrief") this._debriefHistory = [];
+  }
+
+  /** Append a debrief entry to the running history. Only meaningful in debrief mode. */
+  appendHistory(label: string, text: string): void {
+    if (this.state.mode !== "debrief") return;
+    this._debriefHistory.push({ label, text, time: Date.now() });
+    // Rebuild body from full history so expanded view shows everything
+    const historyBody = this._debriefHistory.map(e => `  ${e.label}\n  ${e.text}`).join("\n\n");
+    this.state.body = historyBody;
+    this._bodyLines = historyBody.split("\n");
   }
 
   /** Close the panel entirely (set mode to "none"). */

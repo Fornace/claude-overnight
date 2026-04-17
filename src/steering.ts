@@ -18,7 +18,7 @@ const STEER_SCHEMA = {
         type: "array",
         items: {
           type: "object",
-          properties: { prompt: { type: "string" }, model: { type: "string" }, noWorktree: { type: "boolean" }, type: { type: "string", enum: ["execute", "explore", "critique", "synthesize", "verify", "user-test", "polish"] } },
+          properties: { prompt: { type: "string" }, model: { type: "string" }, noWorktree: { type: "boolean" }, type: { type: "string", enum: ["execute", "explore", "critique", "synthesize", "verify", "user-test", "polish"] }, postcondition: { type: "string" } },
           required: ["prompt"],
         },
       },
@@ -122,7 +122,7 @@ Respond with ONLY a JSON object (no markdown fences):
   "statusUpdate": "REQUIRED  -- concise project status: what's built, what works, what's rough, quality level, key gaps. This replaces the previous status.",
   "estimatedSessionsRemaining": 15,
   "tasks": [
-    {"prompt": "task instruction...", "model": "worker"},
+    {"prompt": "task instruction...", "model": "worker", "postcondition": "test -f src/new-file.ts"},
     {"prompt": "quick icon fix, verified by worker next wave...", "model": "fast"},
     {"prompt": "verify the app end-to-end...", "model": "worker", "noWorktree": true}
   ]
@@ -132,6 +132,8 @@ Respond with ONLY a JSON object (no markdown fences):
 
 The "model" field on each task: use "worker" (${workerModel}) for all tasks. Use "fast" (${fastModel ?? "not set"}) for small, single-file changes that will be checked by the worker in the next wave.
 Set "noWorktree": true for verify/user-test tasks  -- they need the real project directory with env files, dependencies, and local config.
+
+OPTIONAL "postcondition": a single shell one-liner that exits 0 when the task is truly done. The framework runs it after merge; if it fails, the agent's "no-op" claim is rejected and the task is retried with the failure output as context. Use it whenever the task has a concrete, machine-checkable outcome. Examples: \`test -f src/tracking/watchlist-poller.ts && grep -q "runWatchlistPoll" src/tracking/watchlist-poller.ts\`, \`grep -q "watchlistPollerTask" src/scraper/scheduler.ts\`, \`pnpm run build\`, \`diff -q src/public/index.html frontend/dist/index.html\`. Keep it cheap (sub-second, no network). Omit for exploratory/research tasks where there is no crisp check.
 
 If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSessionsRemaining": 0, "tasks": []}`;
 
@@ -177,6 +179,7 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
     ...(t.model && { model: resolveModel(t.model) }),
     ...(t.noWorktree && { noWorktree: true }),
     ...(t.type && { type: t.type }),
+    ...(typeof t.postcondition === "string" && t.postcondition.trim() && { postcondition: t.postcondition.trim() }),
   }));
 
   tasks = postProcess(tasks, remainingBudget, onLog);

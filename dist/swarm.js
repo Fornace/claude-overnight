@@ -553,10 +553,13 @@ export class Swarm {
                 let resumePrompt = "Continue. Complete the task.";
                 const runOnce = async (isResume) => {
                     const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
+                    const postBlock = task.postcondition
+                        ? `\n\nEXIT CRITERION — after you finish, the framework will run this shell check in cwd and reject a no-op if it fails:\n  $ ${task.postcondition}\nYour work is not done until that command exits 0. Don't claim no-op unless you can prove the check already passes.`
+                        : "";
                     const agentPrompt = isResume ? resumePrompt
                         : this.config.useWorktrees && !task.noWorktree
-                            ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}`
-                            : `${preamble}${task.prompt}`;
+                            ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}${postBlock}`
+                            : `${preamble}${task.prompt}${postBlock}`;
                     const effectiveModel = task.model || this.config.model;
                     const envOverride = this.config.envForModel?.(effectiveModel);
                     const agentQuery = query({

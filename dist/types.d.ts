@@ -16,6 +16,8 @@ export interface Task {
     agentCwd?: string;
     /** The kind of work: "execute" modifies files, others are read-only/analysis. Defaults to "execute". */
     type?: string;
+    /** Shell command that must exit 0 for the task to be considered done. Runs in cwd after merge. Failed postconditions trigger the same retry path as filesChanged=0. */
+    postcondition?: string;
 }
 /** Schema for a JSON task file that defines a batch of work for the swarm. */
 export interface TaskFile {
