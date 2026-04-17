@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.25.24",
+  "version": "1.25.26",
   "description": "Claude Code skill for understanding, installing, and inspecting claude-overnight runs  -- parallel Claude agents in git worktrees with thinking waves, multi-wave steering, and crash-safe resume. Supports Cursor API Proxy, Qwen, OpenRouter.",
   "author": {
     "name": "Francesco Fornace"

@@ -60,7 +60,7 @@ ${constraint}
 ${DESIGN_THINKING}
 Total waves completed: ${history.length}
 
-Read the codebase. Assess from the user's chair: does this product do the job someone would hire it for? Does it feel fast, honest, and trustworthy? Not "is the code clean"  -- "would I use this?"
+Read the codebase efficiently — you have a hard cap of 100 tool calls. Be surgical: check for Postgres imports with targeted greps, read only the files you'll actually modify. Then compose the wave. Assess from the user's chair: does this product do the job someone would hire it for? Does it feel fast, honest, and trustworthy? Not "is the code clean"  -- "would I use this?"
 
 If verification found issues, those are the priority. Fix what's broken before building what's missing. Iterate on what exists before expanding scope.
 
@@ -119,7 +119,7 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
     onLog(`Reading codebase  -- wave ${history.length + 1}`, "event");
     const turn = createTurn("steer", `Steer wave ${history.length + 1}`, `steer-${history.length}`, plannerModel);
     beginTurn(turn);
-    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName, turnId: turn.id }, onLog);
+    const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName, turnId: turn.id, maxTurns: 100 }, onLog);
     const parsed = await (async () => {
         const first = attemptJsonParse(resultText);
         if (first)
