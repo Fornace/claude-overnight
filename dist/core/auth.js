@@ -3,9 +3,14 @@ import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { randomBytes, createHmac } from "node:crypto";
 import jwt from "jsonwebtoken";
+import { getCachedToken, cacheToken, tryRefreshCachedToken } from "./token-cache.js";
+// ── Secret management ──
 const SECRET_PATH = join(homedir(), ".claude", "claude-overnight", "jwt-secret.key");
 const DEFAULT_TTL_SEC = 300; // 5 minutes
-const tokenCache = new Map();
+/**
+ * Load the HMAC signing secret from disk, or generate a new 32-byte one.
+ * Secrets are persisted to ~/.claude/claude-overnight/jwt-secret.key (mode 0600).
+ */
 export function loadSecret() {
     try {
         const raw = readFileSync(SECRET_PATH);
@@ -22,9 +27,15 @@ export function loadSecret() {
     catch { }
     return secret;
 }
+/** Derive a per-provider HMAC key from the master secret. */
 function deriveKey(secret, providerId) {
     return createHmac("sha256", secret).update(providerId).digest();
 }
+// ── Signing ──
+/**
+ * Sign a new JWT token for a provider.
+ * Tokens are HS256-signed with a per-provider derived key.
+ */
 export function signToken(providerId, model, bearer, baseURL) {
     const secret = loadSecret();
     const key = deriveKey(secret, providerId);
@@ -40,6 +51,21 @@ export function signToken(providerId, model, bearer, baseURL) {
     const signedToken = jwt.sign(payload, key, { algorithm: "HS256" });
     return { signedToken, payload };
 }
+/**
+ * Sign a fresh token from an existing payload — used for refresh
+ * without re-exposing the raw bearer key.
+ */
+function signFromPayload(payload) {
+    const secret = loadSecret();
+    const key = deriveKey(secret, payload.sub);
+    const now = Math.floor(Date.now() / 1000);
+    const refreshed = { ...payload, iat: now, exp: now + DEFAULT_TTL_SEC };
+    return jwt.sign(refreshed, key, { algorithm: "HS256" });
+}
+// ── Verification ──
+/**
+ * Verify a JWT token and return its payload, or null if invalid/expired.
+ */
 export function verifyToken(token, providerId) {
     const secret = loadSecret();
     const key = deriveKey(secret, providerId);
@@ -50,6 +76,30 @@ export function verifyToken(token, providerId) {
         return null;
     }
 }
+// ── High-level API ──
+/**
+ * Get a signed JWT for a provider.
+ * Returns a cached valid token if available, refreshes near-expiry ones,
+ * or signs a fresh token.
+ */
+export function getBearerToken(providerId, model, bearer, baseURL) {
+    // Cache hit — token is valid with >=30s remaining, no re-verify needed.
+    const cached = getCachedToken(providerId);
+    if (cached)
+        return cached.signedToken;
+    // Near-expiry refresh without re-passing the raw key.
+    const refreshed = tryRefreshCachedToken(providerId, signFromPayload);
+    if (refreshed)
+        return refreshed.signedToken;
+    // First use or stale cache — sign a fresh token.
+    const fresh = signToken(providerId, model, bearer, baseURL);
+    cacheToken(providerId, fresh);
+    return fresh.signedToken;
+}
+/**
+ * Manually refresh a token (e.g. from an external caller).
+ * Only refreshes if the token is within 60s of expiry.
+ */
 export function refreshToken(oldToken, providerId) {
     const payload = verifyToken(oldToken, providerId);
     if (!payload)
@@ -57,23 +107,16 @@ export function refreshToken(oldToken, providerId) {
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp - now > 60)
         return null;
-    return signToken(payload.sub, payload.model, payload.bearer, payload.aud);
+    const newToken = signFromPayload(payload);
+    const record = { signedToken: newToken, payload };
+    cacheToken(providerId, record);
+    return record;
 }
-export function getBearerToken(providerId, model, bearer, baseURL) {
-    const cached = tokenCache.get(providerId);
-    if (cached) {
-        const payload = verifyToken(cached.signedToken, providerId);
-        if (payload && payload.exp > Math.floor(Date.now() / 1000) + 30) {
-            return cached.signedToken;
-        }
-    }
-    const fresh = refreshToken(cached?.signedToken ?? "", providerId) ?? signToken(providerId, model, bearer, baseURL);
-    tokenCache.set(providerId, fresh);
-    return fresh.signedToken;
-}
-export function clearTokenCache() {
-    tokenCache.clear();
-}
+// ── Error classification ──
+/**
+ * Detect whether an error is related to JWT token authentication
+ * (expiry, signature, invalid format) or general HTTP auth failure.
+ */
 export function isJWTAuthError(err) {
     const msg = err instanceof Error ? err.message : String(err);
     const lower = msg.toLowerCase();
@@ -82,3 +125,5 @@ export function isJWTAuthError(err) {
         || lower.includes("unauthorized") || lower.includes("forbidden")
         || lower.includes("invalid_api_key") || lower.includes("authentication");
 }
+// ── Re-export cache API for callers that import from auth.js ──
+export { clearTokenCache } from "./token-cache.js";

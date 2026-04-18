@@ -8,6 +8,9 @@ import { VERSION } from "../core/_version.js";
 import { getProxyPort, buildProxyUrl } from "../core/proxy-port.js";
 import { loadProviders } from "./index.js";
 import { PROXY_DEFAULT_URL, cursorProxyOutLogPath, cursorProxyFetchOpts, resolveAgentPaths, resolveCursorComposerCli, getEmbeddedComposerProxyVersion, resolveCursorAgentToken, resolveCursorProxyKey, ensureCursorAccountPool, warnMacCursorAgentShellPatchIfNeeded, } from "./cursor-env.js";
+import { cursorProxyRateLimiter } from "../core/rate-limiter.js";
+// Shared rate limiter for all proxy HTTP calls (preflight, probes).
+const _proxyRl = cursorProxyRateLimiter();
 // ── Health check ──
 export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL) {
     const url = `${baseUrl.replace(/\/$/, "")}/health`;
@@ -331,6 +334,7 @@ export async function preflightCursorProxyViaHttp(p, timeoutMs, opts) {
     }, PROGRESS_INTERVAL_MS);
     const deadline = setTimeout(() => controller.abort(), authBudget);
     try {
+        await _proxyRl.waitIfNeeded();
         // max_tokens must accommodate thinking tokens for `*-thinking-*` variants —
         // 1 leaves zero reasoning budget and crashes the subprocess.
         const res = await fetch(`${baseURL}/v1/messages`, {
@@ -348,6 +352,7 @@ export async function preflightCursorProxyViaHttp(p, timeoutMs, opts) {
             return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
         }
         await res.text().catch(() => "");
+        _proxyRl.record();
     }
     catch (err) {
         if (err?.name === "AbortError") {
@@ -391,6 +396,7 @@ async function probeCursorWriteCapability(baseURL, key, model, timeoutMs, opts) 
     if (key)
         headers["authorization"] = `Bearer ${key}`;
     try {
+        await _proxyRl.waitIfNeeded();
         const res = await fetch(`${baseURL}/v1/messages`, {
             method: "POST",
             headers,

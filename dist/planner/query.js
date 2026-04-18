@@ -3,6 +3,7 @@ import { NudgeError, extractToolTarget, sumUsageTokens } from "../core/types.js"
 import { writeTranscriptEvent } from "../core/transcripts.js";
 import { getTurn, updateTurn } from "../core/turns.js";
 import { isRateLimitError, throttlePlanner, addPlannerCost, recordPeakContext, resetPlannerRateLimit, setContextTokens, applyRateLimitEvent, getPlannerRateLimitInfo, } from "./throttle.js";
+import { cursorProxyRateLimiter } from "../core/rate-limiter.js";
 export { getTotalPlannerCost, getPeakPlannerContext, getPlannerRateLimitInfo, } from "./throttle.js";
 export { attemptJsonParse, extractTaskJson } from "./json.js";
 export { postProcess } from "./postprocess.js";
@@ -40,7 +41,9 @@ async function runViaDirectFetch(prompt, opts, onLog) {
     const authToken = env?.ANTHROPIC_AUTH_TOKEN ?? "";
     const MAX_RETRIES = 3;
     const BACKOFF = [30_000, 60_000, 120_000];
+    const rl = cursorProxyRateLimiter();
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        await rl.waitIfNeeded();
         const res = await fetch(`${baseUrl}/v1/messages`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
@@ -54,6 +57,7 @@ async function runViaDirectFetch(prompt, opts, onLog) {
         }
         if (!res.ok)
             throw new Error(`Cursor proxy ${res.status}: ${(await res.text().catch(() => ""))}`);
+        rl.record();
         const data = await res.json();
         return data.content?.[0]?.text ?? "";
     }

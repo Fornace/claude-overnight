@@ -14,6 +14,7 @@ import {
   applyRateLimitEvent,
   getPlannerRateLimitInfo,
 } from "./throttle.js";
+import { cursorProxyRateLimiter } from "../core/rate-limiter.js";
 
 export {
   type PlannerLog,
@@ -84,7 +85,9 @@ async function runViaDirectFetch(prompt: string, opts: PlannerOpts, onLog: Plann
   const authToken = env?.ANTHROPIC_AUTH_TOKEN ?? "";
   const MAX_RETRIES = 3;
   const BACKOFF = [30_000, 60_000, 120_000];
+  const rl = cursorProxyRateLimiter();
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    await rl.waitIfNeeded();
     const res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
@@ -97,6 +100,7 @@ async function runViaDirectFetch(prompt: string, opts: PlannerOpts, onLog: Plann
       continue;
     }
     if (!res.ok) throw new Error(`Cursor proxy ${res.status}: ${(await res.text().catch(() => ""))}`);
+    rl.record();
     const data = await res.json() as { content?: Array<{ text?: string }> };
     return data.content?.[0]?.text ?? "";
   }

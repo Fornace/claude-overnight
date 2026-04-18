@@ -19,6 +19,10 @@ import {
   ensureCursorAccountPool,
   warnMacCursorAgentShellPatchIfNeeded,
 } from "./cursor-env.js";
+import { cursorProxyRateLimiter } from "../core/rate-limiter.js";
+
+// Shared rate limiter for all proxy HTTP calls (preflight, probes).
+const _proxyRl = cursorProxyRateLimiter();
 
 // ── Health check ──
 
@@ -378,6 +382,7 @@ export async function preflightCursorProxyViaHttp(
   const deadline = setTimeout(() => controller.abort(), authBudget);
 
   try {
+    await _proxyRl.waitIfNeeded();
     // max_tokens must accommodate thinking tokens for `*-thinking-*` variants —
     // 1 leaves zero reasoning budget and crashes the subprocess.
     const res = await fetch(`${baseURL}/v1/messages`, {
@@ -395,6 +400,7 @@ export async function preflightCursorProxyViaHttp(
       return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
     }
     await res.text().catch(() => "");
+    _proxyRl.record();
   } catch (err: any) {
     if (err?.name === "AbortError") {
       return { ok: false, error: `timeout after ${Math.round(timeoutMs / 1000)}s` };
@@ -443,6 +449,7 @@ async function probeCursorWriteCapability(
   if (key) headers["authorization"] = `Bearer ${key}`;
 
   try {
+    await _proxyRl.waitIfNeeded();
     const res = await fetch(`${baseURL}/v1/messages`, {
       method: "POST",
       headers,

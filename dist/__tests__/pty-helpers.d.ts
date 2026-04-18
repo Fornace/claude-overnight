@@ -1,5 +1,5 @@
 import pty from "node-pty";
-export declare const __dirname: string;
+export declare const __dirname: any;
 /** Lightweight expect-style wrapper around node-pty for E2E terminal testing. */
 export declare class PTYProcess {
     private ptyProcess;
