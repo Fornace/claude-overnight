@@ -13,7 +13,7 @@ import {
   applyRateLimitEvent,
   getPlannerRateLimitInfo,
 } from "./throttle.js";
-import { cursorProxyRateLimiter, sdkQueryRateLimiter, apiEndpointLimiter } from "../core/rate-limiter.js";
+import { cursorProxyRateLimiter, sdkQueryRateLimiter, apiEndpointLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 
 export {
   type PlannerLog,
@@ -176,7 +176,7 @@ async function runPlannerQueryOnce(
     });
   }
 
-  await rl.waitIfNeeded();
+  await acquireSdkQueryRateLimit();
   const pq = query({
     prompt,
     options: {

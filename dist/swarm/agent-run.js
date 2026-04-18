@@ -15,7 +15,7 @@ import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader } from "./config.js";
 import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
 import { handleMsg } from "./message-handler.js";
-import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
+import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 export async function runAgent(host, task) {
     // Guard: if pause was triggered between dispatch and here, re-queue immediately.
     // The worker already shifted this task, so unshift puts it back for resume.
@@ -100,7 +100,7 @@ export async function runAgent(host, task) {
                         : `${preamble}${task.prompt}${postBlock}`;
                 const effectiveModel = task.model || host.config.model;
                 const envOverride = withCursorWorkspaceHeader(host.config.envForModel?.(effectiveModel), agentCwd);
-                await rl.waitIfNeeded();
+                await acquireSdkQueryRateLimit();
                 const agentQuery = query({
                     prompt: agentPrompt,
                     options: {
@@ -309,7 +309,7 @@ Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
         const rl = sdkQueryRateLimiter;
         let eq;
         try {
-            await rl.waitIfNeeded();
+            await acquireSdkQueryRateLimit();
             eq = query({
                 prompt,
                 options: {

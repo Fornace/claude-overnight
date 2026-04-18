@@ -11,7 +11,7 @@ import { DEFAULT_MODEL } from "../core/models.js";
 import { isCursorProxyProvider, resolveCursorAgentToken, cachedAgentPaths, } from "./cursor-env.js";
 import { preflightCursorProxyViaHttp } from "./cursor-proxy.js";
 import { pickCursorModel } from "./cursor-picker.js";
-import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
+import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 // Re-export Cursor utilities so callers can keep a single import point.
 export { PROXY_DEFAULT_URL, isCursorProxyProvider, bundledComposerProxyShellCommand, readCursorProxyLogTail, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, getCursorAgentToken, } from "./cursor-env.js";
 export { healthCheckCursorProxy, ensureCursorProxyRunning } from "./cursor-proxy.js";
@@ -243,7 +243,7 @@ export async function preflightProvider(p, cwd, timeoutMs = 20_000, opts) {
     let pq;
     const rl = sdkQueryRateLimiter;
     try {
-        await rl.waitIfNeeded();
+        await acquireSdkQueryRateLimit();
         pq = query({
             prompt: "Reply with exactly the word ok and nothing else.",
             options: {
