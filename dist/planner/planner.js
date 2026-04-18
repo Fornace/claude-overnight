@@ -1,5 +1,5 @@
 import { readFileSync } from "fs";
-import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./planner-query.js";
+import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./query.js";
 import { contextConstraintNote } from "../core/models.js";
 import { createTurn, beginTurn, endTurn } from "../core/turns.js";
 // Resilience: if the planner query throws but the agent already wrote valid

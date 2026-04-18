@@ -1,5 +1,5 @@
 import type { Task, PermMode, SteerResult, RunMemory, WaveSummary } from "../core/types.js";
-import { runPlannerQuery, attemptJsonParse, postProcess, type PlannerLog } from "./planner-query.js";
+import { runPlannerQuery, attemptJsonParse, postProcess, type PlannerLog } from "./query.js";
 import { contextConstraintNote } from "../core/models.js";
 import { DESIGN_THINKING } from "./planner.js";
 import { createTurn, beginTurn, endTurn } from "../core/turns.js";

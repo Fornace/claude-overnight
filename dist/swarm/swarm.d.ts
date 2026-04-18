@@ -1,26 +1,10 @@
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { type PermMode } from "../core/types.js";
-import type { Task, AgentState, SwarmPhase, MergeStrategy, RateLimitWindow } from "../core/types.js";
+import type { Task, AgentState, SwarmPhase, RateLimitWindow, AITurn } from "../core/types.js";
 import type { MergeResult } from "./merge.js";
-export interface SwarmConfig {
-    tasks: Task[];
-    concurrency: number;
-    cwd: string;
-    model?: string;
-    allowedTools?: string[];
-    useWorktrees?: boolean;
-    permissionMode?: PermMode;
-    agentTimeoutMs?: number;
-    maxRetries?: number;
-    mergeStrategy?: MergeStrategy;
-    usageCap?: number;
-    allowExtraUsage?: boolean;
-    extraUsageBudget?: number;
-    baseCostUsd?: number;
-    /** Per-task env overrides: given a model id, return the env to pass to `query()` (or undefined for Anthropic default). */
-    envForModel?: (model?: string) => Record<string, string> | undefined;
-    /** When true, the run uses cursor-composer-in-claude. The swarm will attempt to restart it if it crashes mid-run. */
-    cursorProxy?: boolean;
-}
+import { type SwarmConfig } from "./config.js";
+import type { PendingTool } from "./message-handler.js";
+export type { SwarmConfig };
 export declare class Swarm {
     readonly agents: AgentState[];
     readonly logs: {
@@ -29,7 +13,8 @@ export declare class Swarm {
         text: string;
     }[];
     private readonly allLogs;
-    private readonly _agentTurns;
+    /** @internal -- friend surface for swarm-message-handler. */
+    readonly _agentTurns: Map<number, AITurn>;
     readonly startedAt: number;
     readonly total: number;
     completed: number;
@@ -53,7 +38,8 @@ export declare class Swarm {
     rateLimitBlockedSince?: number;
     isUsingOverage: boolean;
     overageCostUsd: number;
-    private rateLimitExplained;
+    /** @internal -- friend surface for swarm-message-handler. */
+    rateLimitExplained: boolean;
     private rateLimitWakers;
     /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
     targetConcurrency: number;
@@ -69,14 +55,21 @@ export declare class Swarm {
     private workerCount;
     /** Growable list of worker promises; run() awaits until empty. */
     private workerPromises;
-    private queue;
-    private config;
-    private nextId;
-    private worktreeBase?;
-    private activeQueries;
+    /** @internal -- friend surface for swarm-agent-run. */
+    readonly queue: Task[];
+    /** @internal -- friend surface for swarm-message-handler. */
+    readonly config: SwarmConfig;
+    /** @internal -- friend surface for swarm-agent-run. */
+    nextId: number;
+    /** @internal -- friend surface for swarm-agent-run. */
+    worktreeBase?: string;
+    /** @internal -- friend surface for swarm-agent-run. */
+    readonly activeQueries: Set<Query>;
     private cleanedUp;
-    private pendingTools;
-    private ctxWarned;
+    /** @internal -- friend surface for swarm-message-handler. */
+    readonly pendingTools: WeakMap<AgentState, PendingTool>;
+    /** @internal -- friend surface for swarm-message-handler. */
+    readonly ctxWarned: WeakSet<AgentState>;
     logFile?: string;
     model: string | undefined;
     usageCap: number | undefined;
@@ -84,8 +77,9 @@ export declare class Swarm {
     extraUsageBudget: number | undefined;
     readonly baseCostUsd: number;
     mergeBranch?: string;
-    /** Permission mode read from config on each agent dispatch. Writable for mid-run changes. */
-    private _permMode;
+    /** Permission mode read from config on each agent dispatch. Writable for mid-run changes.
+     *  @internal -- friend surface for swarm-agent-run. */
+    _permMode: PermMode | undefined;
     constructor(config: SwarmConfig);
     get active(): number;
     get blocked(): number;
@@ -96,9 +90,11 @@ export declare class Swarm {
     setPaused(b: boolean): void;
     /** Returns the rate-limit window currently holding the swarm back  -- rejected first, then highest utilization. */
     mostConstrainedWindow(): RateLimitWindow | undefined;
-    private windowTag;
-    /** Cancellable sleep used by rate-limit waits. `retryRateLimitNow()` wakes every pending sleeper. */
-    private rateLimitSleep;
+    /** @internal -- friend surface for swarm-agent-run. */
+    windowTag(): string;
+    /** Cancellable sleep used by rate-limit waits. `retryRateLimitNow()` wakes every pending sleeper.
+     *  @internal -- friend surface for swarm-agent-run. */
+    rateLimitSleep(ms: number): Promise<void>;
     /** Force-wake every rate-limit sleeper and clear the reset timestamp so the next attempt fires immediately. */
     retryRateLimitNow(): void;
     /** Live-adjust the overage spend cap. `undefined` = unlimited. If already over the new cap, stop dispatch. */
@@ -115,8 +111,9 @@ export declare class Swarm {
     log(agentId: number, text: string): void;
     cleanup(): void;
     private worker;
-    /** Mark real progress  -- resets stall state. Called on any assistant/tool/result message. */
-    private markProgress;
+    /** Mark real progress  -- resets stall state. Called on any assistant/tool/result message.
+     *  @internal -- friend surface for swarm-message-handler. */
+    markProgress(): void;
     /**
      * Stall watchdog. Called each time a worker finishes a rate-limit wait. Escalates when
      * the whole swarm has been stuck with no progress for a while:
@@ -125,19 +122,13 @@ export declare class Swarm {
      *   L3 @ 15m+ at c=1 → force a 10-minute cooldown instead of hammering every 60s
      *   L4 @ 30m → abort the run so it can be resumed later without burning the budget
      */
-    private checkStall;
+    /** @internal -- friend surface for swarm-agent-run. */
+    checkStall(): void;
     private capForOverage;
     private throttle;
     /** Returns the nearest future resetsAt from any rejected window, or undefined. */
     private windowRejectedReset;
     private runAgent;
-    private agentSummary;
-    /**
-     * Build an evaluator that calls the fast model (or worker fallback) to judge
-     * whether an errored agent's partial work is coherent enough to merge.
-     */
-    private buildErroredBranchEvaluator;
-    /** Log a tool invocation with a short target extracted from its input. */
-    private logToolUse;
-    private handleMsg;
+    /** @internal -- friend surface for swarm-agent-run. */
+    agentSummary(agent: AgentState): string;
 }

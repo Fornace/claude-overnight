@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentState } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
+import { handleMsg } from "../swarm/message-handler.js";
 
 function makeSwarm() {
   return new Swarm({
@@ -26,7 +27,7 @@ describe("rate_limit_event with status=rejected", () => {
   it("throws so the runAgent retry path catches it", () => {
     const swarm = makeSwarm();
     const agent = makeAgent();
-    const handler = (swarm as unknown as { handleMsg: (a: AgentState, m: unknown) => void }).handleMsg.bind(swarm);
+    const handler = (a: AgentState, m: unknown) => handleMsg(swarm as any, a, m as any);
     assert.throws(
       () => handler(agent, {
         type: "rate_limit_event",
@@ -39,7 +40,7 @@ describe("rate_limit_event with status=rejected", () => {
   it("sets rateLimitResetsAt to a fallback when the SDK omits resetsAt", () => {
     const swarm = makeSwarm();
     const before = Date.now();
-    const handler = (swarm as unknown as { handleMsg: (a: AgentState, m: unknown) => void }).handleMsg.bind(swarm);
+    const handler = (a: AgentState, m: unknown) => handleMsg(swarm as any, a, m as any);
     try {
       handler(makeAgent(), {
         type: "rate_limit_event",
@@ -53,7 +54,7 @@ describe("rate_limit_event with status=rejected", () => {
   it("respects an SDK-provided resetsAt when present", () => {
     const swarm = makeSwarm();
     const provided = Date.now() + 5 * 60_000;
-    const handler = (swarm as unknown as { handleMsg: (a: AgentState, m: unknown) => void }).handleMsg.bind(swarm);
+    const handler = (a: AgentState, m: unknown) => handleMsg(swarm as any, a, m as any);
     try {
       handler(makeAgent(), {
         type: "rate_limit_event",
@@ -65,7 +66,7 @@ describe("rate_limit_event with status=rejected", () => {
 
   it("does not throw on non-rejected status events", () => {
     const swarm = makeSwarm();
-    const handler = (swarm as unknown as { handleMsg: (a: AgentState, m: unknown) => void }).handleMsg.bind(swarm);
+    const handler = (a: AgentState, m: unknown) => handleMsg(swarm as any, a, m as any);
     assert.doesNotThrow(() => handler(makeAgent(), {
       type: "rate_limit_event",
       rate_limit_info: { status: "warning", utilization: 0.9 },

@@ -5,12 +5,12 @@ import chalk from "chalk";
 import type { Task, MergeStrategy, RunState, RunConfigBase, BranchRecord, WaveSummary, PermMode } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
 import { steerWave, STEER_SCHEMA } from "../planner/steering.js";
-import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver, attemptJsonParse } from "../planner/planner-query.js";
+import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver, attemptJsonParse } from "../planner/query.js";
 import type { ProviderConfig } from "../providers/index.js";
 import { buildEnvResolver, isCursorProxyProvider } from "../providers/index.js";
 import { RunDisplay } from "../ui/ui.js";
 import type { LiveConfig, RunInfo, SteeringContext } from "../ui/ui.js";
-import type { PlannerLog } from "../planner/planner-query.js";
+import type { PlannerLog } from "../planner/query.js";
 import { renderSummary } from "../ui/render.js";
 import {
   readRunMemory, writeStatus, writeGoalUpdate, saveRunState,

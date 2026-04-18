@@ -1,73 +1,26 @@
-import { existsSync, mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import chalk from "chalk";
-import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  SDKMessage, SDKResultMessage, SDKResultError, SDKAssistantMessage,
-  SDKPartialAssistantMessage, SDKRateLimitEvent,
-} from "@anthropic-ai/claude-agent-sdk";
-import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens, type PermMode } from "../core/types.js";
-import type { Task, AgentState, SwarmPhase, MergeStrategy, RateLimitWindow, AITurn } from "../core/types.js";
-import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
-import type { MergeResult, ErroredBranchEvaluator } from "./merge.js";
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
+import { RATE_LIMIT_WINDOW_SHORT, type PermMode } from "../core/types.js";
+import type { Task, AgentState, SwarmPhase, RateLimitWindow, AITurn } from "../core/types.js";
+import { gitExec, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
+import type { MergeResult } from "./merge.js";
 import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "../providers/index.js";
+import { type SwarmConfig } from "./config.js";
+import { sleep } from "./errors.js";
+import type { PendingTool } from "./message-handler.js";
+import { runAgent as runAgentImpl, buildErroredBranchEvaluator } from "./agent-run.js";
 
-/**
- * Proxied Cursor models ignore SDK `cwd` and use their own workspace
- * resolution. Inject `X-Cursor-Workspace` via ANTHROPIC_CUSTOM_HEADERS so the
- * proxy's per-request workspace override points at this agent's cwd.
- * Requires the proxy to run with `CURSOR_BRIDGE_WORKSPACE=/` (or a parent of
- * all worktree paths) so the header value passes the safety check.
- */
-function withCursorWorkspaceHeader(
-  env: Record<string, string> | undefined,
-  cwd: string,
-): Record<string, string> | undefined {
-  if (!env) return undefined;
-  if (env.ANTHROPIC_BASE_URL !== PROXY_DEFAULT_URL) return env;
-  const hdr = `X-Cursor-Workspace: ${cwd}`;
-  const existing = env.ANTHROPIC_CUSTOM_HEADERS?.trim();
-  return {
-    ...env,
-    ANTHROPIC_CUSTOM_HEADERS: existing
-      ? `${existing}\n${hdr}`
-      : hdr,
-  };
-}
-import { getModelCapability } from "../core/models.js";
-import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
-
-const SIMPLIFY_PROMPT = `You just finished your task. Review and simplify your changes.
-
-Invoke the \`simplify\` skill to review your changes for reuse, quality, and efficiency, then fix any issues found.`;
-
-export interface SwarmConfig {
-  tasks: Task[];
-  concurrency: number;
-  cwd: string;
-  model?: string;
-  allowedTools?: string[];
-  useWorktrees?: boolean;
-  permissionMode?: PermMode;
-  agentTimeoutMs?: number;
-  maxRetries?: number;
-  mergeStrategy?: MergeStrategy;
-  usageCap?: number;
-  allowExtraUsage?: boolean;
-  extraUsageBudget?: number;
-  baseCostUsd?: number;
-  /** Per-task env overrides: given a model id, return the env to pass to `query()` (or undefined for Anthropic default). */
-  envForModel?: (model?: string) => Record<string, string> | undefined;
-  /** When true, the run uses cursor-composer-in-claude. The swarm will attempt to restart it if it crashes mid-run. */
-  cursorProxy?: boolean;
-}
+export type { SwarmConfig };
 
 export class Swarm {
   readonly agents: AgentState[] = [];
   readonly logs: { time: number; agentId: number; text: string }[] = [];
   private readonly allLogs: { time: number; agentId: number; text: string }[] = [];
-  private readonly _agentTurns: Map<number, AITurn> = new Map();
+  /** @internal -- friend surface for swarm-message-handler. */
+  readonly _agentTurns: Map<number, AITurn> = new Map();
   readonly startedAt = Date.now();
   readonly total: number;
 
@@ -94,7 +47,8 @@ export class Swarm {
   rateLimitBlockedSince?: number;
   isUsingOverage = false;
   overageCostUsd = 0;
-  private rateLimitExplained = false;
+  /** @internal -- friend surface for swarm-message-handler. */
+  rateLimitExplained = false;
   private rateLimitWakers: (() => void)[] = [];
 
   /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
@@ -112,17 +66,24 @@ export class Swarm {
   /** Growable list of worker promises; run() awaits until empty. */
   private workerPromises: Promise<void>[] = [];
 
-  private queue: Task[];
-  private config: SwarmConfig;
-  private nextId = 0;
-  private worktreeBase?: string;
-  private activeQueries = new Set<Query>();
+  /** @internal -- friend surface for swarm-agent-run. */
+  readonly queue: Task[];
+  /** @internal -- friend surface for swarm-message-handler. */
+  readonly config: SwarmConfig;
+  /** @internal -- friend surface for swarm-agent-run. */
+  nextId = 0;
+  /** @internal -- friend surface for swarm-agent-run. */
+  worktreeBase?: string;
+  /** @internal -- friend surface for swarm-agent-run. */
+  readonly activeQueries = new Set<Query>();
   private cleanedUp = false;
   // Per-agent open tool_use block: cursor-composer-in-claude v0.9 opens the block
   // with empty `input` and streams the real payload via `input_json_delta`, so we
   // need to wait for content_block_stop before we can log the file/path target.
-  private pendingTools = new WeakMap<AgentState, { name: string; input: Record<string, unknown>; buf: string; logged: boolean }>();
-  private ctxWarned = new WeakSet<AgentState>();
+  /** @internal -- friend surface for swarm-message-handler. */
+  readonly pendingTools = new WeakMap<AgentState, PendingTool>();
+  /** @internal -- friend surface for swarm-message-handler. */
+  readonly ctxWarned = new WeakSet<AgentState>();
   logFile?: string;
   model: string | undefined;
   usageCap: number | undefined;
@@ -130,8 +91,9 @@ export class Swarm {
   extraUsageBudget: number | undefined;
   readonly baseCostUsd: number;
   mergeBranch?: string;
-  /** Permission mode read from config on each agent dispatch. Writable for mid-run changes. */
-  private _permMode: PermMode | undefined;
+  /** Permission mode read from config on each agent dispatch. Writable for mid-run changes.
+   *  @internal -- friend surface for swarm-agent-run. */
+  _permMode: PermMode | undefined;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) throw new Error("SwarmConfig: tasks array must not be empty");
@@ -196,15 +158,17 @@ export class Swarm {
     return windows.reduce((a, b) => (a.utilization >= b.utilization ? a : b));
   }
 
-  private windowTag(): string {
+  /** @internal -- friend surface for swarm-agent-run. */
+  windowTag(): string {
     const w = this.mostConstrainedWindow();
     if (!w) return "";
     const name = RATE_LIMIT_WINDOW_SHORT[w.type] ?? w.type.replace(/_/g, " ");
     return ` (${name} window)`;
   }
 
-  /** Cancellable sleep used by rate-limit waits. `retryRateLimitNow()` wakes every pending sleeper. */
-  private rateLimitSleep(ms: number): Promise<void> {
+  /** Cancellable sleep used by rate-limit waits. `retryRateLimitNow()` wakes every pending sleeper.
+   *  @internal -- friend surface for swarm-agent-run. */
+  rateLimitSleep(ms: number): Promise<void> {
     return new Promise(resolve => {
       let done = false;
       const finish = () => {
@@ -287,7 +251,7 @@ export class Swarm {
         this.phase = "merging";
         const branches = this.agents.filter(a => a.branch && (a.filesChanged ?? 0) > 0)
           .map(a => ({ id: a.id, branch: a.branch!, filesChanged: a.filesChanged ?? 0, status: a.status, task: a.task.prompt }));
-        const evalErrored = this.buildErroredBranchEvaluator();
+        const evalErrored = buildErroredBranchEvaluator(this);
         const result = await mergeAllBranches(branches, this.config.cwd, this.config.mergeStrategy ?? "yolo", (id, text) => this.log(id, text), evalErrored);
         this.mergeResults = result.mergeResults;
         if (result.mergeBranch) this.mergeBranch = result.mergeBranch;
@@ -387,8 +351,9 @@ export class Swarm {
     }
   }
 
-  /** Mark real progress  -- resets stall state. Called on any assistant/tool/result message. */
-  private markProgress(): void {
+  /** Mark real progress  -- resets stall state. Called on any assistant/tool/result message.
+   *  @internal -- friend surface for swarm-message-handler. */
+  markProgress(): void {
     this.lastProgressAt = Date.now();
     if (this.stallLevel > 0 && this.lastProgressAt > this.stallActionAt) this.stallLevel = 0;
   }
@@ -401,7 +366,8 @@ export class Swarm {
    *   L3 @ 15m+ at c=1 → force a 10-minute cooldown instead of hammering every 60s
    *   L4 @ 30m → abort the run so it can be resumed later without burning the budget
    */
-  private checkStall(): void {
+  /** @internal -- friend surface for swarm-agent-run. */
+  checkStall(): void {
     const stalledFor = Date.now() - this.lastProgressAt;
     if (stalledFor < 5 * 60_000) return;
     // Debounce so multiple workers waking at once don't double-escalate.
@@ -501,229 +467,11 @@ export class Swarm {
   // ── Agent execution ──
 
   private async runAgent(task: Task): Promise<void> {
-    // Guard: if pause was triggered between dispatch and here, re-queue immediately.
-    // The worker already shifted this task, so unshift puts it back for resume.
-    if (this.paused) {
-      this.queue.unshift(task);
-      return;
-    }
-    const id = this.nextId++;
-    const agent: AgentState = { id, task, status: "running", startedAt: Date.now(), toolCalls: 0, contextTokens: 0, model: task.model || this.model };
-    this.agents.push(agent);
-
-    const turn = createTurn("swarm", `Agent ${id}`, `swarm-${id}`, agent.model);
-    beginTurn(turn);
-    this._agentTurns.set(id, turn);
-
-    let agentCwd = task.agentCwd || task.cwd || this.config.cwd;
-    if (this.config.useWorktrees && this.worktreeBase && !task.noWorktree && !task.agentCwd) {
-      const branch = `swarm/task-${id}`;
-      const dir = join(this.worktreeBase, `agent-${id}`);
-      let baseRef: string | undefined;
-      try { baseRef = gitExec("git rev-parse HEAD", this.config.cwd).trim(); } catch {}
-      let worktreeOk = false;
-      for (let wt = 0; wt < 2 && !worktreeOk; wt++) {
-        try {
-          gitExec(`git worktree add -b "${branch}" "${dir}" HEAD`, this.config.cwd);
-          worktreeOk = true;
-        } catch (e: any) {
-          if (wt === 0) {
-            this.log(id, `Worktree failed, cleaning up: ${e.message?.slice(0, 50)}`);
-            try { gitExec(`git branch -D "${branch}"`, this.config.cwd); } catch {}
-            try { rmSync(dir, { recursive: true, force: true }); } catch {}
-            try { gitExec("git worktree prune", this.config.cwd); } catch {}
-          }
-        }
-      }
-      if (worktreeOk) {
-        agentCwd = dir;
-        agent.branch = branch;
-        agent.baseRef = baseRef;
-        this.log(id, `Worktree: ${branch}`);
-      } else {
-        this.log(id, `Worktree failed after retry  -- running without isolation`);
-      }
-    }
-
-    const isResumed = !!task.resumeSessionId;
-    this.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
-    const maxRetries = this.config.maxRetries ?? 2;
-    const inactivityMs = this.config.agentTimeoutMs ?? 15 * 60 * 1000;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      if (attempt > 0) {
-        const backoffMs = Math.min(30000, 1000 * 2 ** (attempt - 1)) * (0.5 + Math.random());
-        this.log(id, `Retry ${attempt}/${maxRetries} in ${Math.round(backoffMs)}ms`);
-        await sleep(backoffMs);
-        agent.status = "running"; agent.error = undefined; agent.finishedAt = undefined;
-      }
-
-      try {
-        const perm = this._permMode ?? "auto";
-        let resumeSessionId: string | undefined = task.resumeSessionId;
-        let resumePrompt = "Continue. Complete the task.";
-
-        const runOnce = async (isResume: boolean): Promise<void> => {
-          const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
-          const postBlock = task.postcondition
-            ? `\n\nEXIT CRITERION — after you finish, the framework will run this shell check in cwd and reject a no-op if it fails:\n  $ ${task.postcondition}\nYour work is not done until that command exits 0. Don't claim no-op unless you can prove the check already passes.`
-            : "";
-          const agentPrompt = isResume ? resumePrompt
-            : this.config.useWorktrees && !task.noWorktree
-              ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}${postBlock}`
-              : `${preamble}${task.prompt}${postBlock}`;
-
-          const effectiveModel = task.model || this.config.model;
-          const envOverride = withCursorWorkspaceHeader(
-            this.config.envForModel?.(effectiveModel),
-            agentCwd,
-          );
-          const agentQuery = query({
-            prompt: agentPrompt,
-            options: {
-              cwd: agentCwd, model: effectiveModel, permissionMode: perm,
-              ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
-              allowedTools: this.config.allowedTools, includePartialMessages: true, persistSession: true,
-              ...(isResume && resumeSessionId && { resume: resumeSessionId }),
-              ...(envOverride && { env: envOverride }),
-            },
-          });
-
-          const timeoutMs = isResume ? inactivityMs * 2 : inactivityMs;
-          let sessionId: string | undefined;
-          let lastActivity = Date.now();
-          let timer: NodeJS.Timeout;
-          const watchdog = new Promise<never>((_, reject) => {
-            const check = () => {
-              const silent = Date.now() - lastActivity;
-              if (silent >= timeoutMs) {
-                agentQuery.interrupt().catch(() => agentQuery.close());
-                reject(isResume ? new AgentTimeoutError(silent) : new NudgeError(sessionId, silent));
-              } else {
-                timer = setTimeout(check, Math.min(30_000, timeoutMs - silent + 1000));
-              }
-            };
-            timer = setTimeout(check, timeoutMs);
-          });
-          this.activeQueries.add(agentQuery);
-          // Guard: if pause was triggered between runAgent check and here, close the query
-          // immediately so requeueIfPaused can catch it without running a turn.
-          if (this.paused) {
-            this.activeQueries.delete(agentQuery);
-            try { agentQuery.close(); } catch {}
-            return;
-          }
-          try {
-            await Promise.race([
-              (async () => {
-                for await (const msg of agentQuery) {
-                  lastActivity = Date.now();
-                  if (!sessionId && "session_id" in (msg as any)) sessionId = (msg as any).session_id;
-                  this.handleMsg(agent, msg);
-                }
-              })(),
-              watchdog,
-            ]);
-          } finally {
-            clearTimeout(timer!);
-            this.activeQueries.delete(agentQuery);
-            if (sessionId) resumeSessionId = sessionId;
-            try { agentQuery.close(); } catch {}
-          }
-        };
-
-        // Helper: re-queue this task with resume info when paused mid-turn.
-        const requeueIfPaused = (): boolean => {
-          if (!this.paused || agent.status !== "running") return false;
-          agent.status = "paused";
-          this.log(id, "Paused mid-task");
-          if (resumeSessionId) {
-            this.queue.unshift({ ...task, resumeSessionId, agentCwd });
-          }
-          return true;
-        };
-
-        if (isResumed && resumeSessionId) {
-          // Resumed task: continue the existing SDK session
-          try { await runOnce(true); }
-          catch (nudgeErr) {
-            if (nudgeErr instanceof NudgeError && resumeSessionId) {
-              this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
-              await runOnce(true);
-            } else throw nudgeErr;
-          }
-        } else {
-          // Fresh task: start with the task prompt
-          try { await runOnce(false); }
-          catch (nudgeErr) {
-            if (nudgeErr instanceof NudgeError && resumeSessionId) {
-              this.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
-              await runOnce(true);
-            } else throw nudgeErr;
-          }
-        }
-        if (requeueIfPaused()) return;
-
-        if (resumeSessionId && agent.status === "running") {
-          try { this.log(id, "Simplify pass"); resumePrompt = SIMPLIFY_PROMPT; await runOnce(true); }
-          catch { this.log(id, "Simplify pass skipped"); }
-        }
-        if (requeueIfPaused()) return;
-
-        if (agent.status === "running") {
-          agent.finishedAt = Date.now();
-          const duration = agent.finishedAt - (agent.startedAt || agent.finishedAt);
-          if (agent.toolCalls === 0 && (agent.costUsd ?? 0) < 0.001 && duration < 15_000) {
-            agent.status = "error"; agent.error = "Agent did no work  -- exited without tool use"; this.failed++;
-            this.log(id, agent.error);
-          } else {
-            agent.status = "done"; this.completed++;
-          }
-        }
-        break;
-      } catch (err: any) {
-        if (agent.status !== "running") break;
-        // Rate-limit errors: wait and retry WITHOUT burning the retry budget
-        if (!this.aborted && isRateLimitError(err)) {
-          const waitMs = this.rateLimitResetsAt && this.rateLimitResetsAt > Date.now()
-            ? Math.max(5000, this.rateLimitResetsAt - Date.now())
-            : 120_000;
-          // If the whole swarm has been making zero progress for a while, stop giving
-          // rate-limit retries a free pass  -- force them to count against maxRetries so
-          // we eventually surrender instead of looping forever.
-          const globallyStalled = Date.now() - this.lastProgressAt > 15 * 60_000;
-          const freebie = !globallyStalled;
-          this.log(id, `Rate limited${this.windowTag()}  -- waiting ${Math.ceil(waitMs / 1000)}s${freebie ? " (attempt not counted)" : " (counted  -- swarm stalled)"} ([r] to retry now)`);
-          agent.blockedAt = Date.now();
-          this.rateLimitPaused++;
-          await this.rateLimitSleep(waitMs);
-          this.rateLimitPaused--;
-          agent.blockedAt = undefined;
-          this.isUsingOverage = false;
-          this.rateLimitUtilization = 0;
-          this.rateLimitResetsAt = undefined;
-          this.checkStall();
-          if (freebie) attempt--; // normal case: don't count against retries
-          continue;
-        }
-        const canRetry = attempt < maxRetries && !this.aborted && isTransientError(err);
-        if (canRetry) { this.log(id, `Transient error: ${String(err.message || err).slice(0, 80)}`); continue; }
-        agent.status = "error"; agent.error = String(err.message || err).slice(0, 120);
-        agent.finishedAt = Date.now(); this.failed++;
-        this.log(id, agent.error);
-      }
-    }
-
-    if (this.config.useWorktrees && agent.branch) {
-      agent.filesChanged = autoCommit(agent.id, agent.task.prompt, agentCwd, agent.baseRef, (id, text) => this.log(id, text));
-    }
-    updateTurn(turn, { costUsd: agent.costUsd });
-    endTurn(turn, agent.status === "done" ? "done" : agent.status === "paused" ? "stopped" : "error");
-    this._agentTurns.delete(id);
-    if (agent.status === "done") this.log(agent.id, this.agentSummary(agent));
+    await runAgentImpl(this, task);
   }
 
-  private agentSummary(agent: AgentState): string {
+  /** @internal -- friend surface for swarm-agent-run. */
+  agentSummary(agent: AgentState): string {
     const dur = (agent.finishedAt ?? Date.now()) - (agent.startedAt ?? Date.now());
     const m = Math.floor(dur / 60000);
     const s = Math.round((dur % 60000) / 1000);
@@ -732,283 +480,5 @@ export class Swarm {
     return `Agent ${agent.id} ${verb}: ${m}m ${s}s, ${agent.toolCalls} tools${files}`;
   }
 
-  // ── Errored branch AI evaluator ──
-
-  /**
-   * Build an evaluator that calls the fast model (or worker fallback) to judge
-   * whether an errored agent's partial work is coherent enough to merge.
-   */
-  private buildErroredBranchEvaluator(): ErroredBranchEvaluator | undefined {
-    const evalModel = this.model;
-    if (!evalModel) return undefined;
-    const envFor = this.config.envForModel;
-
-    return async (agentId: number, task: string, diff: string): Promise<{ keep: boolean; reason: string }> => {
-      const prompt = `You are evaluating whether partial work from an agent that errored mid-task should be kept or discarded.
-
-Task: "${task}"
-
-Diff of changes:
-\`\`\`
-${diff}
-\`\`\`
-
-Is this partial work coherent enough to land? Consider:
-- Does it implement a meaningful portion of the task?
-- Are the changes self-consistent (no half-written functions, broken imports)?
-- Would merging this improve or degrade the codebase?
-
-Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
-
-      let eq: ReturnType<typeof query> | undefined;
-      try {
-        eq = query({
-          prompt,
-          options: {
-            cwd: this.config.cwd,
-            model: evalModel,
-            permissionMode: "bypassPermissions",
-            allowDangerouslySkipPermissions: true,
-            maxTurns: 1,
-            persistSession: false,
-            ...(envFor?.(evalModel) && {
-              env: withCursorWorkspaceHeader(envFor!(evalModel), this.config.cwd)!,
-            }),
-          },
-        });
-        this.activeQueries.add(eq);
-        let output = "";
-        for await (const msg of eq) {
-          if (msg.type === "assistant") {
-            const am = msg as SDKAssistantMessage;
-            if (am.message?.content) {
-              for (const block of am.message.content) {
-                if (block.type === "text" && block.text) output += block.text;
-              }
-            }
-          }
-          if (msg.type === "result") break;
-        }
-
-        // Parse JSON from the response
-        const jsonMatch = output.match(/\{[\s\S]*"keep"\s*:\s*(true|false)[\s\S]*"reason"\s*:\s*"[^"]*"[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            const parsed = JSON.parse(jsonMatch[0]) as { keep: boolean; reason: string };
-            if (typeof parsed.keep === "boolean" && typeof parsed.reason === "string") return parsed;
-          } catch {}
-        }
-
-        // Fallback: couldn't parse structured output — keep by default
-        this.log(agentId, "Branch eval: could not parse model response, keeping by default");
-        return { keep: true, reason: "model response unparseable, keeping by default" };
-      } catch (err: any) {
-        this.log(agentId, `Branch eval API error: ${String(err?.message || err).slice(0, 120)}`);
-        return { keep: true, reason: "eval API error, keeping by default" };
-      } finally {
-        if (eq) {
-          this.activeQueries.delete(eq);
-          try { eq.close(); } catch {}
-        }
-      }
-    };
-  }
-
-  // ── Message handler ──
-
-  /** Log a tool invocation with a short target extracted from its input. */
-  private logToolUse(agent: AgentState, name: string, input: Record<string, unknown>): void {
-    const target = extractToolTarget(input);
-    this.log(agent.id, target ? `${name} \u2192 ${target}` : name);
-  }
-
-  private handleMsg(agent: AgentState, msg: SDKMessage): void {
-    // Any message that isn't a rate-limit event counts as real progress and
-    // resets the stall watchdog + clears the per-agent blocked flag.
-    if (msg.type !== "rate_limit_event") {
-      this.markProgress();
-      if (agent.blockedAt != null) agent.blockedAt = undefined;
-    }
-    switch (msg.type) {
-      case "assistant": {
-        const m = msg as SDKAssistantMessage;
-        const u = m.message?.usage as { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
-        if (u) {
-          const turnTotal = sumUsageTokens(u);
-          agent.contextTokens = turnTotal;
-          if (turnTotal > (agent.peakContextTokens ?? 0)) agent.peakContextTokens = turnTotal;
-          const turn = this._agentTurns.get(agent.id);
-          if (turn) updateTurn(turn, { contextTokens: turnTotal, peakContextTokens: Math.max(turn.peakContextTokens ?? 0, turnTotal) });
-          if (!this.ctxWarned.has(agent)) {
-            const mdl = agent.task.model || this.config.model || "unknown";
-            const safe = getModelCapability(mdl).safeContext;
-            if (safe > 0 && turnTotal > safe * 0.8) {
-              this.ctxWarned.add(agent);
-              const pct = Math.round((turnTotal / safe) * 100);
-              this.log(agent.id, `\u26A0 context ${pct}% of safe window — task may degrade`);
-            }
-          }
-        }
-        if (!m.message?.content) break;
-        for (const block of m.message.content) {
-          if (block.type === "text" && block.text) {
-            const line = block.text.trim().split("\n")[0]?.slice(0, 80);
-            if (line) agent.lastText = line;
-          }
-        }
-        break;
-      }
-      case "stream_event": {
-        const s = msg as SDKPartialAssistantMessage;
-        const ev = s.event;
-        if (ev.type === "content_block_start") {
-          const cb = (ev as any).content_block;
-          if (cb?.type === "tool_use") {
-            agent.currentTool = cb.name; agent.toolCalls++;
-            const input = (cb.input ?? {}) as Record<string, unknown>;
-            const hasInput = Object.keys(input).length > 0;
-            this.pendingTools.set(agent, { name: cb.name, input, buf: "", logged: hasInput });
-            if (hasInput) this.logToolUse(agent, cb.name, input);
-          } else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
-            agent.lastText = "thinking…";
-          }
-        } else if (ev.type === "content_block_delta") {
-          const delta = (ev as any).delta;
-          const pending = this.pendingTools.get(agent);
-          if (delta?.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
-            pending.buf += delta.partial_json;
-            break;
-          }
-          // thinking_delta: `delta.thinking`; text_delta: `delta.text`.
-          const raw = delta?.type === "text_delta" ? delta.text
-            : delta?.type === "thinking_delta" ? delta.thinking
-            : undefined;
-          if (typeof raw === "string") {
-            const t = raw.trim();
-            if (t) agent.lastText = t.slice(-80);
-          }
-        } else if (ev.type === "content_block_stop") {
-          const pending = this.pendingTools.get(agent);
-          if (pending && !pending.logged) {
-            if (pending.buf) {
-              try { pending.input = JSON.parse(pending.buf) as Record<string, unknown>; } catch {}
-            }
-            this.logToolUse(agent, pending.name, pending.input);
-            pending.logged = true;
-          }
-          this.pendingTools.delete(agent);
-        }
-        break;
-      }
-      case "result": {
-        const safeAdd = (v: unknown) => typeof v === 'number' && isFinite(v) && v >= 0 ? v : 0;
-        const r = msg as SDKResultMessage;
-        agent.currentTool = undefined; agent.finishedAt = Date.now();
-        const cost = safeAdd(r.total_cost_usd);
-        agent.costUsd = cost; this.totalCostUsd += cost;
-        if (this.isUsingOverage) this.overageCostUsd += cost;
-        if (r.usage) {
-          this.totalInputTokens += safeAdd(r.usage.input_tokens);
-          this.totalOutputTokens += safeAdd(r.usage.output_tokens);
-        }
-
-        // Surface SDK diagnostics so silent failures stop looking like "did no work".
-        const denials = r.permission_denials ?? [];
-        if (denials.length > 0) {
-          const tools = Array.from(new Set(denials.map(d => d.tool_name))).join(", ");
-          this.log(agent.id, `${denials.length} permission denial(s): ${tools}`);
-        }
-        if (r.terminal_reason && r.terminal_reason !== "completed") {
-          this.log(agent.id, `terminal: ${r.terminal_reason}`);
-        }
-        if (r.stop_reason && r.stop_reason !== "end_turn" && r.stop_reason !== "stop_sequence") {
-          this.log(agent.id, `stop: ${r.stop_reason}`);
-        }
-        if (typeof r.num_turns === "number" && r.num_turns > 0) {
-          this.log(agent.id, `${r.num_turns} turns`);
-        }
-
-        if (r.subtype === "success") {
-          agent.status = "done"; this.completed++;
-        } else {
-          agent.status = "error";
-          const parts: string[] = [r.subtype];
-          if (r.terminal_reason && r.terminal_reason !== "completed") parts.push(r.terminal_reason);
-          const errs = (r as SDKResultError).errors;
-          if (Array.isArray(errs) && errs.length > 0) {
-            parts.push(errs[0]);
-            for (const e of errs.slice(1, 3)) this.log(agent.id, `err: ${String(e).slice(0, 160)}`);
-          }
-          agent.error = parts.join("  -- ").slice(0, 180);
-          this.failed++; this.log(agent.id, agent.error);
-        }
-        break;
-      }
-      case "rate_limit_event": {
-        const rl = msg as SDKRateLimitEvent;
-        const info = rl.rate_limit_info;
-        this.rateLimitUtilization = info.utilization ?? 0;
-        if (info.resetsAt) this.rateLimitResetsAt = info.resetsAt;
-        else if (info.status !== "rejected") this.rateLimitResetsAt = undefined;
-        if ((info as any).isUsingOverage) this.isUsingOverage = true;
-        const windowType = (info as any).rateLimitType as string | undefined;
-        if (windowType) {
-          this.rateLimitWindows.set(windowType, {
-            type: windowType, utilization: info.utilization ?? 0, status: info.status, resetsAt: info.resetsAt,
-          });
-        }
-        const pct = info.utilization != null ? `${Math.round(info.utilization * 100)}%` : "";
-        const overageTag = this.isUsingOverage ? " [EXTRA]" : "";
-        this.log(agent.id, `Rate: ${info.status} ${pct}${overageTag}${windowType ? ` (${windowType})` : ""}`);
-        if (info.status === "rejected") {
-          if (!this.rateLimitResetsAt || this.rateLimitResetsAt <= Date.now()) {
-            this.rateLimitResetsAt = Date.now() + 60_000;
-          }
-          if (!this.rateLimitExplained) {
-            this.rateLimitExplained = true;
-            const name = windowType ? (RATE_LIMIT_WINDOW_SHORT[windowType] ?? windowType.replace(/_/g, " ")) : "Anthropic";
-            const overageNote = this.isUsingOverage ? " even on overage" : "";
-            this.log(-1, `${name} window is full${overageNote}  -- plan-level Anthropic limit, not a claude-overnight cap. Press [r] to retry now, [c] to lower concurrency, or wait for reset.`);
-          }
-          throw new Error("rate limit rejected  -- retrying");
-        }
-        break;
-      }
-    }
-  }
 }
 
-class AgentTimeoutError extends Error {
-  constructor(silentMs: number) {
-    super(`Agent silent for ${Math.round(silentMs / 1000)}s  -- assumed hung`);
-    this.name = "AgentTimeoutError";
-  }
-}
-
-function isRateLimitError(err: unknown): boolean {
-  const status: number | undefined = (err as any)?.status ?? (err as any)?.statusCode;
-  if (status === 429) return true;
-  const msg = String((err as any)?.message || err).toLowerCase();
-  if (msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("too many requests")) return true;
-  const cause = (err as any)?.cause;
-  if (cause && cause !== err) return isRateLimitError(cause);
-  return false;
-}
-
-function isTransientError(err: unknown): boolean {
-  if (err instanceof AgentTimeoutError) return false;
-  const msg = String((err as any)?.message || err).toLowerCase();
-  const status: number | undefined = (err as any)?.status ?? (err as any)?.statusCode;
-  if (status === 429 || (status != null && status >= 500 && status < 600) ||
-    msg.includes("rate limit") || msg.includes("overloaded") || msg.includes("econnreset") ||
-    msg.includes("etimedout") || msg.includes("socket hang up") || msg.includes("epipe") ||
-    msg.includes("econnrefused") || msg.includes("ehostunreach") || msg.includes("network error") ||
-    msg.includes("fetch failed") || msg.includes("aborted")) return true;
-  const cause = (err as any)?.cause;
-  if (cause && cause !== err) return isTransientError(cause);
-  return false;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
-}

@@ -1,5 +1,5 @@
 import type { PermMode, SteerResult, RunMemory, WaveSummary } from "../core/types.js";
-import { type PlannerLog } from "./planner-query.js";
+import { type PlannerLog } from "./query.js";
 export declare const STEER_SCHEMA: {
     type: "json_schema";
     schema: {

@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Swarm } from "../swarm/swarm.js";
+import { handleMsg } from "../swarm/message-handler.js";
 function makeSwarm() {
     return new Swarm({
         tasks: [{ id: "t-0", prompt: "do something" }],
@@ -22,7 +23,7 @@ describe("rate_limit_event with status=rejected", () => {
     it("throws so the runAgent retry path catches it", () => {
         const swarm = makeSwarm();
         const agent = makeAgent();
-        const handler = swarm.handleMsg.bind(swarm);
+        const handler = (a, m) => handleMsg(swarm, a, m);
         assert.throws(() => handler(agent, {
             type: "rate_limit_event",
             rate_limit_info: { status: "rejected", utilization: 1, resetsAt: undefined },
@@ -31,7 +32,7 @@ describe("rate_limit_event with status=rejected", () => {
     it("sets rateLimitResetsAt to a fallback when the SDK omits resetsAt", () => {
         const swarm = makeSwarm();
         const before = Date.now();
-        const handler = swarm.handleMsg.bind(swarm);
+        const handler = (a, m) => handleMsg(swarm, a, m);
         try {
             handler(makeAgent(), {
                 type: "rate_limit_event",
@@ -45,7 +46,7 @@ describe("rate_limit_event with status=rejected", () => {
     it("respects an SDK-provided resetsAt when present", () => {
         const swarm = makeSwarm();
         const provided = Date.now() + 5 * 60_000;
-        const handler = swarm.handleMsg.bind(swarm);
+        const handler = (a, m) => handleMsg(swarm, a, m);
         try {
             handler(makeAgent(), {
                 type: "rate_limit_event",
@@ -57,7 +58,7 @@ describe("rate_limit_event with status=rejected", () => {
     });
     it("does not throw on non-rejected status events", () => {
         const swarm = makeSwarm();
-        const handler = swarm.handleMsg.bind(swarm);
+        const handler = (a, m) => handleMsg(swarm, a, m);
         assert.doesNotThrow(() => handler(makeAgent(), {
             type: "rate_limit_event",
             rate_limit_info: { status: "warning", utilization: 0.9 },

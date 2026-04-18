@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 import type { Task, PermMode } from "../core/types.js";
-import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./planner-query.js";
+import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./query.js";
 import { contextConstraintNote } from "../core/models.js";
 import { createTurn, beginTurn, endTurn } from "../core/turns.js";
 

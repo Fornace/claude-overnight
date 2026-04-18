@@ -1,154 +1,42 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync } from "fs";
-import { resolve, dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { readFileSync, existsSync, readdirSync } from "fs";
+import { resolve, join } from "path";
 import chalk from "chalk";
 import { VERSION } from "./core/_version.js";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { Swarm } from "./swarm/swarm.js";
-import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner/planner.js";
-import { formatContextWindow, DEFAULT_MODEL } from "./core/models.js";
-import { setPlannerEnvResolver } from "./planner/planner-query.js";
+import { DEFAULT_MODEL } from "./core/models.js";
+import { setPlannerEnvResolver } from "./planner/query.js";
 import { setTranscriptRunDir } from "./core/transcripts.js";
-import { getProxyPort, buildProxyUrl } from "./core/proxy-port.js";
 import {
   pickModel,
   loadProviders,
-  envFor,
-  preflightProvider,
   buildEnvResolver,
   healthCheckCursorProxy,
   PROXY_DEFAULT_URL,
   isCursorProxyProvider,
-  readCursorProxyLogTail,
-  ensureCursorProxyRunning,
   bundledComposerProxyShellCommand,
   warnMacCursorAgentShellPatchIfNeeded,
-  hasCursorAgentToken,
 } from "./providers/index.js";
 import type { ProviderConfig } from "./providers/index.js";
-import { RunDisplay } from "./ui/ui.js";
-import { renderSummary, wrap } from "./ui/render.js";
 import { executeRun } from "./run/run.js";
 import type { Task, PermMode, MergeStrategy, RunState, WaveSummary } from "./core/types.js";
 import {
-  parseCliFlags, isAuthError, fetchModels, ask, select, selectKey,
+  parseCliFlags, fetchModels, ask, select, selectKey,
   loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo,
-  showPlan, makeProgressLog,
+  showPlan,
 } from "./cli/cli.js";
 import type { FileArgs } from "./cli/cli.js";
 import {
-  loadRunState, findIncompleteRuns, findOrphanedDesigns, backfillOrphanedPlans,
-  formatTimeAgo, showRunHistory, readPreviousRunKnowledge,
-  createRunDir, updateLatestSymlink, readMdDir, saveRunState,
-  autoMergeBranches,
+  loadRunState, findOrphanedDesigns, backfillOrphanedPlans,
+  readPreviousRunKnowledge,
+  createRunDir, updateLatestSymlink,
 } from "./state/state.js";
 import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL, type CoachResult } from "./planner/coach.js";
 import { editRunSettings, formatSettingsSummary } from "./cli/settings.js";
 import type { MutableRunSettings } from "./core/types.js";
-
-function countTasksInFile(path: string): number {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8"));
-    return Array.isArray(parsed?.tasks) ? parsed.tasks.length : 0;
-  } catch { return 0; }
-}
-
-async function promptResumeOverrides(
-  state: RunState,
-  cliFlags: Record<string, string>,
-  argv: string[],
-  noTTY: boolean,
-  runDir: string,
-): Promise<void> {
-  // ── Apply CLI flag overrides first ──
-  if (cliFlags.model) state.workerModel = cliFlags.model;
-  if (cliFlags.concurrency) {
-    const n = parseInt(cliFlags.concurrency);
-    if (n >= 1) state.concurrency = n;
-  }
-  if (cliFlags.budget) {
-    const n = parseInt(cliFlags.budget);
-    if (n > 0) {
-      state.remaining = n;
-      state.budget = state.accCompleted + state.accFailed + n;
-    }
-  }
-  if (cliFlags["usage-cap"] != null) {
-    const v = parseFloat(cliFlags["usage-cap"]);
-    if (!isNaN(v) && v >= 0 && v <= 100) state.usageCap = v > 0 ? v / 100 : undefined;
-  }
-  if (cliFlags["extra-usage-budget"] != null) {
-    const v = parseFloat(cliFlags["extra-usage-budget"]);
-    if (!isNaN(v) && v > 0) { state.extraUsageBudget = v; state.allowExtraUsage = true; }
-  }
-  if (argv.includes("--allow-extra-usage")) state.allowExtraUsage = true;
-  if (cliFlags.perm) state.permissionMode = cliFlags.perm as PermMode;
-
-  if (noTTY) {
-    try { saveRunState(runDir, state); } catch {}
-    return;
-  }
-
-  // ── Interactive review ──
-  const fmtSummary = () => {
-    const remaining = Math.max(1, state.remaining);
-    const capStr = state.usageCap != null ? `${Math.round(state.usageCap * 100)}%` : "unlimited";
-    const extraStr = state.allowExtraUsage
-      ? (state.extraUsageBudget ? `$${state.extraUsageBudget}` : "unlimited")
-      : "off";
-    const modelLine = (label: string, m: string | undefined) =>
-      m ? `  ${chalk.dim(label.padEnd(11))}${chalk.white(m)} ${chalk.dim(`(${formatContextWindow(m)} context)`)}` : null;
-    console.log();
-    console.log(`  ${chalk.dim("Resume settings")}`);
-    console.log(`  ${chalk.dim("─".repeat(40))}`);
-    const lines = [
-      modelLine("planner", state.plannerModel),
-      modelLine("worker", state.workerModel),
-      modelLine("fast", state.fastModel),
-    ].filter(Boolean) as string[];
-    for (const l of lines) console.log(l);
-    console.log(`  ${chalk.dim("remaining  ")}${chalk.white(String(remaining))} ${chalk.dim("sessions")}`);
-    console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
-    console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
-    console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
-    console.log(`  ${chalk.dim("perms      ")}${chalk.white(state.permissionMode === "bypassPermissions" ? "yolo" : state.permissionMode)}`);
-  };
-  fmtSummary();
-
-  const action = await selectKey("", [
-    { key: "r", desc: "esume" },
-    { key: "e", desc: "dit" },
-    { key: "q", desc: "uit" },
-  ]);
-  if (action === "q") process.exit(0);
-  if (action === "r") return;
-
-  const settings: MutableRunSettings = {
-    workerModel: state.workerModel,
-    plannerModel: state.plannerModel,
-    fastModel: state.fastModel,
-    workerProviderId: state.workerProviderId,
-    plannerProviderId: state.plannerProviderId,
-    fastProviderId: state.fastProviderId,
-    concurrency: state.concurrency,
-    usageCap: state.usageCap,
-    allowExtraUsage: state.allowExtraUsage ?? false,
-    extraUsageBudget: state.extraUsageBudget,
-    permissionMode: state.permissionMode,
-  };
-
-  await editRunSettings({
-    current: settings,
-    cliConcurrencySet: !!cliFlags.concurrency,
-  });
-
-  Object.assign(state, settings);
-  try { saveRunState(runDir, state); } catch {}
-  console.log(chalk.green("\n  ✓ Settings updated"));
-  fmtSummary();
-  console.log();
-}
+import { printVersion, printHelp } from "./cli/help.js";
+import { detectResume } from "./cli/resume.js";
+import { runProviderPreflight } from "./cli/preflight.js";
+import { runPlanPhase } from "./cli/plan-phase.js";
 
 async function main() {
   // Do not use ??= — parent shell can set CURSOR_SKIP_KEYCHAIN=0.
@@ -158,49 +46,8 @@ async function main() {
 
   const argv = process.argv.slice(2);
 
-  if (argv.includes("-v") || argv.includes("--version")) {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
-    console.log(`claude-overnight v${pkg.version}`);
-    process.exit(0);
-  }
-
-  if (argv.includes("-h") || argv.includes("--help")) {
-    console.log(`
-  ${chalk.bold("🌙  claude-overnight")} ${chalk.dim("v" + VERSION + "  -- background lane for your Claude Max plan")}
-  ${chalk.dim("─".repeat(60))}
-
-  ${chalk.cyan("Usage")}
-    claude-overnight                          ${chalk.dim("interactive mode")}
-    claude-overnight tasks.json               ${chalk.dim("task file mode")}
-    claude-overnight "fix auth" "add tests"   ${chalk.dim("inline tasks")}
-
-  ${chalk.cyan("Flags")}
-    -h, --help             Show this help
-    -v, --version          Print version
-    --dry-run              Show planned tasks without running them
-    --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
-    --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
-    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + worker separately  -- supports 'Other…' for Qwen / OpenRouter / etc.)")}
-    --fast-model=NAME      Fast worker model for quick tasks ${chalk.dim("(optional  -- checked by next wave's workers)")}
-    --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
-    --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
-    --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
-    --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 900s, nudges at timeout, kills at 2×)")}
-    --no-flex              Disable adaptive multi-wave planning ${chalk.dim("(run all tasks in one shot)")}
-    --worktrees            Force worktree isolation on ${chalk.dim("(default: auto-detect git repo)")}
-    --no-worktrees         Disable worktree isolation ${chalk.dim("(all agents work in real cwd)")}
-    --merge=MODE           Merge strategy: yolo or branch ${chalk.dim("(default: yolo)")}
-    --perm=MODE            Permission mode: auto, bypassPermissions, default ${chalk.dim("(default: auto)")}
-    --yolo                 Shorthand for --perm=bypassPermissions --no-worktrees
-    --no-coach             Skip the setup coach ${chalk.dim("(raw objective, no preflight rewrite)")}
-    --coach-model          Re-pick coach model ${chalk.dim("(overrides saved choice)")}
-
-  ${chalk.cyan("Defaults")} ${chalk.dim("(non-interactive)")}
-    model: first available    concurrency: 5    worktrees: auto    merge: yolo    perms: auto
-    `);
-    process.exit(0);
-  }
+  if (argv.includes("-v") || argv.includes("--version")) { printVersion(); process.exit(0); }
+  if (argv.includes("-h") || argv.includes("--help")) { printHelp(); process.exit(0); }
 
   const dryRun = argv.includes("--dry-run");
   const { flags: cliFlags, positional: args } = parseCliFlags(argv);
@@ -299,160 +146,9 @@ async function main() {
   }
 
   // ── Resume / continue detection ──
-  let resuming = false;
-  let replanFromScratch = false;
-  let resumeState: RunState | null = null;
-  let resumeRunDir: string | undefined;
-  let continueObjective: string | undefined;
-  const incompleteRuns = findIncompleteRuns(rootDir, cwd);
-
-  // When only completed runs exist, offer to continue from the last one
-  if (incompleteRuns.length === 0 && completedRuns.length > 0 && !noTTY && tasks.length === 0) {
-    let picked = false;
-    while (!picked) {
-      const action = await selectKey("", [
-        { key: "c", desc: "ontinue last" }, { key: "h", desc: "istory" }, { key: "n", desc: "ew" }, { key: "q", desc: "uit" },
-      ]);
-      if (action === "q") process.exit(0);
-      if (action === "h") { await showRunHistory(allRuns, cwd, incompleteRuns); continue; }
-      if (action === "c") { continueObjective = completedRuns[0].state.objective; }
-      picked = true;
-    }
-  }
-
-  if (incompleteRuns.length > 0 && !noTTY && tasks.length === 0) {
-    let decided = false;
-    while (!decided) {
-      if (incompleteRuns.length === 1) {
-        const run = incompleteRuns[0];
-        const prev = run.state;
-        const merged = prev.branches.filter(b => b.status === "merged").length;
-        const unmerged = prev.branches.filter(b => b.status === "unmerged").length;
-        const failed = prev.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
-        const obj = prev.objective?.slice(0, 50) || "";
-        const ago = formatTimeAgo(prev.startedAt);
-        let lastStatus = "";
-        try { lastStatus = readFileSync(join(run.dir, "status.md"), "utf-8").trim().slice(0, 200); } catch {}
-        const planTaskCount = prev.phase === "planning" ? countTasksInFile(join(run.dir, "tasks.json")) : 0;
-        console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
-        const termW = Math.max(process.stdout.columns ?? 80, 60);
-        const statusMaxW = Math.min(termW - 8, 80);
-        const boxLines = prev.phase === "planning" ? [
-          `${obj}${obj.length >= 50 ? "…" : ""}`,
-          `Plan ready · ${planTaskCount} tasks · budget ${prev.budget} · ${prev.concurrency}× concurrent`,
-          `Plan phase · not yet executing`,
-        ] : [
-          `${obj}${obj.length >= 50 ? "…" : ""}`,
-          `${prev.accCompleted}/${prev.budget} sessions · ${Math.max(1, (prev.budget ?? 0) - prev.accCompleted)} remaining · $${prev.accCost.toFixed(2)}`,
-          `Wave ${prev.waveNum + 1} · ${prev.phase}`,
-        ];
-        if (lastStatus) {
-          for (const wl of wrap(lastStatus, statusMaxW)) boxLines.push(wl);
-        }
-        if (merged + unmerged + failed > 0) boxLines.push(`${merged} merged · ${unmerged} unmerged · ${failed} failed`);
-        const boxW = Math.max(...boxLines.map(l => l.length)) + 4;
-        console.log(chalk.dim(`  ╭${"─".repeat(boxW)}╮`));
-        for (const line of boxLines) console.log(chalk.dim("  │") + `  ${line.padEnd(boxW - 2)}` + chalk.dim("│"));
-        console.log(chalk.dim(`  ╰${"─".repeat(boxW)}╯`));
-
-        const action = await selectKey("", [{ key: "r", desc: "esume" }, { key: "h", desc: "istory" }, { key: "f", desc: "resh" }, { key: "q", desc: "uit" }]);
-        if (action === "q") process.exit(0);
-        if (action === "f") { decided = true; break; }
-        if (action === "h") { await showRunHistory(allRuns, cwd, incompleteRuns); continue; }
-        resuming = true; resumeState = prev; resumeRunDir = run.dir; decided = true;
-      } else {
-        const shown = incompleteRuns.slice(0, 9);
-        console.log(chalk.yellow(`\n  ⚠ ${incompleteRuns.length} unfinished runs${incompleteRuns.length > 9 ? ` (showing newest 9)` : ""}\n`));
-        for (let i = 0; i < shown.length; i++) {
-          const s = shown[i].state;
-          const ago = formatTimeAgo(s.startedAt);
-          const obj = s.objective?.slice(0, 50) || "";
-          const merged = s.branches.filter(b => b.status === "merged").length;
-          let lastStatus = "";
-          try { lastStatus = readFileSync(join(shown[i].dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 120); } catch {}
-          console.log(chalk.cyan(`  ${i + 1}`) + `  ${obj}${obj.length >= 50 ? "…" : ""}`);
-          if (s.phase === "planning") {
-            const n = countTasksInFile(join(shown[i].dir, "tasks.json"));
-            console.log(chalk.dim(`     plan ready · ${n} tasks · budget ${s.budget} · ${ago} · not yet executing`));
-          } else {
-            console.log(chalk.dim(`     ${s.accCompleted}/${s.budget} · $${s.accCost.toFixed(2)} · ${ago} · ${s.phase} at wave ${s.waveNum + 1}${merged ? ` · ${merged} merged` : ""}`));
-          }
-          if (lastStatus) {
-            const termW = Math.max(process.stdout.columns ?? 80, 60);
-            for (const wl of wrap(lastStatus, termW - 6)) console.log(chalk.dim(`     ${wl}`));
-          }
-          console.log("");
-        }
-        const action = await selectKey(`  ${chalk.dim(`[1-${shown.length}] resume`)}`, [
-          ...shown.map((_, i) => ({ key: String(i + 1), desc: "" })),
-          { key: "h", desc: "istory" }, { key: "f", desc: "resh" }, { key: "q", desc: "uit" },
-        ]);
-        if (action === "q") process.exit(0);
-        if (action === "f") { decided = true; break; }
-        if (action === "h") { await showRunHistory(allRuns, cwd, incompleteRuns); continue; }
-        const idx = parseInt(action) - 1;
-        if (idx >= 0 && idx < shown.length) {
-          resuming = true; resumeState = shown[idx].state; resumeRunDir = shown[idx].dir; decided = true;
-        }
-      }
-    }
-    if (resuming && resumeState && resumeRunDir) {
-      // If currentTasks is empty but tasks.json exists on disk, reload it.
-      // Covers two cases:
-      //   1. Planning-phase resumes (the prior run died before executeRun).
-      //   2. Stopped/capped runs whose state was saved with currentTasks: []
-      //      (saveRunState always stores []  -- the plan is on disk in tasks.json).
-      if (resumeState.currentTasks.length === 0) {
-        const loaded = salvageFromFile(join(resumeRunDir, "tasks.json"), resumeState.budget, () => {}, "resume");
-        if (loaded) {
-          resumeState.currentTasks = loaded;
-          const label = resumeState.phase === "planning" ? "Resuming plan" : `Resuming ${resumeState.phase} run`;
-          console.log(chalk.green(`\n  ✓ ${label} · ${loaded.length} tasks loaded from tasks.json`));
-        } else if (resumeState.phase === "planning") {
-          // No tasks.json  -- the thinking wave got killed before orchestrate ran.
-          // If design docs survived, re-orchestrate from them (salvages the
-          // thinking spend instead of throwing it away).
-          const designs = readMdDir(join(resumeRunDir, "designs"));
-          if (!designs || !resumeState.objective) {
-            // Planning died before producing anything — re-run planning from
-            // scratch while keeping all saved settings (model, budget, etc.).
-            console.log(chalk.yellow(`\n  ⚠ Planning-phase run has no tasks or designs — will re-plan from scratch.\n`));
-            replanFromScratch = true;
-          } else {
-            const remainingBudget = Math.max(resumeState.concurrency, resumeState.budget - resumeState.accCompleted);
-            const orchBudget = Math.min(50, Math.max(resumeState.concurrency, Math.ceil(remainingBudget * 0.5)));
-            const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${remainingBudget}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
-            console.log(chalk.cyan(`\n  ◆ Re-orchestrating plan from existing designs...\n`));
-            process.stdout.write("\x1B[?25l");
-            // Route transcripts into the resumed run so this call's events
-            // land alongside the prior run's planning trail.
-            setTranscriptRunDir(resumeRunDir);
-            try {
-              const orchTasks = await orchestrate(
-                resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel,
-                resumeState.permissionMode, orchBudget, resumeState.concurrency, makeProgressLog(),
-                flexNote, join(resumeRunDir, "tasks.json"), "orchestrate-resume",
-              );
-              resumeState.currentTasks = orchTasks;
-              process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${orchTasks.length} tasks`)}\n`);
-            } catch (err: any) {
-              process.stdout.write("\x1B[?25h");
-              console.error(chalk.red(`\n  Re-orchestration failed: ${err.message}\n  Start Fresh instead.\n`));
-              process.exit(1);
-            }
-            process.stdout.write("\x1B[?25h");
-          }
-        }
-      }
-      const unmerged = resumeState.branches.filter(b => b.status === "unmerged").length;
-      if (unmerged > 0) {
-        console.log("");
-        autoMergeBranches(cwd, resumeState.branches, msg => console.log(chalk.dim(`  ${msg}`)));
-        try { saveRunState(resumeRunDir, resumeState); } catch {}
-      }
-      await promptResumeOverrides(resumeState, cliFlags, argv, noTTY, resumeRunDir);
-    }
-  }
+  const { resuming, replanFromScratch, resumeState, resumeRunDir, continueObjective } = await detectResume({
+    rootDir, cwd, noTTY, tasks, allRuns, completedRuns, cliFlags, argv,
+  });
 
   // ── Config resolution ──
   let workerModel: string;
@@ -709,135 +405,12 @@ async function main() {
   // otherwise surface as N agent failures scattered across the run.
   // Skip when NO_PREFLIGHT=1 (used by e2e tests).
   if ((plannerProvider || workerProvider || fastProvider) && process.env.NO_PREFLIGHT !== "1") {
-    const seen = new Set<string>();
-    const all: Array<[string, ProviderConfig | undefined]> = [
-      ["planner", plannerProvider],
-      ["worker", workerProvider],
-      ["fast", fastProvider],
-    ];
-    const pending: Array<[string, ProviderConfig]> = [];
-    const cursorProxies: ProviderConfig[] = [];
-    for (const [role, p] of all) {
-      if (p && !seen.has(p.id)) {
-        seen.add(p.id);
-        pending.push([role, p]);
-        if (isCursorProxyProvider(p)) cursorProxies.push(p);
-      }
-    }
-
-    // Auto-start cursor proxy before pinging (restarts when a token exists so stale listeners get CURSOR_API_KEY).
-    if (cursorProxies.length > 0) {
-      const resolvedPort = getProxyPort(cwd);
-      const resolvedUrl = buildProxyUrl(resolvedPort);
-      await ensureCursorProxyRunning(resolvedUrl);
-      // Sync providers to the resolved port (may differ from default if per-project port was picked)
-      for (const p of cursorProxies) {
-        if (!p.baseURL || p.baseURL === PROXY_DEFAULT_URL) {
-          p.baseURL = resolvedUrl;
-        }
-      }
-      if (resolvedUrl !== PROXY_DEFAULT_URL) {
-        console.log(chalk.dim(`  Proxy port: ${resolvedPort}`));
-      }
-      if (!hasCursorAgentToken()) {
-        console.error(chalk.red(
-          `  ✗ Cursor models require a User API key — add it via ${chalk.bold("Cursor…")} setup, or set ` +
-          `${chalk.bold("CURSOR_API_KEY")} / ${chalk.bold("CURSOR_BRIDGE_API_KEY")}, or ${chalk.bold("cursorApiKey")} in providers.json.`,
-        ));
-        console.error(chalk.dim(`    Without it the Cursor CLI falls back to macOS Keychain (\`cursor-user\`).`));
-        process.exit(1);
-      }
-    }
-
-    process.stdout.write(`  ${chalk.dim(`◆ Pinging ${pending.map(([r, p]) => `${r} (${p.displayName})`).join(", ")}…`)}\n`);
-    // Preflight strategy: all providers run fully in parallel. Cursor proxy
-    // providers used to race on the shared `~/.cursor/cli-config.json`, but the
-    // proxy now uses an account pool (`CURSOR_CONFIG_DIRS`) — each parallel
-    // cursor-agent subprocess gets its own config dir, eliminating the race.
-    // See ensureCursorAccountPool() in providers.ts.
-    //
-    // Single in-place status line collapses N parallel progress streams (one
-    // per provider) into one tty line updated via `\r` + ANSI clear. Keeps the
-    // "window head" calm instead of appending 3 lines per 3s tick.
-    const statuses = new Map<string, string>();
-    const isTTY = process.stdout.isTTY;
-    let statusLineActive = false;
-    const renderStatus = () => {
-      if (!isTTY) return;
-      const parts = [...statuses.entries()].map(([r, s]) => `${r} ${chalk.dim(s)}`);
-      process.stdout.write(`\x1B[2K\r`);
-      if (parts.length === 0) { statusLineActive = false; return; }
-      process.stdout.write(chalk.dim("    " + parts.join("  ·  ")));
-      statusLineActive = true;
-    };
-    const clearStatusLine = () => {
-      if (isTTY && statusLineActive) { process.stdout.write(`\x1B[2K\r`); statusLineActive = false; }
-    };
-    /** Cursor agent cold start + thinking-variant model latency can exceed 20s, and the cursor
-     *  preflight now also runs a write-capability probe (see probeCursorWriteCapability) that
-     *  asks cursor to Bash a marker file — so the total budget must cover auth ping + write turn. */
-    const preflightMs = (p: ProviderConfig) =>
-      isCursorProxyProvider(p) ? 90_000 : 20_000;
-    // Cursor's composer-2 pipeline intermittently stalls for 100s+ on a write-tool turn
-    // even though the tool succeeded (proxy logs it as "SLOW response"). A single retry
-    // almost always clears it — so we retry once on timeout-style failures for cursor
-    // proxy providers before giving up.
-    const isTimeoutError = (err: string) => /^timeout after /.test(err) || /: timeout after /.test(err);
-    const runPreflight = async (role: string, p: ProviderConfig) => {
-      statuses.set(role, "connecting…");
-      renderStatus();
-      let result = await preflightProvider(p, cwd, preflightMs(p), {
-        onProgress: (msg) => { statuses.set(role, msg); renderStatus(); },
-      });
-      if (!result.ok && isCursorProxyProvider(p) && isTimeoutError(result.error)) {
-        statuses.set(role, "retrying after timeout…");
-        renderStatus();
-        result = await preflightProvider(p, cwd, preflightMs(p), {
-          onProgress: (msg) => { statuses.set(role, `retry: ${msg}`); renderStatus(); },
-        });
-      }
-      statuses.delete(role);
-      renderStatus();
-      return { role, provider: p, result };
-    };
-    const results = await Promise.all(pending.map(([role, p]) => runPreflight(role, p)));
-    clearStatusLine();
-    let fastDegraded = false;
-    for (const { role, provider, result } of results) {
-      if (!result.ok) {
-        const degradable = role === "fast";
-        const prefix = degradable ? chalk.yellow(`  ⚠ ${role} preflight failed`) : chalk.red(`  ✗ ${role} preflight failed`);
-        console.error(`${prefix}: ${chalk.dim(result.error)}`);
-        if (isCursorProxyProvider(provider)) {
-          const tail = readCursorProxyLogTail(25);
-          if (tail) {
-            console.error(chalk.yellow(`  ── proxy log tail (agent stderr + sessions) ──`));
-            for (const line of tail.split("\n")) console.error(chalk.dim(`    ${line}`));
-          }
-          const cmd = bundledComposerProxyShellCommand();
-          const proxyUrl = provider.baseURL || PROXY_DEFAULT_URL;
-          console.error(chalk.yellow(
-            `  The proxy at ${proxyUrl} may have crashed or timed out (e.g. keychain/UI). Retry, or start the bundled proxy: ${cmd ?? "npm install in the claude-overnight package, then re-run"}`,
-          ));
-        } else if (!degradable) {
-          console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));
-        }
-        if (degradable) {
-          console.error(chalk.yellow(`  Continuing without the fast worker — fast-eligible tasks will run on the main worker model instead.`));
-          console.error("");
-          fastDegraded = true;
-          continue;
-        }
-        console.error("");
-        process.exit(1);
-      }
-      console.log(`  ${chalk.green(`✓ ${role} ready`)} ${chalk.dim(`· ${provider.displayName} · ${provider.model}`)}`);
-    }
+    const { fastDegraded } = await runProviderPreflight({
+      plannerModel, plannerProvider, workerModel, workerProvider, fastModel, fastProvider, cwd,
+    });
     if (fastDegraded) {
       fastModel = undefined;
       fastProvider = undefined;
-      const rebuilt = buildEnvResolver({ plannerModel, plannerProvider, workerModel, workerProvider, fastModel, fastProvider });
-      setPlannerEnvResolver(rebuilt);
     }
   }
 
@@ -848,7 +421,7 @@ async function main() {
   }
 
   // ── Plan phase ──
-  let flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
+  const flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
   let thinkingUsed = 0, thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
   let thinkingHistory: WaveSummary | undefined;
@@ -865,219 +438,23 @@ async function main() {
   const needsPlan = tasks.length === 0 && (!resuming || replanFromScratch);
   const designDir = join(runDir, "designs");
 
-  // Persist an early planning-phase state so the run is visible to the resume
-  // picker even if orchestrate dies before executeRun gets a chance to run.
-  // Without this, a crashed plan phase leaves no run.json and the run vanishes
-  // from findIncompleteRuns  -- you pay for orchestration and can't see it.
-  if (needsPlan && objective) {
-    try {
-      saveRunState(runDir, {
-        id: runDir.split(/[/\\]/).pop() ?? "",
-        objective, budget: budget ?? 10, remaining: budget ?? 10,
-        workerModel, plannerModel, fastModel,
-        workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
-        fastProviderId: fastProvider?.id,
-        concurrency, permissionMode,
-        usageCap, allowExtraUsage, extraUsageBudget,
-        flex, useWorktrees, mergeStrategy,
-        waveNum: 0, currentTasks: [],
-        accCost: 0, accCompleted: 0, accFailed: 0,
-        accIn: 0, accOut: 0, accTools: 0,
-        branches: [],
-        phase: "planning",
-        startedAt: new Date().toISOString(),
-        cwd,
-      });
-    } catch {}
-  }
-
   if (needsPlan) {
-    if (noTTY) { console.error(chalk.red("  No tasks provided and stdin is not a TTY.")); process.exit(1); }
-    process.stdout.write("\x1B[?25l");
-    const planRestore = () => process.stdout.write("\x1B[?25h");
-    const useThinking = flex && (budget ?? 10) > concurrency * 3;
-    const thinkingCount = useThinking ? Math.min(Math.max(concurrency, Math.ceil((budget ?? 10) * 0.005)), 10) : 0;
-
-    try {
-      if (useThinking) {
-        // Persist themes as a Markdown doc so a planning-phase crash leaves a
-        // readable record (and a future resume can skip identifyThemes).
-        const saveThemesMd = (list: string[]) => {
-          try {
-            writeFileSync(
-              join(runDir, "themes.md"),
-              `# Themes\n\n**Objective:** ${objective}\n\n${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n`,
-              "utf-8",
-            );
-          } catch {}
-        };
-        let themes = await identifyThemes(objective!, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog(), "themes");
-        saveThemesMd(themes);
-        process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`);
-        planRestore();
-        let reviewing = true;
-        while (reviewing) {
-          for (let i = 0; i < themes.length; i++) console.log(chalk.dim(`  ${String(i + 1).padStart(3)}.`) + ` ${themes[i]}`);
-          console.log(chalk.dim(`\n  ${thinkingCount} thinking agents → orchestrate → ${(budget ?? 10) - thinkingCount} execution sessions\n`));
-          const action = await selectKey(`${chalk.white(`${themes.length} themes`)} ${chalk.dim(`· ${thinkingCount} thinking · ${concurrency} concurrent`)}`, [{ key: "r", desc: "un" }, { key: "e", desc: "dit" }, { key: "c", desc: "hat" }, { key: "q", desc: "uit" }]);
-          if (action === "r") { reviewing = false; break; }
-          if (action === "e") {
-            const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
-            if (!feedback) continue;
-            process.stdout.write("\x1B[?25l");
-            try {
-              themes = await identifyThemes(`${objective!}\n\nUser feedback: ${feedback}`, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog(), "themes-refine");
-              saveThemesMd(themes);
-              process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`);
-            }
-            catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
-            planRestore();
-          } else if (action === "c") {
-            const question = await ask(`\n  ${chalk.bold("Ask about the themes:")}\n  ${chalk.cyan(">")} `);
-            if (!question) continue;
-            process.stdout.write("\x1B[?25l");
-            try {
-              let answer = "";
-              const plannerEnv = envForModel(plannerModel);
-              for await (const msg of query({
-                prompt: `You're planning work for: "${objective}"\n\nThemes identified:\n${themes.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n\nUser question: ${question}`,
-                options: { cwd, model: plannerModel, permissionMode, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
-              })) { if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || ""; }
-              planRestore();
-              if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
-            } catch { planRestore(); }
-          } else { console.log(chalk.dim("\n  Aborted.\n")); process.exit(0); }
-        }
-        process.stdout.write("\x1B[?25l");
-
-        mkdirSync(designDir, { recursive: true });
-        const existingDesigns = readMdDir(designDir);
-        if (existingDesigns) {
-          const designFiles = readdirSync(designDir).filter(f => f.endsWith(".md")).sort();
-          console.log(chalk.green(`\n  ✓ Reusing ${designFiles.length} design docs`) + chalk.dim(` (from prior attempt)`));
-          for (const f of designFiles) {
-            try { const firstLine = readFileSync(join(designDir, f), "utf-8").split("\n")[0].replace(/^#+\s*/, "").trim(); if (firstLine) console.log(chalk.dim(`    ${firstLine.slice(0, 80)}`)); } catch {}
-          }
-          console.log("");
-        } else {
-          const researchModel = fastModel ? workerModel : plannerModel;
-          const thinkingTasks = buildThinkingTasks(objective!, themes, designDir, researchModel, previousKnowledge || undefined);
-          console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
-          const thinkingSwarm = new Swarm({
-            tasks: thinkingTasks, concurrency, cwd, model: researchModel, permissionMode,
-            useWorktrees: false, mergeStrategy: "yolo", agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
-            envForModel,
-            cursorProxy: [plannerProvider, workerProvider, fastProvider].some(p => p && isCursorProxyProvider(p)),
-          });
-          const thinkRunInfo = { accIn: 0, accOut: 0, accCost: 0, accCompleted: 0, accFailed: 0, sessionsBudget: budget ?? 10, waveNum: -1, remaining: budget ?? 10, model: researchModel, startedAt: Date.now() };
-          const thinkDisplay = new RunDisplay(thinkRunInfo, { remaining: 0, usageCap, concurrency, paused: false, dirty: false });
-          thinkDisplay.setWave(thinkingSwarm);
-          thinkDisplay.start();
-          // Save thinking-wave state on every exit path (normal, abort, double-q).
-          const saveThinkingState = () => {
-            thinkingUsed = thinkingSwarm.completed + thinkingSwarm.failed;
-            thinkingCost = thinkingSwarm.totalCostUsd; thinkingIn = thinkingSwarm.totalInputTokens; thinkingOut = thinkingSwarm.totalOutputTokens;
-            thinkingTools = thinkingSwarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
-            try {
-              saveRunState(runDir, {
-                id: runDir.split(/[/\\]/).pop() ?? "",
-                objective: objective!, budget: budget ?? 10, remaining: (budget ?? 10) - thinkingUsed,
-                workerModel, plannerModel, fastModel,
-                workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
-                fastProviderId: fastProvider?.id,
-                concurrency, permissionMode,
-                usageCap, allowExtraUsage, extraUsageBudget,
-                flex, useWorktrees, mergeStrategy,
-                waveNum: 0, currentTasks: [],
-                accCost: thinkingCost, accCompleted: thinkingUsed, accFailed: 0,
-                accIn: thinkingIn, accOut: thinkingOut, accTools: thinkingTools,
-                branches: [],
-                phase: "planning",
-                startedAt: new Date().toISOString(),
-                cwd,
-                coachedObjective: coachedOriginal,
-                coachedAt,
-              });
-            } catch {}
-          };
-          // Catch double-q / hard exit during thinking wave
-          const exitHandler = () => { try { saveThinkingState(); } catch {} };
-          process.on("exit", exitHandler);
-          try { await thinkingSwarm.run(); } finally {
-            thinkDisplay.pause(); console.log(renderSummary(thinkingSwarm)); thinkDisplay.stop();
-            saveThinkingState();
-            process.removeListener("exit", exitHandler);
-          }
-          thinkingHistory = { wave: -1, tasks: thinkingSwarm.agents.map(a => ({ prompt: a.task.prompt.slice(0, 200), status: a.status, filesChanged: a.filesChanged, error: a.error })) };
-          if (thinkingSwarm.rateLimitResetsAt) {
-            const waitMs = thinkingSwarm.rateLimitResetsAt - Date.now();
-            if (waitMs > 0) { console.log(chalk.dim(`  Waiting ${Math.ceil(waitMs / 1000)}s for rate limit reset...`)); await new Promise(r => setTimeout(r, waitMs + 2000)); }
-          }
-        }
-
-        const designs = readMdDir(designDir);
-        const taskFile = join(runDir, "tasks.json");
-        if (designs) {
-          const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
-          const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
-          console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
-          tasks = await orchestrate(objective!, designs, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote, taskFile);
-          process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
-        } else {
-          console.log(chalk.yellow(`\n  No design docs  -- falling back to direct planning\n`));
-          const waveBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
-          tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), undefined, taskFile);
-          process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
-        }
-      } else {
-        const waveBudget = flex ? Math.min(50, Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5))) : budget;
-        const flexNote = flex ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.` : undefined;
-        console.log(chalk.cyan(`\n  ◆ Planning${flex ? " wave 1" : ""}...\n`));
-        tasks = await planTasks(objective!, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), flexNote);
-        process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}${flex ? chalk.dim(` · wave 1`) : ""}\n\n`);
-        planRestore();
-        let reviewing = true;
-        while (reviewing) {
-          showPlan(tasks);
-          const action = await selectKey(`${chalk.white(`${tasks.length} tasks`)} ${chalk.dim(`· ${concurrency} concurrent`)}`, [{ key: "r", desc: "un" }, { key: "e", desc: "dit" }, { key: "c", desc: "hat" }, { key: "q", desc: "uit" }]);
-          switch (action) {
-            case "r": reviewing = false; break;
-            case "e": {
-              const feedback = await ask(`\n  ${chalk.bold("What should change?")}\n  ${chalk.cyan(">")} `);
-              if (!feedback) break;
-              console.log(chalk.cyan("\n  ◆ Re-planning...\n"));
-              process.stdout.write("\x1B[?25l");
-              try { tasks = await refinePlan(objective!, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, makeProgressLog()); process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`); }
-              catch (err: any) { console.error(chalk.red(`\n  Re-planning failed: ${err.message}\n`)); }
-              planRestore();
-              break;
-            }
-            case "c": {
-              const question = await ask(`\n  ${chalk.bold("Ask about the plan:")}\n  ${chalk.cyan(">")} `);
-              if (!question) break;
-              process.stdout.write("\x1B[?25l");
-              try {
-                let answer = "";
-                const plannerEnv = envForModel(plannerModel);
-                for await (const msg of query({
-                  prompt: `You planned these tasks for the objective "${objective}":\n${tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n")}\n\nUser question: ${question}`,
-                  options: { cwd, model: plannerModel, permissionMode, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
-                })) { if (msg.type === "result" && msg.subtype === "success") answer = (msg as any).result || ""; }
-                planRestore();
-                if (answer) console.log(chalk.dim(`\n  ${answer.slice(0, 500)}\n`));
-              } catch { planRestore(); }
-              break;
-            }
-            case "q": console.log(chalk.dim("\n  Aborted.\n")); process.exit(0);
-          }
-        }
-      }
-    } catch (err: any) {
-      planRestore();
-      if (isAuthError(err)) console.error(chalk.red(`\n  Authentication failed  -- check your API key or run: claude auth\n`));
-      else console.error(chalk.red(`\n  Planning failed: ${err.message}\n`));
-      process.exit(1);
-    }
+    const result = await runPlanPhase({
+      objective, noTTY, flex, budget, concurrency, cwd,
+      plannerModel, workerModel, fastModel,
+      plannerProvider, workerProvider, fastProvider,
+      permissionMode, usageCap, allowExtraUsage, extraUsageBudget,
+      useWorktrees, mergeStrategy, agentTimeoutMs,
+      runDir, designDir, previousKnowledge, envForModel,
+      coachedOriginal, coachedAt,
+    });
+    tasks = result.tasks;
+    thinkingHistory = result.thinkingHistory;
+    thinkingUsed = result.thinkingUsed;
+    thinkingCost = result.thinkingCost;
+    thinkingIn = result.thinkingIn;
+    thinkingOut = result.thinkingOut;
+    thinkingTools = result.thinkingTools;
   }
 
   if (tasks.length === 0 && !resuming) { console.error("No tasks provided."); process.exit(1); }
