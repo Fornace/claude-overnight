@@ -999,35 +999,12 @@ interface ReviewResult {
 
 function reviewPrompt(scope: "wave" | "run", objective?: string): string {
   const scopeLine = scope === "wave"
-    ? "You are reviewing all changes made in the most recent wave of agent work."
+    ? "Review and simplify all changes from the most recent wave."
     : `You are the final quality gate before this autonomous run completes.\n\nThe objective was: ${objective || "improve the codebase"}`;
-  const diffCmd = scope === "wave"
-    ? "Run `git diff` to see what changed."
-    : "Run `git diff main` (or `git diff HEAD` if on the same branch) to see ALL changes made during this run.";
-  const checks = scope === "wave"
-    ? `1. **Missed reuse**: Did any agent write something that already exists elsewhere? Find existing utilities and suggest replacements.
-2. **Quality issues**: Redundant state, copy-paste variations, leaky abstractions, stringly-typed code where enums exist, unnecessary JSX nesting, comments that narrate what the code does.
-3. **Efficiency problems**: Redundant computations, sequential operations that could be parallel, hot-path bloat, recurring no-op updates, TOCTOU patterns, memory leaks.
-4. **Merge conflicts or inconsistencies**: Changes that work against each other or break existing patterns.`
-    : `1. **Architecture coherence**: Do the changes form a coherent whole, or are they a patchwork of independent edits that don't fit together?
-2. **Missed reuse**: Any new code that duplicates existing functionality?
-3. **Quality**: Redundant state, copy-paste variations, leaky abstractions, stringly-typed code, unnecessary nesting, narrative comments.
-4. **Efficiency**: N+1 patterns, redundant computations, hot-path bloat, missing cleanup, unbounded data structures.
-5. **Consistency**: Do all changes follow the project's existing patterns, conventions, and design system?
-6. **Build and test**: Run the build and any existing tests. Fix any breakage.`;
-  const close = scope === "wave"
-    ? "Fix issues directly. Delete and simplify rather than add. If the code is already clean, skip."
-    : "Fix issues directly. Delete and simplify. If the codebase is clean and the build passes, say so.";
 
   return `${scopeLine}
 
-${diffCmd} Review for:
-
-${checks}
-
-${close}
-
-No need to explain your changes  -- just fix them.`;
+Invoke the \`simplify\` skill to review changed code for reuse, quality, and efficiency, then fix any issues found.`;
 }
 
 async function runReview(

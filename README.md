@@ -4,7 +4,7 @@ Parallel Claude agents in isolated git worktrees. Set a usage cap so your intera
 
 Hand it an objective and a session budget, walk away, review the diff when the run ends. Every agent runs in its own worktree on its own branch — a misbehaving agent can't trash your working tree. Unmerged branches are preserved for manual review, never discarded.
 
-Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — every session runs on the SDK's agent harness. Three roles, each picked independently: **planner** (thinks, steers, reviews), **worker** (runs the tasks), and an optional **fast** model (quick well-scoped edits, verified by the worker next wave). Pair any planner (Opus, Sonnet) with any worker — Anthropic, Cursor, Qwen, OpenRouter, or any Anthropic-compatible endpoint.
+Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — every session runs on the SDK's agent harness. Three roles, each picked independently: **planner** (thinks, steers, reviews), **main worker** (runs the tasks), and an optional **fast worker** (a cheaper/faster second worker for well-scoped tasks, verified by the next wave's workers). Pair any planner (Opus, Sonnet) with any worker — Anthropic, Cursor, Qwen, OpenRouter, or any Anthropic-compatible endpoint.
 
 ## Run on Qwen 3.6 Plus
 
@@ -333,7 +333,7 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 
 ## Custom providers (Qwen, OpenRouter, any Anthropic-compatible endpoint)
 
-Planner, worker, and optional fast model are each picked separately  -- pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of work.
+Planner, main worker, and optional fast worker are each picked separately  -- pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of work. The fast worker is a real worker (same tools, same env), just on a cheaper/faster model — steering routes well-scoped tasks to it by default.
 
 From the interactive picker, choose `Other…` on the planner, worker, or fast step:
 
@@ -353,7 +353,7 @@ From the interactive picker, choose `Other…` on the planner, worker, or fast s
 
 Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (mode 0600) and show up automatically in every repo. No per-project config.
 
-**How routing works.** Each `query()` gets its own env override (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`)  -- planner queries use the planner provider, worker queries use the worker provider, fast queries use the fast provider. No global shell env, no proxy daemon, no `process.env` pollution between calls.
+**How routing works.** Each `query()` gets its own env override (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`)  -- planner queries use the planner provider, main-worker queries use the worker provider, fast-worker queries use the fast provider. No global shell env, no proxy daemon, no `process.env` pollution between calls.
 
 **Pre-flight.** Before the swarm starts, each custom provider is pinged with a 1-turn auth check. Bad keys fail fast with `✗ worker preflight failed: ...` instead of N scattered mid-run errors.
 

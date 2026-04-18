@@ -25,12 +25,12 @@ export async function editRunSettings(options) {
     s.workerModel = workerPick.model;
     s.workerProviderId = workerPick.providerId;
     const suggestFast = !!(options.defaults?.fastModel);
-    const fastChoice = await select(`${chalk.cyan("③")} Fast model ${chalk.dim("(optional  -- Haiku/Qwen for quick tasks, checked by worker)")}:`, [
-        { name: "Skip", value: "skip", hint: "two-tier mode only (current setup)" },
-        { name: "Pick a fast model", value: "pick", hint: "Haiku, Qwen, or any provider  -- for well-scoped tasks" },
+    const fastChoice = await select(`${chalk.cyan("③")} Fast worker model ${chalk.dim("(optional  -- Haiku/Qwen for well-scoped tasks, checked by next wave's workers)")}:`, [
+        { name: "Skip", value: "skip", hint: "single-worker mode (main worker handles everything)" },
+        { name: "Pick a fast worker", value: "pick", hint: "Haiku, Qwen, or any provider  -- a cheaper, faster second worker" },
     ], suggestFast ? 1 : 0);
     if (fastChoice === "pick") {
-        const fastPick = await pickModel(`${chalk.cyan("③b")} Fast model:`, models, options.defaults?.fastModel ?? s.fastModel);
+        const fastPick = await pickModel(`${chalk.cyan("③b")} Fast worker model:`, models, options.defaults?.fastModel ?? s.fastModel);
         s.fastModel = fastPick.model;
         s.fastProviderId = fastPick.providerId;
     }

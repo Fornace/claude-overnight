@@ -182,7 +182,7 @@ async function main() {
     --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
     --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + worker separately  -- supports 'Other…' for Qwen / OpenRouter / etc.)")}
-    --fast-model=NAME      Fast model for quick tasks ${chalk.dim("(optional  -- checked by worker model in next wave)")}
+    --fast-model=NAME      Fast worker model for quick tasks ${chalk.dim("(optional  -- checked by next wave's workers)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
     --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
@@ -823,7 +823,7 @@ async function main() {
           console.error(chalk.red(`  Fix the provider at ~/.claude/claude-overnight/providers.json and retry.`));
         }
         if (degradable) {
-          console.error(chalk.yellow(`  Continuing without fast — fast-eligible tasks will run on the worker model instead.`));
+          console.error(chalk.yellow(`  Continuing without the fast worker — fast-eligible tasks will run on the main worker model instead.`));
           console.error("");
           fastDegraded = true;
           continue;

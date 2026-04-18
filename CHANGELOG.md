@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.25.42
+
+### Fast-worker reframe — steering now routes well-scoped tasks to the fast model
+
+In a real `1.25.41` run on a closure-heavy plan, steering assigned **0 of 51 tasks** to the fast model despite at least 10–15 being textbook fast candidates (single-line prompt edits, stdlib-only scripts, shell wrappers, running existing tests and capturing output, docs updates). The culprit was framing: the prompt called it "fast" vs "worker," which read as a second tier to fall back to rather than a peer worker.
+
+Across prompts, skills, README, and CLI text, the fast model is now consistently framed as a **fast worker** — a real worker, same tools, same env, on a cheaper/faster model — sitting beside the **main worker**. Both are first-class.
+
+- **Steering prompt** (`src/steering.ts`) — rewrote the model-selection section. Opens with "you have **two kinds of workers**, both first-class." Fast-worker criteria expanded to include surgical multi-line changes with a clear spec, stdlib-only utilities, docs/markdown updates, and running existing scripts/tests. Explicit guidance added: *"when in doubt, pick 'fast'"* and *"over-using 'worker' is a real cost."*
+- **Coach skill** (`plugins/.../coach/SKILL.md`) — roles renamed to planner / main worker / fast worker. Settings matrix commentary clarifies the fast worker is a real worker on a cheaper model, routed to by default for well-scoped tasks.
+- **Claude-overnight skill** (`plugins/.../claude-overnight/SKILL.md`) — "three roles" paragraph and `run.json` row updated to use the new terminology.
+- **README** — planner / main-worker / fast-worker language throughout; routing paragraph updated.
+- **CLI + picker** — `--fast-model` help, fast-provider degrade message, and interactive picker labels all say "fast worker."
+
+### Simplify delegated to the bundled skill
+
+Per-agent self-review (`SIMPLIFY_PROMPT` in `src/swarm.ts`) and post-wave/post-run review (`reviewPrompt` in `src/run.ts`) no longer inline a long checklist. They now invoke the bundled `simplify` skill, which cursor-composer-in-claude 0.10.0 materialises as a `.cursor/rules/*.mdc` file in the worktree so proxied workers honour it the same way a direct Anthropic worker does. Net: much smaller review prompts, one source of truth for the simplify rubric, and parity between the main and fast worker on review passes.
+
 ## 1.25.41
 
 ### Proxied fast-model parity (PROXIED_FAST_MODEL_RESEARCH.md — Path D)

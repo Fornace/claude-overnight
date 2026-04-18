@@ -2,8 +2,9 @@
 name: claude-overnight-coach
 description: >
   Setup coach for claude-overnight. Turns a raw user objective into a ready
-  objective plus recommended run settings (budget, concurrency, planner/worker
-  models, flex, usage cap, permission mode) and an actionable preflight
+  objective plus recommended run settings (budget, concurrency, planner /
+  main-worker / optional fast-worker models, flex, usage cap, permission mode)
+  and an actionable preflight
   checklist. Invoked once, before the interactive pickers, to catch prompt-shape
   failures (vague, overambitious, multi-goal, unverifiable) and environmental
   failures (missing keys, dirty tree, missing .env) while they're still cheap
@@ -69,8 +70,8 @@ Rules:
 - `improvedObjective` preserves the user's voice and domain vocabulary. It MUST include a `Done:` line, a `Critical:` line (or `Critical: none` when nothing is off-limits), and a `Verify by:` line.
 - `recommended.budget` is an integer ≥ 1. `concurrency` is an integer in [1, 12]. `usageCap` is either `null` (unlimited) or a float in (0, 1].
 - `recommended.permissionMode` is `"auto" | "bypassPermissions" | "default"`.
-- `fastModel` is `null` unless adding one is clearly warranted for this scope + budget AND a cheap fast model is reachable from the available providers.
-- `recommended.plannerModel` / `workerModel` / `fastModel` MUST be model IDs that the user can actually reach given the providers listed in the input. Stock Anthropic IDs (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`) are only valid when "Anthropic direct: available" appears in the input.
+- `fastModel` (the fast-worker model) is `null` unless adding one is clearly warranted for this scope + budget AND a cheap fast-worker model is reachable from the available providers.
+- `recommended.plannerModel` (planner) / `workerModel` (main worker) / `fastModel` (fast worker) MUST be model IDs that the user can actually reach given the providers listed in the input. Stock Anthropic IDs (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`) are only valid when "Anthropic direct: available" appears in the input.
 - `checklist` `remediation` is an informational label — the host does NOT auto-act on it. Set it to the slug that best describes the issue, or `"none"` for purely advisory items.
 - `questions` is reserved for a future clarification loop; return `[]` for now.
 
@@ -105,27 +106,27 @@ Rows: scope. Each cell is a starting point — adjust by one step when repo fact
 
 `conc` ⇒ `recommended.concurrency` (clamp to ≤ budget).
 `flex` ⇒ `recommended.flex`.
-`fast=true` ⇒ recommend a fast model **if the user has one configured and reachable** from their available providers. Pick whatever the cheapest fast model is among their providers (e.g. `claude-haiku-4-5`, `composer-2-fast`, `qwen3` variants). If no fast model is reachable, set `null`.
-`fast=null` ⇒ do not recommend a fast model (scope too complex or no suitable fast model available).
+`fast=true` ⇒ recommend a fast-worker model **if the user has one configured and reachable** from their available providers. The fast worker is a real worker (same tools, same env) on a cheaper/faster model — steering routes well-scoped tasks to it by default. Pick whatever the cheapest fast-worker model is among their providers (e.g. `claude-haiku-4-5`, `composer-2-fast`, `qwen3` variants). If none is reachable, set `null`.
+`fast=null` ⇒ do not recommend a fast worker (scope too complex or no suitable fast-worker model available).
 `cap=null` ⇒ unlimited (`recommended.usageCap = null`).
 
-## Planner / worker model selection
+## Planner / main-worker / fast-worker model selection
 
-Pick the strongest reachable model for the planner; pick a cheap-but-capable reachable model for the worker.
+Pick the strongest reachable model for the planner; pick a cheap-but-capable reachable model for the main worker; optionally add a cheaper/faster second model as the fast worker.
 
 Decision order (stop at the first row whose providers are present):
 
 1. **Anthropic direct available**
    - planner: `claude-opus-4-7` (or its `-thinking-high` variant when scope is `audit-and-fix` / `research-and-implement` / `migration`).
-   - worker: `claude-sonnet-4-6` for normal work; `claude-opus-4-7` for `wide`/`saturated` migrations or research.
-   - fastModel: recommend the cheapest fast model available among the user's reachable providers when the matrix says `fast=true`.
+   - main worker: `claude-sonnet-4-6` for normal work; `claude-opus-4-7` for `wide`/`saturated` migrations or research.
+   - fast worker (`fastModel`): recommend the cheapest fast-worker model available among the user's reachable providers when the matrix says `fast=true`.
 2. **Custom Anthropic-compatible provider with a strong model** (e.g. `qwen3.6-plus`, `qwen3-coder-plus`)
    - planner: the strongest such model the user has.
-   - worker: same model, or a cheaper sibling if the user has one.
+   - main worker: same model, or a cheaper sibling if the user has one.
 3. **Cursor proxy is the only reachable provider**
    - planner: `claude-opus-4-7` via Cursor (only if the proxy exposes it).
-   - worker: `claude-sonnet-4-6` via Cursor, or `composer-2` for the cheapest path.
-   - fastModel: recommend a Cursor fast model (e.g. `composer-2-fast`) when the matrix says `fast=true`.
+   - main worker: `claude-sonnet-4-6` via Cursor, or `composer-2` for the cheapest path.
+   - fast worker (`fastModel`): recommend a Cursor fast-worker model (e.g. `composer-2-fast`) when the matrix says `fast=true`.
 4. **No reachable provider** — leave `plannerModel` and `workerModel` as `claude-sonnet-4-6` and emit a `blocking` checklist item titled "No reachable provider".
 
 Never recommend Cursor models when the input does not list a `cursor proxy` provider, and never recommend stock Anthropic IDs when the input does not say "Anthropic direct: available". `fastModel` MUST be `null` rather than guessed.

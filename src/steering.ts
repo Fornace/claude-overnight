@@ -108,8 +108,8 @@ You have full creative freedom. Design the wave that will have the highest impac
 **Polish**  -- Agents focus purely on feel: loading states, error messages, micro-interactions, empty states, responsiveness. Not features  -- the texture that makes users trust the product.
   Example: 2 agents, one on happy paths, one on error/edge states
 
-**Simplify**  -- A fast model agent reviews recent changes and cleans them up. Set "model": "fast".
-  Example: 1 fast agent reviews files changed in the last wave, runs git diff, removes bloat
+**Simplify**  -- Invoke the 'simplify' skill. It reviews changed code and spawns parallel sub-agents for thorough review.
+  Example: 1 agent per wave with task type "review", let the skill handle the rest
 
 You can combine these. A wave can have 3 execute agents + 1 verification agent. Or 2 divergent explorers. Whatever the situation calls for.
 
@@ -126,23 +126,29 @@ Respond with ONLY a JSON object (no markdown fences):
   "estimatedSessionsRemaining": 15,
   "tasks": [
     {"prompt": "task instruction...", "model": "worker", "postcondition": "test -f src/new-file.ts"},
-    {"prompt": "quick icon fix, verified by worker next wave...", "model": "fast"},
+    {"prompt": "quick icon fix, verified by next wave's workers...", "model": "fast"},
     {"prompt": "verify the app end-to-end...", "model": "worker", "noWorktree": true}
   ]
 }
 
 "estimatedSessionsRemaining" is REQUIRED. Your best honest estimate of how many MORE agent sessions (beyond the wave you just composed above) are needed to reach 'amazing'  -- include follow-up fixes, polish, verification, and anything else you'd want before shipping. Be realistic, not optimistic. Use 0 only if truly done.
 
-The "model" field on each task — pick based on the task's scope and risk:
+The "model" field on each task — you have **two kinds of workers**, both first-class. Pick the right one per task:
 
-**Use "fast" (${fastModel ?? "not set"})** for well-scoped, mechanical tasks where speed matters more than deep reasoning. The next wave's worker pass will catch and fix any issues:
+**Fast worker — "fast" (${fastModel ?? "not set"})** is the default workhorse for well-scoped, mechanical tasks. It's a real worker, same tools, same environment — just a cheaper, faster model. The next wave's workers (fast or main) will catch and fix any issues. Route here by default when any of these apply:
 - Single-file edits, refactors, renames
+- Surgical multi-line changes with a clear spec (add a param, wrap a call, tweak a prompt line)
 - Read/research: scan files, summarize findings
 - Build checks, postcondition verification
 - E2E test runs with concrete steps
 - Simple critiques, polish tweaks
+- Running existing scripts/tests and capturing output
+- Docs / markdown updates
+- Stdlib-only utility scripts with a crisp spec
 
-**Use "worker" (${workerModel})** for multi-file features, complex logic, architectural changes, and any task where model quality matters.
+**Main worker — "worker" (${workerModel})** is for tasks that genuinely need deeper reasoning: multi-file features, complex logic, architectural changes, ambiguous specs, anything where a mis-step costs more than a wave to recover from.
+
+When in doubt, pick "fast". Both are workers; the wave loop iterates. Over-using "worker" is a real cost — aim to route the clear majority of well-scoped tasks to the fast worker whenever a fast worker is configured.
 
 Set "noWorktree": true for verify/user-test tasks -- they need the real project directory with env files, dependencies, and local config.
 

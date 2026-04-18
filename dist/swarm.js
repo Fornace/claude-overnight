@@ -29,29 +29,9 @@ function withCursorWorkspaceHeader(env, cwd) {
 }
 import { getModelCapability } from "./models.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "./turns.js";
-const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
+const SIMPLIFY_PROMPT = `You just finished your task. Review and simplify your changes.
 
-Run \`git diff\` to see what you changed, then fix any issues:
-
-1. **Reuse**: Search the codebase  -- did you write something that already exists? Use existing utilities, helpers, patterns instead. Hand-rolled string manipulation, manual path handling, custom env checks, ad-hoc type guards  -- all candidates for existing utilities.
-
-2. **Quality**:
-   - Redundant state: cached values that could be derived, observers that could be direct calls
-   - Copy-paste with slight variation: near-duplicate blocks that should be unified
-   - Leaky abstractions: exposing internals or breaking existing abstraction boundaries
-   - Stringly-typed code: raw strings where enums/unions already exist
-   - Unnecessary JSX nesting: wrappers that add no layout value
-   - Comments narrating WHAT the code does  -- delete them; keep only non-obvious WHY
-
-3. **Efficiency**:
-   - Redundant computations, repeated file reads, duplicate API calls
-   - Sequential operations that could be parallel
-   - Hot-path bloat: new blocking work in startup or per-request paths
-   - Recurring no-op updates: state/store updates inside polling loops that fire unconditionally  -- add change-detection guard
-   - Unnecessary existence checks before operating (TOCTOU anti-pattern)
-   - Memory: unbounded data structures, missing cleanup, event listener leaks
-
-Less code is better. Delete and simplify rather than add. Fix directly  -- no need to explain.`;
+Invoke the \`simplify\` skill to review your changes for reuse, quality, and efficiency, then fix any issues found.`;
 export class Swarm {
     agents = [];
     logs = [];

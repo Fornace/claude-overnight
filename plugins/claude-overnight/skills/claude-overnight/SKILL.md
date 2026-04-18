@@ -11,7 +11,7 @@ description: >
 
 # What it is
 
-`claude-overnight` is a CLI (npm: `claude-overnight`, bin: `claude-overnight`) that takes an objective + budget and launches many Claude agent sessions in parallel, each in an isolated git worktree. It's a local multi-session orchestrator built on top of the Claude Agent SDK  -- not itself an agent harness, but a layer that plans, dispatches, and steers many sessions that run on the SDK's harness. Three roles are picked independently: **planner** (thinks, steers, reviews), **worker** (runs the tasks), and an optional **fast** model (quick well-scoped edits verified by the worker next wave). A "thinking wave" of architect sessions explores the codebase, an orchestrator synthesizes concrete tasks, worker waves run them in parallel, and steering decides between more work, reflection, or declaring done. Rate limits, crashes, and usage caps are all resumable  -- nothing is lost.
+`claude-overnight` is a CLI (npm: `claude-overnight`, bin: `claude-overnight`) that takes an objective + budget and launches many Claude agent sessions in parallel, each in an isolated git worktree. It's a local multi-session orchestrator built on top of the Claude Agent SDK  -- not itself an agent harness, but a layer that plans, dispatches, and steers many sessions that run on the SDK's harness. Three roles are picked independently: **planner** (thinks, steers, reviews), **main worker** (runs the tasks), and an optional **fast worker** (a cheaper/faster second worker for well-scoped tasks, verified by the next wave's workers). A "thinking wave" of architect sessions explores the codebase, an orchestrator synthesizes concrete tasks, worker waves run them in parallel, and steering decides between more work, reflection, or declaring done. Rate limits, crashes, and usage caps are all resumable  -- nothing is lost.
 
 **Three-layer review system** runs on every wave:
 1. **Per-agent self-review**  -- after each agent finishes, the same session continues via SDK session resume (continue mechanism) with a follow-up prompt to review and simplify its own `git diff`. The agent's full context stays warm  -- no initial context bloat.
@@ -55,7 +55,7 @@ Every run lives at `<repo>/.claude-overnight/runs/<ISO-timestamp>/`:
 
 | File / dir           | What it tells you                                                                 |
 |----------------------|-----------------------------------------------------------------------------------|
-| `run.json`           | Machine state: objective, planner/worker/fast models, budget, cost, waves done, branches, done flag. |
+| `run.json`           | Machine state: objective, planner/main-worker/fast-worker models, budget, cost, waves done, branches, done flag. |
 | `status.md`          | **Living project snapshot**, rewritten by steering every wave. First line = short status. |
 | `goal.md`            | Evolving "north star"  -- what the run currently thinks "amazing" means.            |
 | `themes.md`          | The thinking-wave research angles picked for this objective (human-readable).     |
