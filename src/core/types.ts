@@ -188,7 +188,11 @@ export class NudgeError extends Error {
 /** Summary of one completed wave, used by steering to decide next actions. */
 export interface WaveSummary {
   wave: number;
-  tasks: { prompt: string; status: string; type?: string; filesChanged?: number; error?: string }[];
+  tasks: { prompt: string; status: string; type?: string; filesChanged?: number; toolCalls?: number; error?: string }[];
+  /** Sum of `toolCalls` across all agents in this wave (diagnostics). */
+  totalToolCalls?: number;
+  /** Non-heal tasks landed 0 files but agents invoked tools — possible worktree/merge bug. */
+  suspectedInfraFailure?: boolean;
 }
 
 /** Result from the steering function. */
