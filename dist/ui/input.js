@@ -206,14 +206,12 @@ export function InputLayer({ store, callbacks, onToast }) {
                 swarm.retryRateLimitNow();
                 return;
             case "q":
-                if (swarm) {
-                    if (swarm.aborted)
-                        process.exit(0);
-                    swarm.abort();
-                }
-                else {
+                // Second press with the current swarm already aborted = hard exit.
+                if (swarm?.aborted)
                     process.exit(0);
-                }
+                // Always request quit: flips the runner's `stopping` flag so the wave
+                // loop breaks instead of advancing to steering / post-run review.
+                callbacks.requestQuit();
                 return;
         }
         if (/^[0-9]$/.test(raw) && swarm) {

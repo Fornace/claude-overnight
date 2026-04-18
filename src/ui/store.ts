@@ -91,6 +91,8 @@ export interface HostCallbacks {
   selectAgent(id: number): void;
   clearSelectedAgent(): void;
   settingsTick(): void;
+  /** User requested a clean quit. Runner should set its stopping flag + abort the live swarm. */
+  requestQuit(): void;
 }
 
 export function makeInitialState(runInfo: RunInfo, liveConfig: LiveConfig | undefined, flags: { hasOnSteer: boolean; hasOnAsk: boolean }): UiState {

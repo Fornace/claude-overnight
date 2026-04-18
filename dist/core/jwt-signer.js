@@ -48,17 +48,28 @@ export function verifyToken(token, providerId) {
  * Verify a JWT with optional claim validation.
  *
  * Checks:
- * 1. Cryptographic signature (HS256 with per-provider derived key)
+ * 1. Cryptographic signature (HS256 with per-provider derived key from token's `sub`)
  * 2. Token version compatibility
  * 3. Expiration
  * 4. Claim matching (sub, model, aud) when options are provided
+ *
+ * The key is derived from the token's own `sub` claim (decoded without
+ * verification), so providerId is not required. If `providerId` is given,
+ * it is validated as a claim AFTER successful signature verification.
  */
 export function verifyTokenWithResult(token, options = {}) {
     const { providerId, model, baseURL } = options;
-    const key = providerId ? deriveKey(providerId) : null;
-    // If no provider context, we can't derive a key — reject
-    if (!key)
-        return { valid: false, reason: "claim_mismatch" };
+    // Unsafely decode the token to extract the `sub` claim so we can derive
+    // the correct signing key. This does NOT verify the signature yet.
+    const raw = jwt.decode(token);
+    if (!raw || typeof raw !== "object") {
+        return { valid: false, reason: "invalid_signature" };
+    }
+    const sub = raw.sub;
+    if (typeof sub !== "string" || !sub) {
+        return { valid: false, reason: "invalid_signature" };
+    }
+    const key = deriveKey(sub);
     try {
         const decoded = jwt.verify(token, key, {
             algorithms: ["HS256"],

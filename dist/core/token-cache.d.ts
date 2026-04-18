@@ -45,11 +45,11 @@ export declare function tryRefreshCachedToken(providerId: string, refresher: (pa
 } | null): TokenRecord | null;
 /** Remove all cached tokens — called when providers are updated. */
 export declare function clearTokenCache(): void;
-/**
- * Revoke a token session by its ID.
- * The token will be rejected on next use even if still cryptographically valid.
- */
+/** Revoke a token session by its ID.
+ * The token will be rejected on next use even if still cryptographically valid. */
 export declare function revokeSession(sessionId: string): void;
+/** Check if a session ID has been revoked, pruning expired entries first. */
+export declare function isSessionRevoked(sessionId: string): boolean;
 /** Clear the revocation set (e.g. on full reset). */
 export declare function clearRevocations(): void;
 /** Get the number of revoked sessions (for diagnostics). */

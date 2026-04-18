@@ -173,14 +173,19 @@ export async function detectResume(input: DetectResumeInput): Promise<DetectResu
         console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
         const termW = Math.max(process.stdout.columns ?? 80, 60);
         const statusMaxW = Math.min(termW - 8, 80);
+        const leftover = prev.currentTasks?.length ?? 0;
+        const leftoverNote = prev.phase === "stopped" && leftover > 0
+          ? ` · ${leftover} leftover task${leftover === 1 ? "" : "s"} preserved`
+          : "";
+        const phaseLabel = prev.phase === "stopped" ? "interrupted (safe to resume)" : prev.phase;
         const boxLines = prev.phase === "planning" ? [
           `${obj}${obj.length >= 50 ? "…" : ""}`,
           `Plan ready · ${planTaskCount} tasks · budget ${prev.budget} · ${prev.concurrency}× concurrent`,
           `Plan phase · not yet executing`,
         ] : [
           `${obj}${obj.length >= 50 ? "…" : ""}`,
-          `${prev.accCompleted}/${prev.budget} sessions · ${Math.max(1, (prev.budget ?? 0) - prev.accCompleted)} remaining · $${prev.accCost.toFixed(2)}`,
-          `Wave ${prev.waveNum + 1} · ${prev.phase}`,
+          `${prev.accCompleted}/${prev.budget} sessions · ${Math.max(1, (prev.budget ?? 0) - prev.accCompleted)} remaining · $${prev.accCost.toFixed(2)}${leftoverNote}`,
+          `Wave ${prev.waveNum + 1} · ${phaseLabel}`,
         ];
         if (lastStatus) {
           for (const wl of wrap(lastStatus, statusMaxW)) boxLines.push(wl);
@@ -233,11 +238,9 @@ export async function detectResume(input: DetectResumeInput): Promise<DetectResu
       }
     }
     if (resuming && resumeState && resumeRunDir) {
-      // If currentTasks is empty but tasks.json exists on disk, reload it.
-      // Covers two cases:
-      //   1. Planning-phase resumes (the prior run died before executeRun).
-      //   2. Stopped/capped runs whose state was saved with currentTasks: []
-      //      (saveRunState always stores []  -- the plan is on disk in tasks.json).
+      // If currentTasks is non-empty, the run was interrupted mid-wave and we
+      // already persisted the leftover work — resume executes those directly.
+      // Otherwise fall back to tasks.json (planning-phase + legacy stopped runs).
       if (resumeState.currentTasks.length === 0) {
         const loaded = salvageFromFile(join(resumeRunDir, "tasks.json"), resumeState.budget, () => {}, "resume");
         if (loaded) {

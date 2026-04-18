@@ -101,10 +101,8 @@ export function clearTokenCache(): void {
   tokenCache.clear();
 }
 
-/**
- * Revoke a token session by its ID.
- * The token will be rejected on next use even if still cryptographically valid.
- */
+/** Revoke a token session by its ID.
+ * The token will be rejected on next use even if still cryptographically valid. */
 export function revokeSession(sessionId: string): void {
   revokedSessions.set(sessionId, Math.floor(Date.now() / 1000));
   // Also evict from cache if present
@@ -112,6 +110,12 @@ export function revokeSession(sessionId: string): void {
     if (v.sessionId === sessionId) { tokenCache.delete(k); break; }
   }
   pruneRevocations();
+}
+
+/** Check if a session ID has been revoked, pruning expired entries first. */
+export function isSessionRevoked(sessionId: string): boolean {
+  pruneRevocations();
+  return revokedSessions.has(sessionId);
 }
 
 /** Clear the revocation set (e.g. on full reset). */

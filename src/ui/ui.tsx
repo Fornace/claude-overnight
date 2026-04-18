@@ -43,15 +43,17 @@ export class RunDisplay {
 
   private readonly onSteer?: (text: string) => void;
   private readonly onAsk?: (text: string) => void;
+  private readonly onQuit?: () => void;
 
   constructor(
     runInfo: RunInfo,
     liveConfig?: LiveConfig,
-    callbacks?: { onSteer?: (text: string) => void; onAsk?: (text: string) => void },
+    callbacks?: { onSteer?: (text: string) => void; onAsk?: (text: string) => void; onQuit?: () => void },
   ) {
     this.runInfo = runInfo;
     this.onSteer = callbacks?.onSteer;
     this.onAsk = callbacks?.onAsk;
+    this.onQuit = callbacks?.onQuit;
     this.isTTY = !!process.stdout.isTTY;
     this.store = new UiStore(
       makeInitialState(runInfo, liveConfig, {
@@ -76,6 +78,7 @@ export class RunDisplay {
         selectAgent: (id) => this.selectAgent(id),
         clearSelectedAgent: () => this.clearSelectedAgent(),
         settingsTick: () => this.nudge(),
+        requestQuit: () => this.onQuit?.(),
       };
       this.ink = inkRender(<App store={this.store} callbacks={callbacks} />);
     } else {
@@ -105,6 +108,7 @@ export class RunDisplay {
         selectAgent: (id) => this.selectAgent(id),
         clearSelectedAgent: () => this.clearSelectedAgent(),
         settingsTick: () => this.nudge(),
+        requestQuit: () => this.onQuit?.(),
       };
       this.ink = inkRender(<App store={this.store} callbacks={callbacks} />);
       return;

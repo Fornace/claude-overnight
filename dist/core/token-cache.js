@@ -73,10 +73,8 @@ export function tryRefreshCachedToken(providerId, refresher) {
 export function clearTokenCache() {
     tokenCache.clear();
 }
-/**
- * Revoke a token session by its ID.
- * The token will be rejected on next use even if still cryptographically valid.
- */
+/** Revoke a token session by its ID.
+ * The token will be rejected on next use even if still cryptographically valid. */
 export function revokeSession(sessionId) {
     revokedSessions.set(sessionId, Math.floor(Date.now() / 1000));
     // Also evict from cache if present
@@ -87,6 +85,11 @@ export function revokeSession(sessionId) {
         }
     }
     pruneRevocations();
+}
+/** Check if a session ID has been revoked, pruning expired entries first. */
+export function isSessionRevoked(sessionId) {
+    pruneRevocations();
+    return revokedSessions.has(sessionId);
 }
 /** Clear the revocation set (e.g. on full reset). */
 export function clearRevocations() {

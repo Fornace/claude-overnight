@@ -26,10 +26,12 @@ export class RunDisplay {
     lastCompleted = -1;
     onSteer;
     onAsk;
+    onQuit;
     constructor(runInfo, liveConfig, callbacks) {
         this.runInfo = runInfo;
         this.onSteer = callbacks?.onSteer;
         this.onAsk = callbacks?.onAsk;
+        this.onQuit = callbacks?.onQuit;
         this.isTTY = !!process.stdout.isTTY;
         this.store = new UiStore(makeInitialState(runInfo, liveConfig, {
             hasOnSteer: !!this.onSteer,
@@ -51,6 +53,7 @@ export class RunDisplay {
                 selectAgent: (id) => this.selectAgent(id),
                 clearSelectedAgent: () => this.clearSelectedAgent(),
                 settingsTick: () => this.nudge(),
+                requestQuit: () => this.onQuit?.(),
             };
             this.ink = inkRender(_jsx(App, { store: this.store, callbacks: callbacks }));
         }
@@ -86,6 +89,7 @@ export class RunDisplay {
                 selectAgent: (id) => this.selectAgent(id),
                 clearSelectedAgent: () => this.clearSelectedAgent(),
                 settingsTick: () => this.nudge(),
+                requestQuit: () => this.onQuit?.(),
             };
             this.ink = inkRender(_jsx(App, { store: this.store, callbacks: callbacks }));
             return;

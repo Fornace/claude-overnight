@@ -2886,3 +2886,42 @@
 - **Tasks:** 0 done / 2 failed · **Waves:** 2
 - **Status:** ⊘ stopped
 
+## 2026-04-18T17-16-31
+- **Objective:** (none)
+- **Started:** 2026-04-18 17:16:31 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T17-16-53
+- **Objective:** (none)
+- **Started:** 2026-04-18 17:16:53 UTC
+- **Model:** auto · **Budget:** 1 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T17-19-15
+- **Objective:** (none)
+- **Started:** 2026-04-18 17:19:15 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T17-22-55
+- **Objective:** (none)
+- **Started:** 2026-04-18 17:22:55 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T17-23-08
+- **Objective:** (none)
+- **Started:** 2026-04-18 17:23:08 UTC
+- **Model:** auto · **Budget:** 1 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T17-27-45
+- **Objective:** Debug claude-overnight—pin down what’s actually broken and ship a fix.
+Done: The failure you care about no longer reproduces (or you have a minimal repro plus a clear root cause and fix).
+Critical: none
+Verify by: `npm test && npm run build` are green on your branch; rerun the same steps/command that used to fail and confirm they pass.
+- **Started:** 2026-04-18 17:41:44 UTC
+- **Model:** composer-2 · **Budget:** 15 · **Flex:** yes · **Cap:** 0.75%
+- **Status:** running
+

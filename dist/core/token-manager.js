@@ -9,7 +9,7 @@
  */
 import { storeKey } from "./key-vault.js";
 import { signToken, resignToken, verifyTokenWithResult } from "./jwt-signer.js";
-import { getCachedToken, peekCachedToken, cacheToken, revokeSession, clearTokenCache, tryRefreshCachedToken, } from "./token-cache.js";
+import { getCachedToken, peekCachedToken, cacheToken, revokeSession, clearTokenCache, isSessionRevoked, tryRefreshCachedToken, } from "./token-cache.js";
 // ── Token lifecycle ──
 /**
  * Get a signed JWT for a provider.
@@ -67,9 +67,8 @@ export function verifyBearerToken(token, providerId) {
     const result = verifyTokenWithResult(token, { providerId });
     if (!result.valid)
         return result;
-    // Reject if the session was explicitly revoked
-    const cached = getCachedToken(providerId);
-    if (cached && result.payload && cached.sessionId !== result.payload.jti) {
+    // Reject if the session was explicitly revoked (check token's jti, not cache)
+    if (result.payload && isSessionRevoked(result.payload.jti)) {
         return { valid: false, reason: "revoked" };
     }
     return result;
@@ -101,12 +100,15 @@ function tryPeekAndRevoke(providerId) {
  * reducing false positives from unrelated 401/403 responses.
  */
 export function isJWTAuthError(err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = err instanceof Error ? err.message
+        : (err !== null && typeof err === "object" && "message" in err && typeof err.message === "string")
+            ? err.message
+            : String(err);
     const lower = msg.toLowerCase();
     // JWT-specific indicators (high confidence)
     const jwtIndicators = [
         "token expired", "invalid_token", "jwt", "signature",
-        "invalid_api_key", "authentication",
+        "invalid_api_key", "authentication", "bearer",
     ];
     for (const indicator of jwtIndicators) {
         if (lower.includes(indicator))

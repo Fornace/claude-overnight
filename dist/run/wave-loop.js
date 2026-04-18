@@ -149,7 +149,14 @@ export async function runWaveLoop(host, ctx) {
             saveWaveSession(ctx.runDir, host.waveNum, swarm.agents, swarm.totalCostUsd);
             const attemptedPrompts = new Set(swarm.agents.map(a => a.task.prompt));
             const neverStarted = host.currentTasks.filter(t => !attemptedPrompts.has(t.prompt));
-            saveRunState(ctx.runDir, buildRunState(host, "steering", neverStarted));
+            // On user-initiated quit mid-wave, "never started" tasks are real leftover
+            // work the user expects to see on resume — save them under "stopped".
+            const midWavePhase = (ctx.isStopping() || swarm.aborted) ? "stopped" : "steering";
+            saveRunState(ctx.runDir, buildRunState(host, midWavePhase, neverStarted));
+            // Preserve the leftover tasks on the host so the outer run loop's final
+            // saveRunState writes them (instead of []), and resume has something to load.
+            if (midWavePhase === "stopped")
+                host.currentTasks = neverStarted;
             // ── Overlay merge outcomes into wave history ──
             const failedMergeBranches = new Set(swarm.mergeResults.filter(r => !r.ok).map(r => r.branch));
             host.waveHistory.push({
@@ -244,6 +251,10 @@ export async function runWaveLoop(host, ctx) {
                     ctx.display.appendSteeringEvent(`GC: discarded ${gcCount} ghost branch(es) ≥2 waves old`);
             }
             catch { }
+            // Fast-exit on user-quit: don't spend more budget on debrief / after-wave
+            // / post-wave review — the user wants to stop NOW.
+            if (ctx.isStopping() || swarm.aborted)
+                break;
             // ── Debrief ──
             ctx.runDebrief(`Wave ${host.waveNum + 1} just finished.`);
             // ── After-wave commands ──

@@ -23,6 +23,21 @@ export function salvageFromFile(outFile: string | undefined, budget: number | un
   } catch { return null; }
 }
 
+// Read-only recon tools for the themes picker. Includes cclsp + serena LSP
+// tools so runs under the LSP enforcement kit (which blocks Grep/Glob on code
+// symbols) still have a path forward. Unknown MCP tool names are ignored by
+// the SDK when their server isn't connected, so this is a no-op otherwise.
+const THEMES_RECON_TOOLS = [
+  "Read", "Glob", "Grep",
+  "mcp__cclsp__find_workspace_symbols",
+  "mcp__cclsp__find_definition",
+  "mcp__cclsp__find_references",
+  "mcp__cclsp__get_hover",
+  "mcp__serena__find_symbol",
+  "mcp__serena__find_referencing_symbols",
+  "mcp__serena__get_symbols_overview",
+];
+
 // The core framing for all planning. Not a checklist  -- a way of thinking.
 export const DESIGN_THINKING = `
 HOW TO THINK ABOUT EVERY TASK:
@@ -217,21 +232,24 @@ export async function identifyThemes(
     const resultText = await runPlannerQuery(
       `You are picking ${count} research angles for architects who will deeply explore a codebase next.
 
-First do a BRIEF recon (3-6 tool calls max, don't go deep): read package.json and README if present, glob the top-level directory, peek at one or two config files that reveal the stack. You are learning what this codebase actually IS -- not solving anything.
+You are NOT solving the objective. You are NOT reproducing bugs, running builds, running tests, or executing anything. You only have read-only recon tools (Read, Glob, Grep). Do a quick scan (3-6 tool calls): read any manifest/README, glob the top-level tree, peek at one or two config files that reveal the stack. Stop as soon as you can name the pieces.
 
 Then pick ${count} angles that carve up THIS specific codebase orthogonally. Prefer concrete subsystems you saw (e.g. "authentication + session handling", "time-tracking mutation paths") over generic buckets ("data layer", "UX").
 
-Objective: ${objective}
+The objective below is for CONTEXT ONLY -- do not act on it, do not verify it, do not reproduce it:
+
+<objective>
+${objective}
+</objective>
 
 Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
-      { cwd, model, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id }, onLog,
+      { cwd, model, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id, tools: THEMES_RECON_TOOLS }, onLog,
     );
     const parsed = attemptJsonParse(resultText);
     endTurn(turn, "done");
     if (parsed?.themes && Array.isArray(parsed.themes)) return parsed.themes.slice(0, count);
+    throw new Error("themes picker returned no themes");
   } catch (err) { endTurn(turn, "error"); throw err; }
-  const fallback = ["architecture, patterns, and conventions", "data models, state, and persistence", "user-facing flows, components, and UX", "APIs, integrations, and services", "testing, quality, and error handling", "security, performance, and infrastructure", "build, deployment, and configuration", "documentation and developer experience"];
-  return Array.from({ length: count }, (_, i) => fallback[i % fallback.length]);
 }
 
 export function buildThinkingTasks(
@@ -390,6 +408,5 @@ Respond with ONLY a JSON object (no markdown):
   endTurn(turn, tasks.length === 0 ? "error" : "done");
   if (tasks.length === 0) throw new Error("Refinement produced 0 tasks");
   onLog(`${tasks.length} tasks`);
-  return tasks;
   return tasks;
 }

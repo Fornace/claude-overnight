@@ -39,10 +39,14 @@ export declare function verifyToken(token: string, providerId: string): JWTPaylo
  * Verify a JWT with optional claim validation.
  *
  * Checks:
- * 1. Cryptographic signature (HS256 with per-provider derived key)
+ * 1. Cryptographic signature (HS256 with per-provider derived key from token's `sub`)
  * 2. Token version compatibility
  * 3. Expiration
  * 4. Claim matching (sub, model, aud) when options are provided
+ *
+ * The key is derived from the token's own `sub` claim (decoded without
+ * verification), so providerId is not required. If `providerId` is given,
+ * it is validated as a claim AFTER successful signature verification.
  */
 export declare function verifyTokenWithResult(token: string, options?: VerifyOptions): VerifyResult;
 /**

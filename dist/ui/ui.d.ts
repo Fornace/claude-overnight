@@ -14,9 +14,11 @@ export declare class RunDisplay {
     private lastCompleted;
     private readonly onSteer?;
     private readonly onAsk?;
+    private readonly onQuit?;
     constructor(runInfo: RunInfo, liveConfig?: LiveConfig, callbacks?: {
         onSteer?: (text: string) => void;
         onAsk?: (text: string) => void;
+        onQuit?: () => void;
     });
     start(): void;
     pause(): void;

@@ -24,12 +24,6 @@ export async function executeRun(cfg) {
         fastModel: cfg.fastModel, fastProvider: cfg.fastProvider,
     });
     setPlannerEnvResolver(envForModel);
-    const modelMap = new Map([
-        ["planner", plannerModel],
-        ["worker", workerModel],
-    ]);
-    if (fastModel)
-        modelMap.set("fast", fastModel);
     let { usageCap, flex } = cfg;
     const useWorktrees = cfg.useWorktrees;
     const mergeStrategy = cfg.mergeStrategy;
@@ -148,7 +142,25 @@ export async function executeRun(cfg) {
             }
         })();
     };
-    display = new RunDisplay(runInfoRef, liveConfig, { onSteer, onAsk });
+    // Declared up here (before onQuit) so the 'q' callback can flip it.
+    // The SIGINT/SIGTERM handler below reuses the same flag.
+    let stopping = false;
+    // onQuit: user pressed 'q'. Flip the runner's stopping flag so the wave loop
+    // breaks cleanly (no advance to steering / post-run review) and abort the
+    // live swarm so in-flight agents stop immediately.
+    const onQuit = () => {
+        if (stopping) {
+            currentSwarm?.abort();
+            return;
+        }
+        stopping = true;
+        currentSwarm?.abort();
+        try {
+            display.appendSteeringEvent("Quit requested — stopping after current work.");
+        }
+        catch { }
+    };
+    display = new RunDisplay(runInfoRef, liveConfig, { onSteer, onAsk, onQuit });
     const rlGetter = () => {
         const rl = getPlannerRateLimitInfo();
         return { utilization: rl.utilization, isUsingOverage: rl.isUsingOverage, windows: rl.windows, resetsAt: rl.resetsAt };
@@ -233,7 +245,6 @@ export async function executeRun(cfg) {
         coachedObjective: cfg.coachedObjective,
         coachedAt: cfg.coachedAt,
     });
-    let stopping = false;
     const gracefulStop = () => {
         if (stopping) {
             currentSwarm?.cleanup();
@@ -329,10 +340,9 @@ export async function executeRun(cfg) {
                     remaining = 0;
                     break;
                 }
-                currentTasks = steer.tasks.map(t => ({
-                    ...t,
-                    model: t.model ? (modelMap.get(t.model) ?? t.model) : undefined,
-                }));
+                // steerWave already resolves role strings ("worker"/"planner"/"fast") to concrete model IDs
+                // using the current model variables, so tasks come back with a real model already.
+                currentTasks = steer.tasks;
                 steered = true;
             }
             catch (err) {
@@ -468,13 +478,23 @@ export async function executeRun(cfg) {
     display.stop();
     // ── Finalize ──
     const trulyDone = objectiveComplete || (!flex && remaining <= 0);
-    const wasCapped = lastCapped || lastAborted;
-    const finalPhase = trulyDone ? "done" : wasCapped ? "capped" : remaining <= 0 ? "capped" : "stopped";
-    saveRunState(runDir, buildRunState({ remaining, phase: finalPhase, currentTasks: [] }));
+    // User-initiated quit (or abort via 'q' / SIGINT / stall-watchdog) ⇒ save as
+    // "stopped" so resume.ts offers the run and the incomplete work comes back.
+    const userQuit = stopping || lastAborted;
+    const wasCapped = lastCapped && !userQuit;
+    const finalPhase = trulyDone ? "done"
+        : userQuit ? "stopped"
+            : wasCapped ? "capped"
+                : remaining <= 0 ? "capped"
+                    : "stopped";
+    // Preserve currentTasks when stopped mid-wave so resume has the leftover work.
+    const finalTasks = finalPhase === "stopped" ? currentTasks : [];
+    saveRunState(runDir, buildRunState({ remaining, phase: finalPhase, currentTasks: finalTasks }));
     // Post-run final review: comprehensive review of the entire diff before shipping.
     // This can take several minutes — keep the display alive so the user sees the
     // review agent working in real time instead of staring at a frozen terminal.
-    if (flex && remaining > 0 && waveNum > 0) {
+    // Skip entirely when the user quit — they asked to stop, don't burn budget.
+    if (flex && remaining > 0 && waveNum > 0 && !userQuit) {
         console.log(chalk.dim(`\n  Final review: scanning full run diff\u2026`));
         display.start();
         const finalReview = await runPostRunReview(objective || "", {

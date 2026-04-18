@@ -7,8 +7,9 @@
 // lifecycle shell, and makes the retry/resume state machine easy to read
 // end-to-end without the class scaffolding around it.
 
-import { rmSync } from "fs";
-import { join } from "path";
+import { rmSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { join, resolve, dirname } from "path";
+import { fileURLToPath } from "url";
 import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError } from "../core/types.js";
@@ -88,6 +89,12 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
       agent.branch = branch;
       agent.baseRef = baseRef;
       host.log(id, `Worktree: ${branch}`);
+      // Opt-in: install the bundled lsp-first hook into this worktree so the
+      // spawned agent blocks Grep on code symbols and is nudged to cclsp/LSP
+      // tools instead. Enabled via CLAUDE_OVERNIGHT_LSP_FIRST=1 (or =true).
+      if (/^(1|true|yes)$/i.test(process.env.CLAUDE_OVERNIGHT_LSP_FIRST ?? "")) {
+        try { installLspFirstHookInto(dir); } catch (e: any) { host.log(id, `lsp-first install skipped: ${String(e?.message || e).slice(0, 60)}`); }
+      }
     } else {
       host.log(id, `Worktree failed after retry  -- running without isolation`);
     }
@@ -99,6 +106,10 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
   const inactivityMs = host.config.agentTimeoutMs ?? 15 * 60 * 1000;
   const rl = sdkQueryRateLimiter;
 
+  // Hoisted so the catch block can read the session captured during the turn
+  // when routing a pause-interrupt through the requeue path.
+  let resumeSessionId: string | undefined = task.resumeSessionId;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const backoffMs = Math.min(30000, 1000 * 2 ** (attempt - 1)) * (0.5 + Math.random());
@@ -108,7 +119,6 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
     }
 
     try {
-      let resumeSessionId: string | undefined = task.resumeSessionId;
       let resumePrompt = "Continue. Complete the task.";
 
       const runOnce = async (isResume: boolean): Promise<void> => {
@@ -121,7 +131,8 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
             ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}${postBlock}`
             : `${preamble}${task.prompt}${postBlock}`;
 
-        const effectiveModel = task.model || host.config.model;
+        // Read host.model (live — setModel updates it between waves), not host.config.model (frozen at construction).
+        const effectiveModel = task.model || host.model;
         const envOverride = withCursorWorkspaceHeader(
           host.config.envForModel?.(effectiveModel),
           agentCwd,
@@ -184,13 +195,18 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
       };
 
       // Helper: re-queue this task with resume info when paused mid-turn.
+      // If we already captured a session ID, resume the existing SDK session on unpause;
+      // otherwise re-queue the original task so the worker re-runs it from scratch
+      // (losing a task here would silently shrink the wave).
       const requeueIfPaused = (): boolean => {
         if (!host.paused || agent.status !== "running") return false;
         agent.status = "paused";
-        host.log(id, "Paused mid-task");
-        if (resumeSessionId) {
-          host.queue.unshift({ ...task, resumeSessionId, agentCwd });
-        }
+        host.log(id, resumeSessionId ? "Paused mid-task (will resume)" : "Paused before first turn (will restart)");
+        host.queue.unshift(
+          resumeSessionId
+            ? { ...task, resumeSessionId, agentCwd }
+            : { ...task },
+        );
         return true;
       };
 
@@ -234,6 +250,18 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
       break;
     } catch (err: any) {
       if (agent.status !== "running") break;
+      // Pause throws (SDK interrupt surfaces as an exception on some transports).
+      // Treat it like the clean-exit pause path — requeue and bail — instead of
+      // marking the agent as errored, which would burn remaining-budget on every
+      // live agent whenever the user hit `p`.
+      if (host.paused) {
+        agent.status = "paused";
+        host.log(id, "Paused mid-task (interrupt thrown)");
+        // Reuse resume info when we already have a sessionId; otherwise restart fresh.
+        const reuseSession = (typeof resumeSessionId === "string") && resumeSessionId.length > 0;
+        host.queue.unshift(reuseSession ? { ...task, resumeSessionId, agentCwd } : { ...task });
+        return;
+      }
       // Rate-limit errors: wait and retry WITHOUT burning the retry budget
       if (!host.aborted && isRateLimitError(err)) {
         const waitMs = host.rateLimitResetsAt && host.rateLimitResetsAt > Date.now()
@@ -272,6 +300,63 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
   endTurn(turn, agent.status === "done" ? "done" : agent.status === "paused" ? "stopped" : "error");
   host._agentTurns.delete(id);
   if (agent.status === "done") host.log(agent.id, host.agentSummary(agent));
+}
+
+/**
+ * Bundled plugin path: plugins/lsp-first relative to the installed package.
+ * Resolved off this module's path so it works when claude-overnight is
+ * invoked from anywhere (npm link, global install, local dev).
+ */
+function resolveLspFirstPluginDir(): string | undefined {
+  try {
+    // dist/swarm/agent-run.js → ../../plugins/lsp-first
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidate = resolve(here, "..", "..", "plugins", "lsp-first");
+    if (existsSync(join(candidate, "hooks", "lsp-first-guard.js"))) return candidate;
+  } catch {}
+  return undefined;
+}
+
+/**
+ * Look for an LSP MCP server (cclsp / serena) in the user's Claude config.
+ * Cheap substring check — if nothing's configured, don't install the hook
+ * (it would block Grep without offering the agent any alternative).
+ */
+let _lspMcpPresent: boolean | undefined;
+function hasLspMcp(): boolean {
+  if (_lspMcpPresent !== undefined) return _lspMcpPresent;
+  const candidates = [
+    join(process.env.HOME ?? "", ".claude.json"),
+    join(process.env.HOME ?? "", ".config", "claude", "claude.json"),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!existsSync(p)) continue;
+      const text = require("fs").readFileSync(p, "utf-8") as string;
+      if (/\b(cclsp|serena)\b/.test(text)) { _lspMcpPresent = true; return true; }
+    } catch {}
+  }
+  _lspMcpPresent = false;
+  return false;
+}
+
+/** Write a project-level settings file that registers the lsp-first hook. */
+function installLspFirstHookInto(worktreeDir: string): void {
+  if (!hasLspMcp()) return; // fail-safe — no LSP, no enforcement
+  const pluginDir = resolveLspFirstPluginDir();
+  if (!pluginDir) return;
+  const hookPath = join(pluginDir, "hooks", "lsp-first-guard.js");
+  const settings = {
+    hooks: {
+      PreToolUse: [
+        { matcher: "Grep", hooks: [{ type: "command", command: `node ${JSON.stringify(hookPath).slice(1, -1)}` }] },
+      ],
+    },
+  };
+  const dir = join(worktreeDir, ".claude");
+  mkdirSync(dir, { recursive: true });
+  // settings.local.json is gitignored by Claude Code convention — won't pollute the agent's commit.
+  writeFileSync(join(dir, "settings.local.json"), JSON.stringify(settings, null, 2), "utf-8");
 }
 
 /**
