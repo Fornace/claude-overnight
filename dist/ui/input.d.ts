@@ -1,13 +1,13 @@
 import React from "react";
 import type { UiStore, HostCallbacks } from "./store.js";
+import { deleteWordBackward as rawDeleteWordBackward } from "./raw-input.js";
 export declare const MAX_INPUT_LEN = 600;
 export declare const CONTROL_CHAR_RE: RegExp;
-/** Strip control characters from typed raw input so escape flushes, newlines,
- *  and C1 bytes never end up in the user's buffer. Exported for tests. */
+/** Strip control characters from typed raw input. Exported for tests. */
 export declare function sanitizeTyped(raw: string): string;
 /** Delete the previous word including any trailing whitespace, readline-style.
- *  Bound to Ctrl+W and Opt/Cmd+Backspace. Exported for tests. */
-export declare function deleteWordBackward(s: string): string;
+ *  Exported for tests. */
+export declare const deleteWordBackward: typeof rawDeleteWordBackward;
 interface Props {
     store: UiStore;
     callbacks: HostCallbacks;

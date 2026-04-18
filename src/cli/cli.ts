@@ -6,6 +6,7 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { Task, MergeStrategy } from "../core/types.js";
+import { parseChunk, setBracketedPaste, deleteWordBackward } from "../ui/raw-input.js";
 
 // ── CLI flag parsing ──
 
@@ -68,67 +69,37 @@ export async function fetchModels(timeoutMs = 10_000): Promise<ModelInfo[]> {
   }
 }
 
-// ── Bracketed paste + segment-based input ──
+// ── Interactive primitives ──
 //
-// When the terminal is in bracketed paste mode, pasted content is wrapped with
-// \x1B[200~ ... \x1B[201~ so we can distinguish typed Enter from pasted newlines.
-// Multi-line or long pastes are stored as opaque segments and shown as a compact
-// [Pasted +N lines] placeholder while editing  -- the full text is substituted on submit.
+// Text entry goes through the shared raw-input parser in `../ui/raw-input.ts`,
+// which enforces the single invariant that used to be duplicated (and buggy)
+// here and in the Ink overlay:
+//   - Typed Enter = a stdin chunk that is exactly "\r", "\n", or "\r\n".
+//   - Anything else with embedded newlines is a paste, not a submit.
+// Multi-line pastes render as a compact `[Pasted +N lines]` placeholder while
+// editing — the full content is substituted on submit.
 
-export const PASTE_START = "\x1B[200~";
-export const PASTE_END = "\x1B[201~";
 export const PASTE_PLACEHOLDER_MAX = 80;
 
-export type InputSegment = { type: "text"; content: string } | { type: "paste"; content: string };
+type InputSegment = { type: "text"; content: string } | { type: "paste"; content: string };
 
-/** Split a raw stdin chunk into typed and pasted segments. */
-export function splitPaste(chunk: string): Array<{ type: "typed" | "paste"; text: string }> {
-  const out: Array<{ type: "typed" | "paste"; text: string }> = [];
-  let i = 0;
-  while (i < chunk.length) {
-    const start = chunk.indexOf(PASTE_START, i);
-    if (start === -1) { out.push({ type: "typed", text: chunk.slice(i) }); break; }
-    if (start > i) out.push({ type: "typed", text: chunk.slice(i, start) });
-    const bodyStart = start + PASTE_START.length;
-    const end = chunk.indexOf(PASTE_END, bodyStart);
-    if (end === -1) { out.push({ type: "paste", text: chunk.slice(bodyStart) }); break; }
-    out.push({ type: "paste", text: chunk.slice(bodyStart, end) });
-    i = end + PASTE_END.length;
-  }
-  return out;
-}
-
-export function segmentsToString(segs: InputSegment[]): string {
-  return segs.map((s) => s.content).join("");
-}
-
-export function renderSegments(segs: InputSegment[]): string {
-  return segs.map((s) => {
-    if (s.type === "text") return s.content;
-    const lines = s.content.split("\n").length;
-    return chalk.dim(`[Pasted +${lines} line${lines === 1 ? "" : "s"}]`);
-  }).join("");
-}
-
-export function appendCharToSegments(segs: InputSegment[], ch: string): void {
+function appendTypedChar(segs: InputSegment[], ch: string): void {
   const last = segs[segs.length - 1];
   if (last && last.type === "text") last.content += ch;
   else segs.push({ type: "text", content: ch });
 }
 
-/** Appends a pasted block. Short single-line pastes inline as text; the rest become placeholders. */
-export function appendPasteToSegments(segs: InputSegment[], text: string): void {
+function appendPaste(segs: InputSegment[], text: string): void {
   if (!text) return;
   const norm = text.replace(/\r\n?/g, "\n");
   if (!norm.includes("\n") && norm.length <= PASTE_PLACEHOLDER_MAX) {
-    appendCharToSegments(segs, norm);
+    appendTypedChar(segs, norm);
     return;
   }
   segs.push({ type: "paste", content: norm });
 }
 
-/** Backspace removes one char, or an entire paste block atomically. */
-export function backspaceSegments(segs: InputSegment[]): void {
+function backspaceSegs(segs: InputSegment[]): void {
   while (segs.length > 0) {
     const last = segs[segs.length - 1];
     if (last.type === "paste") { segs.pop(); return; }
@@ -138,16 +109,24 @@ export function backspaceSegments(segs: InputSegment[]): void {
   }
 }
 
+function segsToString(segs: InputSegment[]): string { return segs.map((s) => s.content).join(""); }
+
+function renderSegs(segs: InputSegment[]): string {
+  return segs.map((s) => {
+    if (s.type === "text") return s.content;
+    const lines = s.content.split("\n").length;
+    return chalk.dim(`[Pasted +${lines} line${lines === 1 ? "" : "s"}]`);
+  }).join("");
+}
+
 function stripAnsi(s: string): string {
   return s.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
 }
 
-// ── Interactive primitives ──
-
 /**
- * Read a line from the user with bracketed-paste awareness.
- * Pasted multi-line text stays in the buffer as a single block  -- only a typed
- * Enter submits. Falls back to cooked readline when stdin isn't a TTY.
+ * Read a line from the user with bracketed-paste awareness. Pasted multi-line
+ * text stays in the buffer as a single block  -- only a typed Enter submits.
+ * Falls back to cooked readline when stdin isn't a TTY.
  */
 export function ask(question: string): Promise<string> {
   const { stdin, stdout } = process;
@@ -162,67 +141,50 @@ export function ask(question: string): Promise<string> {
     const tailVisibleLen = stripAnsi(tail).length;
     let prevWrapRows = 0;
 
-    // Only rewrite the input line (and any wrapped continuation rows). The
-    // question header above is never touched, so redraws can't stack copies
-    // even if the initial write scrolled the viewport.
     const redraw = () => {
       const cols = stdout.columns || 80;
       if (prevWrapRows > 0) stdout.write(`\x1B[${prevWrapRows}A`);
       stdout.write("\r\x1B[J");
-      const rendered = renderSegments(segs);
+      const rendered = renderSegs(segs);
       stdout.write(tail + rendered);
       const visible = tailVisibleLen + stripAnsi(rendered).length;
       prevWrapRows = visible > 0 ? Math.floor((visible - 1) / cols) : 0;
     };
 
     stdout.write(question);
-    stdout.write("\x1B[?2004h");
+    setBracketedPaste(stdout, true);
     try { stdin.setRawMode!(true); } catch {}
     stdin.resume();
 
     const cleanup = () => {
-      stdout.write("\x1B[?2004l");
+      setBracketedPaste(stdout, false);
       try { stdin.setRawMode!(false); } catch {}
       stdin.removeListener("data", onData);
       stdin.pause();
     };
+    const submit = () => { stdout.write("\n"); cleanup(); resolve(segsToString(segs).trim()); };
 
     const onData = (buf: Buffer) => {
-      const chunk = buf.toString();
-      for (const seg of splitPaste(chunk)) {
-        if (seg.type === "paste") {
-          appendPasteToSegments(segs, seg.text);
-          redraw();
-          continue;
+      for (const ev of parseChunk(buf.toString())) {
+        switch (ev.type) {
+          case "char": appendTypedChar(segs, ev.text); break;
+          case "paste": appendPaste(segs, ev.text); break;
+          case "backspace": backspaceSegs(segs); break;
+          case "word-delete": {
+            const s = segsToString(segs);
+            const next = deleteWordBackward(s);
+            segs.length = 0;
+            if (next) segs.push({ type: "text", content: next });
+            break;
+          }
+          case "clear-line": segs.length = 0; break;
+          case "submit": submit(); return;
+          case "cancel": submit(); return; // lone ESC = submit, preserves old behavior
+          case "interrupt": cleanup(); stdout.write("\n"); process.exit(130);
+          // tab + nav: ignore during single-line prompts
         }
-        for (let ci = 0; ci < seg.text.length; ci++) {
-          const ch = seg.text[ci];
-          if (ch === "\r" || ch === "\n") {
-            stdout.write("\n");
-            cleanup();
-            resolve(segmentsToString(segs).trim());
-            return;
-          }
-          if (ch === "\x03") {
-            cleanup();
-            stdout.write("\n");
-            process.exit(130);
-          }
-          if (ch === "\x7F" || ch === "\b") { backspaceSegments(segs); redraw(); continue; }
-          // ESC submits the current input (same as Enter)
-          if (ch === "\x1B") {
-            stdout.write("\n");
-            cleanup();
-            resolve(segmentsToString(segs).trim());
-            return;
-          }
-          const code = ch.charCodeAt(0);
-          if (code < 0x20) continue; // control chars
-          if (code >= 0x7F && code < 0xA0) continue; // DEL + C1 controls
-          appendCharToSegments(segs, ch);
-        }
-        redraw();
       }
+      redraw();
     };
 
     stdin.on("data", onData);
