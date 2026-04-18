@@ -619,6 +619,21 @@ function extractOutermostBraces(text) {
     return null;
 }
 export function attemptJsonParse(text) {
+    // Strip conversational prefaces/suffixes that weak-schema models sometimes
+    // wrap around the JSON body (e.g. "Here is the JSON: { ... } Let me know…").
+    const preface = /^\s*(?:Here (?:is|are)[^{]*|Let me[^{]*|I'?ll[^{]*|Sure[^{]*|Okay[^{]*)/i;
+    const suffix = /\n\n(?:Let me know|Hope this|Please let me)[\s\S]*$/i;
+    if (preface.test(text) || suffix.test(text)) {
+        const cleaned = text.replace(preface, "").replace(suffix, "").trim();
+        if (cleaned && cleaned !== text) {
+            try {
+                const obj = JSON.parse(cleaned);
+                if (typeof obj === "object" && obj !== null)
+                    return obj;
+            }
+            catch { }
+        }
+    }
     try {
         const obj = JSON.parse(text);
         if (typeof obj === "object" && obj !== null)

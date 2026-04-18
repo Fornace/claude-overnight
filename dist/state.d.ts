@@ -72,6 +72,6 @@ export declare function recordBranches(agents: {
 }[], mergeResults: {
     branch: string;
     ok: boolean;
-}[], branches: BranchRecord[]): void;
+}[], branches: BranchRecord[], currentWave?: number): void;
 export declare function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: (msg: string) => void): void;
 export declare function archiveMilestone(baseDir: string, waveNum: number): void;

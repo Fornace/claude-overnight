@@ -420,6 +420,7 @@ export function recordBranches(
   agents: { branch?: string; task: { prompt: string }; status: string; filesChanged?: number; costUsd?: number }[],
   mergeResults: { branch: string; ok: boolean }[],
   branches: BranchRecord[],
+  currentWave?: number,
 ): void {
   for (const a of agents) {
     if (a.branch) {
@@ -434,7 +435,12 @@ export function recordBranches(
   }
   for (const mr of mergeResults) {
     const br = branches.find(b => b.branch === mr.branch);
-    if (br) br.status = mr.ok ? "merged" : "merge-failed";
+    if (br) {
+      br.status = mr.ok ? "merged" : "merge-failed";
+      if (!mr.ok && !br.firstFailedWave && currentWave !== undefined) {
+        br.firstFailedWave = currentWave;
+      }
+    }
   }
 }
 

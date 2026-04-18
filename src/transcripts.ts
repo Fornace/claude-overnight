@@ -31,12 +31,21 @@ export function transcriptPath(name: string): string | undefined {
   return _runDir ? join(_runDir, "transcripts", `${name}.ndjson`) : undefined;
 }
 
-/** Append a single event; silent on error (disk full, permission, etc.). */
+/** Names that already errored — guard against repeated stderr spam. */
+const _seenErrors = new Set<string>();
+
+/** Append a single event; log to stderr once per name on failure (C5). */
 export function writeTranscriptEvent(name: string, event: Record<string, unknown>): void {
   const path = transcriptPath(name);
   if (!path) return;
   try {
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, JSON.stringify({ t: Date.now(), ...event }) + "\n", "utf-8");
-  } catch {}
+  } catch (err: unknown) {
+    if (!_seenErrors.has(name)) {
+      _seenErrors.add(name);
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[transcript] writeTranscriptEvent("${name}") failed: ${msg}\n`);
+    }
+  }
 }

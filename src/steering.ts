@@ -3,8 +3,11 @@ import { runPlannerQuery, attemptJsonParse, postProcess, type PlannerLog } from 
 import { contextConstraintNote } from "./models.js";
 import { DESIGN_THINKING } from "./planner.js";
 import { createTurn, beginTurn, endTurn } from "./turns.js";
+import { writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
+import { getTranscriptRunDir } from "./transcripts.js";
 
-const STEER_SCHEMA = {
+export const STEER_SCHEMA = {
   type: "json_schema" as const,
   schema: {
     type: "object",
@@ -27,6 +30,25 @@ const STEER_SCHEMA = {
   },
 };
 
+const PROMPT_BUDGET = 6000;
+
+/** Build a compact wave summary; keepLast controls how many recent waves to include. */
+function buildRecentText(history: WaveSummary[], keepLast: number): string {
+  const recentWaves = history.slice(-keepLast);
+  return recentWaves.length > 0 ? recentWaves.map(w => {
+    const lines = w.tasks.map(t => {
+      const isExecute = !t.type || t.type === "execute";
+      const files = t.filesChanged ? ` (${t.filesChanged} files)` : isExecute ? " (0 files)" : " (read-only)";
+      const err = t.error ? `  -- ${t.error}` : "";
+      return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
+    }).join("\n");
+    const zeroExecute = w.tasks.filter(t => t.status === "done" && (!t.type || t.type === "execute") && !t.filesChanged).length;
+    const totalExecute = w.tasks.filter(t => !t.type || t.type === "execute").length;
+    const warn = totalExecute > 0 && zeroExecute > totalExecute / 2 ? `\n  ⚠ ${zeroExecute}/${totalExecute} execute tasks changed 0 files  -- tasks may be mis-scoped or blocked` : "";
+    return `Wave ${w.wave + 1}:\n${lines}${warn}`;
+  }).join("\n\n") : "(first wave)";
+}
+
 export async function steerWave(
   objective: string,
   history: WaveSummary[],
@@ -43,31 +65,25 @@ export async function steerWave(
 ): Promise<SteerResult> {
   const constraint = contextConstraintNote(workerModel);
 
-  const recentWaves = history.slice(-3);
-  const recentText = recentWaves.length > 0 ? recentWaves.map(w => {
-    const lines = w.tasks.map(t => {
-      const isExecute = !t.type || t.type === "execute";
-      const files = t.filesChanged ? ` (${t.filesChanged} files)` : isExecute ? " (0 files)" : " (read-only)";
-      const err = t.error ? `  -- ${t.error}` : "";
-      return `  - [${t.status}] ${t.prompt.slice(0, 120)}${files}${err}`;
-    }).join("\n");
-    const zeroExecute = w.tasks.filter(t => t.status === "done" && (!t.type || t.type === "execute") && !t.filesChanged).length;
-    const totalExecute = w.tasks.filter(t => !t.type || t.type === "execute").length;
-    const warn = totalExecute > 0 && zeroExecute > totalExecute / 2 ? `\n  ⚠ ${zeroExecute}/${totalExecute} execute tasks changed 0 files  -- tasks may be mis-scoped or blocked` : "";
-    return `Wave ${w.wave + 1}:\n${lines}${warn}`;
-  }).join("\n\n") : "(first wave)";
-
   const cap = (s: string, max: number) => s.length > max ? s.slice(0, max) + "\n...(truncated)" : s;
   const statusBlock = runMemory?.status ? `\nCurrent project status:\n${runMemory.status}\n` : "";
-  const milestoneBlock = runMemory?.milestones ? `\nMilestone snapshots:\n${cap(runMemory.milestones, 4000)}\n` : "";
-  const designBlock = runMemory?.designs ? `\nArchitectural research:\n${cap(runMemory.designs, 4000)}\n` : "";
-  const reflectionBlock = runMemory?.reflections ? `\nLatest quality reports:\n${cap(runMemory.reflections, 3000)}\n` : "";
-  const verificationBlock = runMemory?.verifications ? `\nVerification results (from actually running the app):\n${cap(runMemory.verifications, 3000)}\n` : "";
+  const milestoneBlock = runMemory?.milestones ? `\nMilestone snapshots:\n${cap(runMemory.milestones, 2000)}\n` : "";
+  const designBlock = runMemory?.designs ? `\nArchitectural research:\n${cap(runMemory.designs, 1500)}\n` : "";
+  const reflectionBlock = runMemory?.reflections ? `\nLatest quality reports:\n${cap(runMemory.reflections, 1000)}\n` : "";
+  const verificationBlock = runMemory?.verifications ? `\nVerification results (from actually running the app):\n${cap(runMemory.verifications, 1000)}\n` : "";
   const goalBlock = runMemory?.goal ? `\nNorth star  -- what "amazing" means:\n${runMemory.goal}\n` : "";
-  const prevRunBlock = runMemory?.previousRuns ? `\nKnowledge from previous runs:\n${cap(runMemory.previousRuns, 3000)}\n` : "";
+  const prevRunBlock = runMemory?.previousRuns ? `\nKnowledge from previous runs:\n${cap(runMemory.previousRuns, 800)}\n` : "";
   const guidanceBlock = runMemory?.userGuidance ? `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nUSER DIRECTIVES  -- highest priority\nThese come directly from the user running this session. They override prior assumptions about status, goal, and next steps. Incorporate them into the wave you compose below. If they conflict with earlier decisions, the user wins. Reflect the new direction in statusUpdate so future waves remember.\n\n${cap(runMemory.userGuidance, 4000)}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` : "";
 
-  const prompt = `You are the quality director for an autonomous multi-wave agent system. Your job is to push the work toward "amazing," not just "done."
+  // Collapse archetype menu after wave 3 to save ~2 KB
+  const archetypesShort = `Archetypes: execute | explore | critique | synthesize | verify | user-test | polish | simplify`;
+  const archetypeBlock = history.length >= 3
+    ? archetypesShort
+    : null;
+
+  let recentText = buildRecentText(history, 3);
+
+  let prompt = `You are the quality director for an autonomous multi-wave agent system. Your job is to push the work toward "amazing," not just "done."
 ${guidanceBlock}
 Objective: ${objective}
 ${goalBlock}${statusBlock}${milestoneBlock}${prevRunBlock}
@@ -85,7 +101,7 @@ If verification found issues, those are the priority. Fix what's broken before b
 
 ## Compose the next wave
 
-You have full creative freedom. Design the wave that will have the highest impact right now. Here are archetypes to draw from  -- mix, adapt, or invent your own:
+You have full creative freedom. Design the wave that will have the highest impact right now.${archetypeBlock ? `\n\nUse these archetypes as shorthand — mix, adapt, or invent your own:\n\n${archetypeBlock}` : ` Here are archetypes to draw from  -- mix, adapt, or invent your own:
 
 **Execute**  -- Agents implement concrete changes in parallel. Each touches different files. The bread and butter.
   Example: 5 agents each owning a different feature or fix
@@ -109,52 +125,76 @@ You have full creative freedom. Design the wave that will have the highest impac
   Example: 2 agents, one on happy paths, one on error/edge states
 
 **Simplify**  -- Invoke the 'simplify' skill. It reviews changed code and spawns parallel sub-agents for thorough review.
-  Example: 1 agent per wave with task type "review", let the skill handle the rest
+  Example: 1 agent per wave with task type "review", let the skill handle the rest`}
 
-You can combine these. A wave can have 3 execute agents + 1 verification agent. Or 2 divergent explorers. Whatever the situation calls for.
-
-For non-execute tasks (critique, verify, user-test, synthesize), tell agents to write their output to files in the run directory so findings persist for future waves. Use paths like: .claude-overnight/latest/reflections/wave-N-{topic}.md or .claude-overnight/latest/verifications/wave-N-{topic}.md.
+For non-execute tasks (critique, verify, user-test, synthesize), tell agents to write their output to files in the run directory so findings persist for future waves. Use paths like: .claude-overnight/latest/reflections/wave-n-{topic}.md or .claude-overnight/latest/verifications/wave-n-{topic}.md.
 
 IMPORTANT: You cannot declare "done" unless at least one verification has confirmed the app works. If you're considering done but haven't verified, compose a verification task first.
 
 Respond with ONLY a JSON object (no markdown fences):
-{
-  "done": false,
-  "reasoning": "your assessment and why you chose this wave composition",
-  "goalUpdate": "optional  -- refine what 'amazing' means as you learn more",
-  "statusUpdate": "REQUIRED  -- concise project status: what's built, what works, what's rough, quality level, key gaps. This replaces the previous status.",
-  "estimatedSessionsRemaining": 15,
-  "tasks": [
-    {"prompt": "task instruction...", "model": "worker", "postcondition": "test -f src/new-file.ts"},
-    {"prompt": "quick icon fix, verified by next wave's workers...", "model": "fast"},
-    {"prompt": "verify the app end-to-end...", "model": "worker", "noWorktree": true}
-  ]
-}
+{"done":boolean,"reasoning":"...","statusUpdate":"REQUIRED","estimatedSessionsRemaining":N,"tasks":[{"prompt":"...","model":"worker|fast","noWorktree":true/false,"postcondition":"..."}]}
 
 "estimatedSessionsRemaining" is REQUIRED. Your best honest estimate of how many MORE agent sessions (beyond the wave you just composed above) are needed to reach 'amazing'  -- include follow-up fixes, polish, verification, and anything else you'd want before shipping. Be realistic, not optimistic. Use 0 only if truly done.
 
-The "model" field on each task — you have **two kinds of workers**, both first-class. Pick the right one per task:
+The "model" field on each task — two kinds of workers. Pick the right one:
 
-**Fast worker — "fast" (${fastModel ?? "not set"})** is the default workhorse for well-scoped, mechanical tasks. It's a real worker, same tools, same environment — just a cheaper, faster model. The next wave's workers (fast or main) will catch and fix any issues. Route here by default when any of these apply:
-- Single-file edits, refactors, renames
-- Surgical multi-line changes with a clear spec (add a param, wrap a call, tweak a prompt line)
-- Read/research: scan files, summarize findings
-- Build checks, postcondition verification
-- E2E test runs with concrete steps
-- Simple critiques, polish tweaks
-- Running existing scripts/tests and capturing output
-- Docs / markdown updates
-- Stdlib-only utility scripts with a crisp spec
+**Fast worker — "fast" (${fastModel ?? "not set"})** for well-scoped, mechanical tasks: single-file edits, refactors, renames, read/research, build checks, simple critiques, docs updates.
 
-**Main worker — "worker" (${workerModel})** is for tasks that genuinely need deeper reasoning: multi-file features, complex logic, architectural changes, ambiguous specs, anything where a mis-step costs more than a wave to recover from.
+**Main worker — "worker" (${workerModel})** for tasks that need deeper reasoning: multi-file features, complex logic, architectural changes, ambiguous specs.
 
-When in doubt, pick "fast". Both are workers; the wave loop iterates. Over-using "worker" is a real cost — aim to route the clear majority of well-scoped tasks to the fast worker whenever a fast worker is configured.
+When in doubt, pick "fast".
 
-Set "noWorktree": true for verify/user-test tasks -- they need the real project directory with env files, dependencies, and local config.
+Set "noWorktree": true for verify/user-test tasks.
 
-OPTIONAL "postcondition": a single shell one-liner that exits 0 when the task is truly done. The framework runs it after merge; if it fails, the agent's "no-op" claim is rejected and the task is retried with the failure output as context. Use it whenever the task has a concrete, machine-checkable outcome. Examples: \`test -f src/tracking/watchlist-poller.ts && grep -q "runWatchlistPoll" src/tracking/watchlist-poller.ts\`, \`grep -q "watchlistPollerTask" src/scraper/scheduler.ts\`, \`pnpm run build\`, \`diff -q src/public/index.html frontend/dist/index.html\`. Keep it cheap (sub-second, no network). Omit for exploratory/research tasks where there is no crisp check.
+OPTIONAL "postcondition": a single shell one-liner that exits 0 when the task is truly done. Keep it cheap. Omit for exploratory tasks.
 
-If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSessionsRemaining": 0, "tasks": []}`;
+If done: {"done":true,"reasoning":"...","statusUpdate":"...","estimatedSessionsRemaining":0,"tasks":[]}`;
+
+  // ── Hard 6 KB budget: trim non-critical blocks if over limit ──
+  let trimmed = 0;
+  if (prompt.length > PROMPT_BUDGET) {
+    // 1. Keep last 2 waves instead of 3
+    recentText = buildRecentText(history, 2);
+    prompt = prompt.replace(
+      `Recent waves:\n${buildRecentText(history, 3)}`,
+      `Recent waves:\n${recentText}`
+    );
+    trimmed++;
+  }
+  if (prompt.length > PROMPT_BUDGET && runMemory?.milestones) {
+    const old = `\nMilestone snapshots:\n${cap(runMemory.milestones, 2000)}\n`;
+    const neu = `\nMilestone snapshots:\n${cap(runMemory.milestones, 1000)}\n`;
+    if (old !== neu) { prompt = prompt.replace(old, neu); trimmed++; }
+  }
+  if (prompt.length > PROMPT_BUDGET && runMemory?.designs) {
+    const old = `\nArchitectural research:\n${cap(runMemory.designs, 1500)}\n`;
+    const neu = `\nArchitectural research:\n${cap(runMemory.designs, 1000)}\n`;
+    if (old !== neu) { prompt = prompt.replace(old, neu); trimmed++; }
+  }
+  if (prompt.length > PROMPT_BUDGET && runMemory?.reflections) {
+    const old = `\nLatest quality reports:\n${cap(runMemory.reflections, 1000)}\n`;
+    const neu = `\nLatest quality reports:\n${cap(runMemory.reflections, 500)}\n`;
+    if (old !== neu) { prompt = prompt.replace(old, neu); trimmed++; }
+  }
+  if (prompt.length > PROMPT_BUDGET && runMemory?.verifications) {
+    const old = `\nVerification results (from actually running the app):\n${cap(runMemory.verifications, 1000)}\n`;
+    const neu = `\nVerification results (from actually running the app):\n${cap(runMemory.verifications, 500)}\n`;
+    if (old !== neu) { prompt = prompt.replace(old, neu); trimmed++; }
+  }
+  if (prompt.length > PROMPT_BUDGET && runMemory?.previousRuns) {
+    const old = `\nKnowledge from previous runs:\n${cap(runMemory.previousRuns, 800)}\n`;
+    const neu = `\nKnowledge from previous runs:\n${cap(runMemory.previousRuns, 400)}\n`;
+    if (old !== neu) { prompt = prompt.replace(old, neu); trimmed++; }
+  }
+  if (trimmed > 0) {
+    onLog(`Steering prompt trimmed ${trimmed} blocks (${prompt.length}/${PROMPT_BUDGET} chars)`, "event");
+  }
+
+  // ── Non-Claude planner JSON hardening ──
+  if (!/^claude/i.test(plannerModel)) {
+    const directive = `OUTPUT: single JSON object. No prose. No markdown fences.`;
+    prompt = `${directive}\n\n${prompt}\n\n${directive}`;
+  }
 
   onLog("Assessing...", "status");
   onLog(`Reading codebase  -- wave ${history.length + 1}`, "event");
@@ -166,6 +206,16 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
     const first = attemptJsonParse(resultText);
     if (first) return first;
     onLog(`Steering parse failed (${resultText.length} chars). Asking model to fix...`, "event");
+    // C2: persist raw output on parse failure
+    const steerDir = getTranscriptRunDir() ? join(getTranscriptRunDir()!, "steering") : undefined;
+    if (steerDir) {
+      try { mkdirSync(steerDir, { recursive: true }); } catch {}
+      // Extract wave info from transcriptName (e.g. "steer-wave-32-attempt-1")
+      const waveMatch = transcriptName.match(/wave-(\d+)-attempt-(\d+)/);
+      if (waveMatch) {
+        writeFileSync(join(steerDir, `wave-${waveMatch[1]}-attempt-${waveMatch[2]}-raw.txt`), resultText, "utf-8");
+      }
+    }
     const snippet = resultText.length > 2000 ? resultText.slice(0, 1000) + "\n...\n" + resultText.slice(-800) : resultText;
     const retryText = await runPlannerQuery(
       `Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`,
@@ -174,6 +224,15 @@ If done: {"done": true, "reasoning": "...", "statusUpdate": "...", "estimatedSes
     );
     const retryParsed = attemptJsonParse(retryText);
     if (retryParsed) return retryParsed;
+    // C2: persist retry raw output
+    if (steerDir) {
+      try {
+        const waveMatch2 = transcriptName.match(/wave-(\d+)-attempt-(\d+)/);
+        if (waveMatch2) {
+          writeFileSync(join(steerDir, `wave-${waveMatch2[1]}-attempt-${waveMatch2[2]}-retry-raw.txt`), retryText, "utf-8");
+        }
+      } catch {}
+    }
     throw new Error(`Could not parse steering response after retry (${resultText.length} chars: ${resultText.slice(0, 120)}...)`);
   })();
 

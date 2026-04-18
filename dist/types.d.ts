@@ -156,9 +156,10 @@ export type MergeStrategy = "yolo" | "branch";
 export interface BranchRecord {
     branch: string;
     taskPrompt: string;
-    status: "merged" | "unmerged" | "failed" | "merge-failed";
+    status: "merged" | "unmerged" | "failed" | "merge-failed" | "discarded";
     filesChanged: number;
     costUsd: number;
+    firstFailedWave?: number;
 }
 /** Per-window rate limit snapshot (matches SDK rateLimitType). */
 export interface RateLimitWindow {

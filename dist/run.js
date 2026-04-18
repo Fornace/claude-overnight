@@ -3,8 +3,8 @@ import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
 import { Swarm } from "./swarm.js";
-import { steerWave } from "./steering.js";
-import { getTotalPlannerCost, getPlannerRateLimitInfo, getPeakPlannerContext, runPlannerQuery, setPlannerEnvResolver } from "./planner-query.js";
+import { steerWave, STEER_SCHEMA } from "./steering.js";
+import { getTotalPlannerCost, getPlannerRateLimitInfo, getPeakPlannerContext, runPlannerQuery, setPlannerEnvResolver, attemptJsonParse } from "./planner-query.js";
 import { contextFillInfo } from "./render.js";
 import { getModelCapability } from "./models.js";
 import { buildEnvResolver, isCursorProxyProvider } from "./providers.js";
@@ -55,6 +55,8 @@ export async function executeRun(cfg) {
     let lastCapped = false, lastAborted = false, objectiveComplete = false;
     let lastEstimate;
     const branches = [];
+    let healFailStreak = 0; // consecutive waves where heal-0 agent changed 0 files
+    let zeroFileWaves = 0; // consecutive waves with 0 files across non-heal tasks
     if (cfg.resuming && cfg.resumeState) {
         const rs = cfg.resumeState;
         remaining = Math.max(1, rs.remaining);
@@ -295,8 +297,21 @@ export async function executeRun(cfg) {
     // Shared steering logic used by both resume-steering and in-loop steering
     const runSteering = async () => {
         let steered = false;
+        // ── B1: Skip steering when ≥2 unresolved merge-failed branches exist ──
+        const mergeFailedBranches = branches.filter(b => b.status === "merge-failed");
+        if (mergeFailedBranches.length >= 2) {
+            currentTasks = mergeFailedBranches.map((b, i) => ({
+                id: `branch-retry-${i}`,
+                prompt: `Your previous attempt at this task merge-failed against main. Redo it against the current state of main with minimal, focused edits. Original task:\n\n${b.taskPrompt}`,
+                model: workerModel,
+                postcondition: "pnpm run build",
+            }));
+            display.appendSteeringEvent(`Skipping steering — ${mergeFailedBranches.length} merge-failed branches form the wave`);
+            return true;
+        }
         let steerAttempts = 0;
-        while (!steered && remaining > 0 && !stopping && steerAttempts < 3) {
+        const MAX_STEER_ATTEMPTS = 2; // B2: retry threshold 3 → 2
+        while (!steered && remaining > 0 && !stopping && steerAttempts < MAX_STEER_ATTEMPTS) {
             steerAttempts++;
             const plannerCostBefore = getTotalPlannerCost();
             try {
@@ -350,23 +365,52 @@ export async function executeRun(cfg) {
             }
             catch (err) {
                 accCost += getTotalPlannerCost() - plannerCostBefore;
-                if (steerAttempts < 3) {
-                    display.appendSteeringEvent(`Steering failed (attempt ${steerAttempts}/3)  -- retrying...`);
+                const rawPreview = err?.message?.slice(0, 200) || "(no details)";
+                if (steerAttempts < MAX_STEER_ATTEMPTS) {
+                    display.appendSteeringEvent(`Steering failed (attempt ${steerAttempts}/${MAX_STEER_ATTEMPTS})  -- retrying... ${rawPreview}`);
                     continue;
                 }
-                display.appendSteeringEvent(`Steering failed ${steerAttempts}×  -- falling back`);
-                let fallbackStatus = "";
+                // ── B3: Decomposer fallback (replaces single-giant-fallback) ──
+                display.appendSteeringEvent(`Steering failed ${MAX_STEER_ATTEMPTS}×  — decomposer fallback`);
+                // First: try merge-failed recycling even if only 1 unresolved branch exists
+                const stillFailed = branches.filter(b => b.status === "merge-failed");
+                if (stillFailed.length >= 1) {
+                    currentTasks = stillFailed.map((b, i) => ({
+                        id: `branch-retry-${i}`,
+                        prompt: `Your previous attempt at this task merge-failed against main. Redo it against the current state of main with minimal, focused edits. Original task:\n\n${b.taskPrompt}`,
+                        model: workerModel,
+                        postcondition: "pnpm run build",
+                    }));
+                    display.appendSteeringEvent(`Decomposer: ${stillFailed.length} merge-failed branch(es) retried as swarm tasks`);
+                    steered = true;
+                    break;
+                }
+                // Second: minimal-prompt planner query
+                display.appendSteeringEvent("Decomposer: minimal planner query…");
                 try {
-                    fallbackStatus = readFileSync(join(runDir, "status.md"), "utf-8");
+                    let statusText = "";
+                    try {
+                        statusText = readFileSync(join(runDir, "status.md"), "utf-8");
+                    }
+                    catch { }
+                    const minimalPrompt = `${objective ? `Objective: ${objective}` : ""}\n\nStatus:\n${statusText || "(none)"}\n\nReturn tasks: string[] — 3-6 specific follow-ups. JSON only. {"tasks":[{"prompt":"..."}]}`;
+                    const minimalText = await runPlannerQuery(minimalPrompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName: "decomposer-minimal", maxTurns: 40 }, () => { });
+                    const parsed = attemptJsonParse(minimalText);
+                    if (parsed?.tasks?.length > 0) {
+                        currentTasks = parsed.tasks.map((t, i) => ({
+                            id: `decompose-${i}`,
+                            prompt: typeof t === "string" ? t : t.prompt,
+                            model: workerModel,
+                        }));
+                        display.appendSteeringEvent(`Decomposer: ${currentTasks.length} tasks from minimal planner`);
+                        steered = true;
+                        break;
+                    }
                 }
                 catch { }
-                currentTasks = [{
-                        id: "fallback-0",
-                        prompt: `Steering couldn't decide the next step. Read the project, assess what's done vs. remaining, and do the most impactful work.\n\nObjective: ${objective}${fallbackStatus ? `\n\nStatus:\n${fallbackStatus}` : ""}`,
-                        type: "execute",
-                    }];
-                steered = true;
-                break;
+                // Finally: halt
+                display.appendSteeringEvent(`Decomposer: no tasks produced — halting`);
+                return false;
             }
         }
         return steered;
@@ -389,12 +433,26 @@ export async function executeRun(cfg) {
             // Health check before each wave: a broken build poisons every subsequent
             // agent context, so prepend a heal task when detected. Steering-planned
             // tasks still run, just after the build is green again.
+            // Skip if prior heal changed 0 files (heal unable to fix).
             {
-                const healTask = checkProjectHealth(cwd);
-                if (healTask && remaining > 0) {
-                    const withoutDup = currentTasks.filter(t => t.id !== "heal-0");
-                    currentTasks = [healTask, ...withoutDup];
-                    display.appendSteeringEvent(`Health check: build broken — queued heal task`);
+                const healTasks = healFailStreak > 0 ? [] : checkProjectHealth(cwd);
+                if (healTasks.length > 0 && remaining > 0) {
+                    const healIds = healTasks.map(t => t.id);
+                    const withoutDup = currentTasks.filter(t => !healIds.includes(t.id));
+                    currentTasks = [...healTasks, ...withoutDup];
+                    display.appendSteeringEvent(`Health check: build broken — queued ${healTasks.length} heal task(s)`);
+                }
+                else if (healTasks.length === 0 && healFailStreak > 0 && checkProjectHealth(cwd).length > 0) {
+                    display.appendSteeringEvent(`Health check: build broken — heal skipped after ${healFailStreak} failed attempts, needs manual intervention`);
+                    try {
+                        const statusPath2 = join(runDir, "status.md");
+                        const existing2 = existsSync(statusPath2) ? readFileSync(statusPath2, "utf-8") : "";
+                        const marker = "## Heal blocked";
+                        if (!existing2.includes(marker)) {
+                            writeFileSync(statusPath2, `${existing2}${existing2 ? "\n\n" : ""}${marker}\nBuild has been broken for ${healFailStreak} waves, heal agents unable to fix — intervene manually.\n`, "utf-8");
+                        }
+                    }
+                    catch { }
                 }
             }
             if (currentTasks.length > remaining)
@@ -598,7 +656,7 @@ export async function executeRun(cfg) {
             liveConfig.remaining = remaining;
             lastCapped = swarm.cappedOut;
             lastAborted = swarm.aborted;
-            recordBranches(swarm.agents, swarm.mergeResults, branches);
+            recordBranches(swarm.agents, swarm.mergeResults, branches, waveNum);
             saveWaveSession(runDir, waveNum, swarm.agents, swarm.totalCostUsd);
             // Tasks that never made it into the swarm (queue cleared on abort/cap)
             // are preserved as currentTasks so resume picks them up. Budget for these
@@ -623,6 +681,34 @@ export async function executeRun(cfg) {
                     };
                 }),
             });
+            // Track heal fail streak: if a heal-0 task existed this wave and changed 0 files, increment.
+            // If any non-heal execute task changed files, reset.
+            const lastWave = waveHistory[waveHistory.length - 1];
+            const healTask = lastWave?.tasks.find(t => t.type === "heal");
+            if (healTask && !healTask.filesChanged) {
+                healFailStreak++;
+            }
+            else if (lastWave?.tasks.some(t => (t.type !== "heal") && (t.filesChanged ?? 0) > 0)) {
+                healFailStreak = 0;
+            }
+            // C1: Circuit breaker — halt after 2 consecutive waves with 0 files across non-heal tasks
+            const nonHealFiles = lastWave?.tasks.filter(t => t.type !== "heal").reduce((sum, t) => sum + (t.filesChanged ?? 0), 0) ?? 0;
+            if (nonHealFiles === 0 && waveNum > 0) {
+                zeroFileWaves++;
+                if (zeroFileWaves >= 2) {
+                    display.appendSteeringEvent(`Circuit breaker: 2 consecutive waves produced no merged changes — halting to prevent budget drain`);
+                    display.stop();
+                    saveRunState(runDir, buildRunState({ remaining, phase: "stopped", currentTasks: [] }));
+                    display.stop();
+                    restore();
+                    console.log(chalk.red(`\n  Circuit breaker: 2 consecutive waves produced no merged changes.`));
+                    console.log(chalk.red(`  Halting to prevent budget drain. Run preserved at ${runDir}.`));
+                    process.exit(3);
+                }
+            }
+            else {
+                zeroFileWaves = 0;
+            }
             // Hook-blocked work: agents that touched files but nothing landed on the
             // branch (pre-commit hooks, gitignore, writes outside worktree). Surface
             // as a wave-level warning so steering sees it, not just a per-agent log.
@@ -670,6 +756,20 @@ export async function executeRun(cfg) {
                 }
                 if (next !== existing)
                     writeFileSync(statusPath, next, "utf-8");
+                // GC ghost branches: delete merge-failed branches ≥2 waves old and mark discarded.
+                // Safe: their work never landed. The decomposer (Phase B) will re-attempt from saved taskPrompt.
+                const gcCandidates = branches.filter(b => b.status === "merge-failed" && b.firstFailedWave !== undefined && (waveNum - b.firstFailedWave) >= 2);
+                let gcCount = 0;
+                for (const b of gcCandidates) {
+                    try {
+                        execSync(`git branch -D "${b.branch}"`, { cwd, stdio: "ignore" });
+                    }
+                    catch { }
+                    b.status = "discarded";
+                    gcCount++;
+                }
+                if (gcCount > 0)
+                    display.appendSteeringEvent(`GC: discarded ${gcCount} ghost branch(es) ≥2 waves old`);
             }
             catch { }
             // Fire-and-forget debrief after each wave.
@@ -1039,24 +1139,45 @@ async function promptBudgetExtension(ctx) {
         return suggested;
     return n;
 }
+/** Detect build errors and return one or more heal tasks. If errors span ≥2 files,
+ *  emit one task per file so they heal in parallel without merge conflicts. */
 function checkProjectHealth(cwd) {
     const cmd = detectHealthCommand(cwd);
     if (!cmd)
-        return undefined;
+        return [];
     try {
         execSync(cmd, { cwd, encoding: "utf-8", stdio: "pipe", timeout: 60_000 });
-        return undefined;
+        return [];
     }
     catch (err) {
         if (err.killed)
-            return undefined;
+            return [];
         const output = ((err.stdout || "") + "\n" + (err.stderr || "")).trim();
         const trimmed = output.length > 4000 ? output.slice(0, 2000) + "\n…\n" + output.slice(-2000) : output;
-        return {
-            id: "heal-0",
-            prompt: `Fix the broken build. \`${cmd}\` fails after merging parallel work:\n\`\`\`\n${trimmed}\n\`\`\`\nFix every error. Run \`${cmd}\` when done to verify.`,
-            type: "heal",
-        };
+        // B4: Split heal by file — extract distinct source file paths from errors
+        const fileRe = /\/src\/[\w./-]+\.(ts|tsx|js|jsx)/g;
+        const files = new Set();
+        for (const m of trimmed.matchAll(fileRe))
+            files.add(m[0]);
+        if (files.size >= 2) {
+            // One task per file — each agent gets only that file's error context
+            const fileErrors = new Map();
+            for (const f of files) {
+                // Extract lines mentioning this file
+                const lines = trimmed.split("\n").filter(l => l.includes(f));
+                fileErrors.set(f, lines.slice(0, 30).join("\n"));
+            }
+            return Array.from(fileErrors.entries()).map(([file, errs], i) => ({
+                id: `heal-${i}`,
+                prompt: `Fix the broken build errors in \`${file}\`. \`${cmd}\` fails:\n\`\`\`\n${errs}\n\`\`\`\nFix every error in this file. Run \`${cmd}\` when done to verify.`,
+                type: "heal",
+            }));
+        }
+        return [{
+                id: "heal-0",
+                prompt: `Fix the broken build. \`${cmd}\` fails after merging parallel work:\n\`\`\`\n${trimmed}\n\`\`\`\nFix every error. Run \`${cmd}\` when done to verify.`,
+                type: "heal",
+            }];
     }
 }
 function detectHealthCommand(cwd) {

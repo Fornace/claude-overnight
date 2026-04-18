@@ -211,6 +211,11 @@ export function envFor(p: ProviderConfig): Record<string, string> {
   }
 
   delete base.ANTHROPIC_API_KEY;
+  // Prevent CURSOR_API_KEY from leaking into non-proxy envs — would cause
+  // isCursorProxyEnv false-positive, silently rerouting through direct fetch
+  // which ignores outputFormat (no JSON schema enforcement).
+  delete base.CURSOR_API_KEY;
+  delete base.CURSOR_AUTH_TOKEN;
   return base;
 }
 

@@ -461,7 +461,7 @@ export function loadWaveHistory(runDir) {
     }
 }
 // ── Branch management ──
-export function recordBranches(agents, mergeResults, branches) {
+export function recordBranches(agents, mergeResults, branches, currentWave) {
     for (const a of agents) {
         if (a.branch) {
             branches.push({
@@ -475,8 +475,12 @@ export function recordBranches(agents, mergeResults, branches) {
     }
     for (const mr of mergeResults) {
         const br = branches.find(b => b.branch === mr.branch);
-        if (br)
+        if (br) {
             br.status = mr.ok ? "merged" : "merge-failed";
+            if (!mr.ok && !br.firstFailedWave && currentWave !== undefined) {
+                br.firstFailedWave = currentWave;
+            }
+        }
     }
 }
 export function autoMergeBranches(cwd, branches, onLog) {
