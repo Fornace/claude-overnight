@@ -11,6 +11,15 @@
 import { RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "../core/types.js";
 import { getModelCapability } from "../core/models.js";
 import { updateTurn } from "../core/turns.js";
+/** Default: no assistant content for this long means the SDK stream is stuck. */
+export const NO_CONTENT_TIMEOUT_MS = 15_000;
+/** @returns false if no stream content has arrived within {@link timeoutMs} of {@link lastContentTimestamp}. */
+export function checkStreamHealth(lastContentTimestamp, timeoutMs) {
+    return Date.now() - lastContentTimestamp <= timeoutMs;
+}
+function markStreamContent(agent) {
+    agent.lastContentTimestamp = Date.now();
+}
 /** Log a tool invocation with a short target extracted from its input. */
 export function logToolUse(host, agent, name, input) {
     const target = extractToolTarget(input);
@@ -49,6 +58,10 @@ export function handleMsg(host, agent, msg) {
             if (!m.message?.content)
                 break;
             for (const block of m.message.content) {
+                const bt = block.type;
+                if (bt === "text" || bt === "tool_use" || bt === "thinking" || bt === "redacted_thinking") {
+                    markStreamContent(agent);
+                }
                 if (block.type === "text" && block.text) {
                     const line = block.text.trim().split("\n")[0]?.slice(0, 80);
                     if (line)
@@ -63,6 +76,7 @@ export function handleMsg(host, agent, msg) {
             if (ev.type === "content_block_start") {
                 const cb = ev.content_block;
                 if (cb?.type === "tool_use") {
+                    markStreamContent(agent);
                     agent.currentTool = cb.name;
                     agent.toolCalls++;
                     const input = (cb.input ?? {});
@@ -72,13 +86,18 @@ export function handleMsg(host, agent, msg) {
                         logToolUse(host, agent, cb.name, input);
                 }
                 else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
+                    markStreamContent(agent);
                     agent.lastText = "thinking…";
+                }
+                else if (cb?.type === "text") {
+                    markStreamContent(agent);
                 }
             }
             else if (ev.type === "content_block_delta") {
                 const delta = ev.delta;
                 const pending = host.pendingTools.get(agent);
                 if (delta?.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
+                    markStreamContent(agent);
                     pending.buf += delta.partial_json;
                     break;
                 }
@@ -87,6 +106,7 @@ export function handleMsg(host, agent, msg) {
                     : delta?.type === "thinking_delta" ? delta.thinking
                         : undefined;
                 if (typeof raw === "string") {
+                    markStreamContent(agent);
                     const t = raw.trim();
                     if (t)
                         agent.lastText = t.slice(-80);

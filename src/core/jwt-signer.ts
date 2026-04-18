@@ -92,31 +92,32 @@ export function verifyTokenWithResult(
 ): VerifyResult {
   const { providerId, model, baseURL } = options;
 
-  // Unsafely decode the token to extract the `sub` claim so we can derive
-  // the correct signing key. This does NOT verify the signature yet.
-  const raw = jwt.decode(token);
-  if (!raw || typeof raw !== "object") {
+  const header = jwt.decode(token, { complete: true });
+  if (!header || typeof header === "string") {
     return { valid: false, reason: "invalid_signature" };
   }
-  const sub = (raw as Record<string, unknown>).sub;
-  if (typeof sub !== "string" || !sub) {
+  const loose = header.payload as Partial<JWTPayload>;
+  const subForKey = loose.sub;
+  if (!subForKey || typeof subForKey !== "string") {
     return { valid: false, reason: "invalid_signature" };
   }
 
-  const key = deriveKey(sub);
+  let key: ReturnType<typeof deriveKey>;
+  try {
+    key = deriveKey(subForKey);
+  } catch {
+    return { valid: false, reason: "invalid_signature" };
+  }
 
   try {
     const decoded = jwt.verify(token, key, {
       algorithms: ["HS256"],
-      // Let jwt.verify check expiration for us
     }) as JWTPayload;
 
-    // Reject tokens from older versions
     if (decoded.ver !== TOKEN_VERSION) {
       return { valid: false, reason: "wrong_version" };
     }
 
-    // Validate claims if expected values are provided
     if (providerId && decoded.sub !== providerId) {
       return { valid: false, reason: "claim_mismatch" };
     }

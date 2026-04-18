@@ -18,6 +18,18 @@ import { RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "../c
 import { getModelCapability } from "../core/models.js";
 import { updateTurn } from "../core/turns.js";
 
+/** Default: no assistant content for this long means the SDK stream is stuck. */
+export const NO_CONTENT_TIMEOUT_MS = 15_000;
+
+/** @returns false if no stream content has arrived within {@link timeoutMs} of {@link lastContentTimestamp}. */
+export function checkStreamHealth(lastContentTimestamp: number, timeoutMs: number): boolean {
+  return Date.now() - lastContentTimestamp <= timeoutMs;
+}
+
+function markStreamContent(agent: AgentState): void {
+  agent.lastContentTimestamp = Date.now();
+}
+
 /** Per-agent pending tool_use block while we wait for the delta stream to
  *  finish materializing the real `input`. */
 export interface PendingTool {
@@ -87,6 +99,10 @@ export function handleMsg(host: MessageHandlerHost, agent: AgentState, msg: SDKM
       }
       if (!m.message?.content) break;
       for (const block of m.message.content) {
+        const bt = (block as { type?: string }).type;
+        if (bt === "text" || bt === "tool_use" || bt === "thinking" || bt === "redacted_thinking") {
+          markStreamContent(agent);
+        }
         if (block.type === "text" && block.text) {
           const line = block.text.trim().split("\n")[0]?.slice(0, 80);
           if (line) agent.lastText = line;
@@ -100,18 +116,23 @@ export function handleMsg(host: MessageHandlerHost, agent: AgentState, msg: SDKM
       if (ev.type === "content_block_start") {
         const cb = (ev as any).content_block;
         if (cb?.type === "tool_use") {
+          markStreamContent(agent);
           agent.currentTool = cb.name; agent.toolCalls++;
           const input = (cb.input ?? {}) as Record<string, unknown>;
           const hasInput = Object.keys(input).length > 0;
           host.pendingTools.set(agent, { name: cb.name, input, buf: "", logged: hasInput });
           if (hasInput) logToolUse(host, agent, cb.name, input);
         } else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
+          markStreamContent(agent);
           agent.lastText = "thinking…";
+        } else if (cb?.type === "text") {
+          markStreamContent(agent);
         }
       } else if (ev.type === "content_block_delta") {
         const delta = (ev as any).delta;
         const pending = host.pendingTools.get(agent);
         if (delta?.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
+          markStreamContent(agent);
           pending.buf += delta.partial_json;
           break;
         }
@@ -120,6 +141,7 @@ export function handleMsg(host: MessageHandlerHost, agent: AgentState, msg: SDKM
           : delta?.type === "thinking_delta" ? delta.thinking
           : undefined;
         if (typeof raw === "string") {
+          markStreamContent(agent);
           const t = raw.trim();
           if (t) agent.lastText = t.slice(-80);
         }

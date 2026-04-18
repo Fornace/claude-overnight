@@ -7,6 +7,20 @@ export class AgentTimeoutError extends Error {
         this.name = "AgentTimeoutError";
     }
 }
+/** Thrown when the SDK query stream stops emitting assistant content for too long while still open. */
+export class StreamStalledError extends Error {
+    elapsed;
+    timeoutMs;
+    constructor(elapsed, timeoutMs) {
+        super(`Stream stalled: no content for ${timeoutMs}ms (last gap ${Math.round(elapsed)}ms)`);
+        this.elapsed = elapsed;
+        this.timeoutMs = timeoutMs;
+        this.name = "StreamStalledError";
+    }
+}
+export function isStreamStalledError(err) {
+    return err instanceof StreamStalledError;
+}
 export function isRateLimitError(err) {
     const status = err?.status ?? err?.statusCode;
     if (status === 429)
@@ -20,7 +34,7 @@ export function isRateLimitError(err) {
     return false;
 }
 export function isTransientError(err) {
-    if (err instanceof AgentTimeoutError)
+    if (err instanceof AgentTimeoutError || err instanceof StreamStalledError)
         return false;
     const msg = String(err?.message || err).toLowerCase();
     const status = err?.status ?? err?.statusCode;

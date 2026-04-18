@@ -21,7 +21,7 @@ export function getCachedToken(providerId) {
     const entry = tokenCache.get(providerId);
     if (!entry)
         return null;
-    if (isRevoked(entry.sessionId)) {
+    if (isSessionRevoked(entry.sessionId)) {
         tokenCache.delete(providerId);
         return null;
     }
@@ -51,7 +51,7 @@ export function tryRefreshCachedToken(providerId, refresher) {
     const entry = tokenCache.get(providerId);
     if (!entry)
         return null;
-    if (isRevoked(entry.sessionId)) {
+    if (isSessionRevoked(entry.sessionId)) {
         tokenCache.delete(providerId);
         return null;
     }
@@ -100,7 +100,7 @@ export function getRevocationCount() {
     return revokedSessions.size;
 }
 /** Check if a session ID has been revoked, pruning expired entries first. */
-function isRevoked(sessionId) {
+export function isSessionRevoked(sessionId) {
     pruneRevocations();
     return revokedSessions.has(sessionId);
 }
