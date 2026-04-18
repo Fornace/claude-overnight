@@ -1011,6 +1011,11 @@ async function startProxyProcess(baseUrl, url, port) {
         // cursor-composer chat-only mode fakes HOME to a temp dir; on macOS the agent still waits on
         // Keychain (~30s) for `cursor-user` despite CURSOR_API_KEY. Use the real workspace profile.
         CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: "false",
+        // Broad base so per-request `X-Cursor-Workspace` headers (set from each
+        // agent's cwd in swarm.ts) validate under the proxy's `resolveWorkspace`
+        // check. Without this, proxied agents in worktrees all resolve to the
+        // proxy's startup cwd.
+        CURSOR_BRIDGE_WORKSPACE: "/",
     };
     if (sysNode && agentJs) {
         proxyEnv.CURSOR_AGENT_NODE = sysNode;

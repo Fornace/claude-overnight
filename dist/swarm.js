@@ -6,6 +6,27 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError, RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "./types.js";
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "./providers.js";
+/**
+ * Proxied Cursor models ignore SDK `cwd` and use their own workspace
+ * resolution. Inject `X-Cursor-Workspace` via ANTHROPIC_CUSTOM_HEADERS so the
+ * proxy's per-request workspace override points at this agent's cwd.
+ * Requires the proxy to run with `CURSOR_BRIDGE_WORKSPACE=/` (or a parent of
+ * all worktree paths) so the header value passes the safety check.
+ */
+function withCursorWorkspaceHeader(env, cwd) {
+    if (!env)
+        return undefined;
+    if (env.ANTHROPIC_BASE_URL !== PROXY_DEFAULT_URL)
+        return env;
+    const hdr = `X-Cursor-Workspace: ${cwd}`;
+    const existing = env.ANTHROPIC_CUSTOM_HEADERS?.trim();
+    return {
+        ...env,
+        ANTHROPIC_CUSTOM_HEADERS: existing
+            ? `${existing}\n${hdr}`
+            : hdr,
+    };
+}
 import { getModelCapability } from "./models.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "./turns.js";
 const SIMPLIFY_PROMPT = `You just finished your task. Now review and simplify your changes.
@@ -561,7 +582,7 @@ export class Swarm {
                             ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}${postBlock}`
                             : `${preamble}${task.prompt}${postBlock}`;
                     const effectiveModel = task.model || this.config.model;
-                    const envOverride = this.config.envForModel?.(effectiveModel);
+                    const envOverride = withCursorWorkspaceHeader(this.config.envForModel?.(effectiveModel), agentCwd);
                     const agentQuery = query({
                         prompt: agentPrompt,
                         options: {
@@ -786,7 +807,9 @@ Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
                         allowDangerouslySkipPermissions: true,
                         maxTurns: 1,
                         persistSession: false,
-                        ...(envFor?.(evalModel) && { env: envFor(evalModel) }),
+                        ...(envFor?.(evalModel) && {
+                            env: withCursorWorkspaceHeader(envFor(evalModel), this.config.cwd),
+                        }),
                     },
                 });
                 this.activeQueries.add(eq);

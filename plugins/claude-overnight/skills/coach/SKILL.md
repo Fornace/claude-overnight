@@ -95,17 +95,18 @@ Rows: scope. Each cell is a starting point — adjust by one step when repo fact
 
 | scope                    | tight ≤ 10                                   | standard 11–25                                | wide 26–60                                    | saturated > 60                                  |
 | ------------------------ | -------------------------------------------- | --------------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
-| bugfix                   | conc=2, flex=false, fast=null, cap=0.75      | conc=3, flex=true, fast=null, cap=0.75        | conc=4, flex=true, fast=Haiku, cap=0.9        | conc=5, flex=true, fast=Haiku, cap=null         |
-| feature-add              | conc=2, flex=true, fast=null, cap=0.75       | conc=4, flex=true, fast=null, cap=0.75        | conc=6, flex=true, fast=Haiku, cap=0.9        | conc=8, flex=true, fast=Haiku, cap=null         |
-| refactor                 | conc=2, flex=false, fast=null, cap=0.75      | conc=4, flex=false, fast=null, cap=0.75       | conc=6, flex=true, fast=null, cap=0.9         | conc=8, flex=true, fast=Haiku, cap=null         |
-| audit-and-fix            | conc=3, flex=true, fast=Haiku, cap=0.75      | conc=5, flex=true, fast=Haiku, cap=0.9        | conc=8, flex=true, fast=Haiku, cap=0.9        | conc=10, flex=true, fast=Haiku, cap=null        |
-| migration                | conc=2, flex=true, fast=null, cap=0.75       | conc=4, flex=true, fast=null, cap=0.9         | conc=6, flex=true, fast=null, cap=0.9         | conc=8, flex=true, fast=null, cap=null          |
-| research-and-implement   | conc=2, flex=true, fast=null, cap=0.75       | conc=3, flex=true, fast=null, cap=0.75        | conc=4, flex=true, fast=null, cap=0.9         | conc=5, flex=true, fast=Haiku, cap=null         |
-| polish-and-verify        | conc=3, flex=false, fast=Haiku, cap=0.75     | conc=5, flex=false, fast=Haiku, cap=0.75      | conc=8, flex=true, fast=Haiku, cap=0.9        | conc=10, flex=true, fast=Haiku, cap=null        |
+| bugfix                   | conc=2, flex=false, fast=null, cap=0.75      | conc=3, flex=true, fast=null, cap=0.75        | conc=4, flex=true, fast=true, cap=0.9          | conc=5, flex=true, fast=true, cap=null          |
+| feature-add              | conc=2, flex=true, fast=null, cap=0.75       | conc=4, flex=true, fast=null, cap=0.75        | conc=6, flex=true, fast=true, cap=0.9          | conc=8, flex=true, fast=true, cap=null          |
+| refactor                 | conc=2, flex=false, fast=null, cap=0.75      | conc=4, flex=false, fast=null, cap=0.75       | conc=6, flex=true, fast=null, cap=0.9          | conc=8, flex=true, fast=true, cap=null          |
+| audit-and-fix            | conc=3, flex=true, fast=true, cap=0.75       | conc=5, flex=true, fast=true, cap=0.9         | conc=8, flex=true, fast=true, cap=0.9          | conc=10, flex=true, fast=true, cap=null         |
+| migration                | conc=2, flex=true, fast=null, cap=0.75       | conc=4, flex=true, fast=null, cap=0.9         | conc=6, flex=true, fast=null, cap=0.9          | conc=8, flex=true, fast=null, cap=null          |
+| research-and-implement   | conc=2, flex=true, fast=null, cap=0.75       | conc=3, flex=true, fast=null, cap=0.75        | conc=4, flex=true, fast=null, cap=0.9          | conc=5, flex=true, fast=true, cap=null          |
+| polish-and-verify        | conc=3, flex=false, fast=true, cap=0.75      | conc=5, flex=false, fast=true, cap=0.75       | conc=8, flex=true, fast=true, cap=0.9          | conc=10, flex=true, fast=true, cap=null         |
 
 `conc` ⇒ `recommended.concurrency` (clamp to ≤ budget).
 `flex` ⇒ `recommended.flex`.
-`fast=Haiku` ⇒ recommend a Haiku-class fast model **only if** Anthropic direct is available or a saved provider exposes one (e.g. `claude-haiku-4-5`); otherwise `null`.
+`fast=true` ⇒ recommend a fast model **if the user has one configured and reachable** from their available providers. Pick whatever the cheapest fast model is among their providers (e.g. `claude-haiku-4-5`, `composer-2-fast`, `qwen3` variants). If no fast model is reachable, set `null`.
+`fast=null` ⇒ do not recommend a fast model (scope too complex or no suitable fast model available).
 `cap=null` ⇒ unlimited (`recommended.usageCap = null`).
 
 ## Planner / worker model selection
@@ -117,14 +118,14 @@ Decision order (stop at the first row whose providers are present):
 1. **Anthropic direct available**
    - planner: `claude-opus-4-7` (or its `-thinking-high` variant when scope is `audit-and-fix` / `research-and-implement` / `migration`).
    - worker: `claude-sonnet-4-6` for normal work; `claude-opus-4-7` for `wide`/`saturated` migrations or research.
-   - fastModel: `claude-haiku-4-5` when the matrix says `fast=Haiku`.
+   - fastModel: recommend the cheapest fast model available among the user's reachable providers when the matrix says `fast=true`.
 2. **Custom Anthropic-compatible provider with a strong model** (e.g. `qwen3.6-plus`, `qwen3-coder-plus`)
    - planner: the strongest such model the user has.
    - worker: same model, or a cheaper sibling if the user has one.
 3. **Cursor proxy is the only reachable provider**
    - planner: `claude-opus-4-7` via Cursor (only if the proxy exposes it).
    - worker: `claude-sonnet-4-6` via Cursor, or `composer-2` for the cheapest path.
-   - fastModel: `composer-2-fast` when the matrix says `fast=Haiku`.
+   - fastModel: recommend a Cursor fast model (e.g. `composer-2-fast`) when the matrix says `fast=true`.
 4. **No reachable provider** — leave `plannerModel` and `workerModel` as `claude-sonnet-4-6` and emit a `blocking` checklist item titled "No reachable provider".
 
 Never recommend Cursor models when the input does not list a `cursor proxy` provider, and never recommend stock Anthropic IDs when the input does not say "Anthropic direct: available". `fastModel` MUST be `null` rather than guessed.

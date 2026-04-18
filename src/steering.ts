@@ -108,6 +108,9 @@ You have full creative freedom. Design the wave that will have the highest impac
 **Polish**  -- Agents focus purely on feel: loading states, error messages, micro-interactions, empty states, responsiveness. Not features  -- the texture that makes users trust the product.
   Example: 2 agents, one on happy paths, one on error/edge states
 
+**Simplify**  -- A fast model agent reviews recent changes and cleans them up. Set "model": "fast".
+  Example: 1 fast agent reviews files changed in the last wave, runs git diff, removes bloat
+
 You can combine these. A wave can have 3 execute agents + 1 verification agent. Or 2 divergent explorers. Whatever the situation calls for.
 
 For non-execute tasks (critique, verify, user-test, synthesize), tell agents to write their output to files in the run directory so findings persist for future waves. Use paths like: .claude-overnight/latest/reflections/wave-N-{topic}.md or .claude-overnight/latest/verifications/wave-N-{topic}.md.
@@ -130,8 +133,18 @@ Respond with ONLY a JSON object (no markdown fences):
 
 "estimatedSessionsRemaining" is REQUIRED. Your best honest estimate of how many MORE agent sessions (beyond the wave you just composed above) are needed to reach 'amazing'  -- include follow-up fixes, polish, verification, and anything else you'd want before shipping. Be realistic, not optimistic. Use 0 only if truly done.
 
-The "model" field on each task: use "worker" (${workerModel}) for all tasks. Use "fast" (${fastModel ?? "not set"}) for small, single-file changes that will be checked by the worker in the next wave.
-Set "noWorktree": true for verify/user-test tasks  -- they need the real project directory with env files, dependencies, and local config.
+The "model" field on each task — pick based on the task's scope and risk:
+
+**Use "fast" (${fastModel ?? "not set"})** for well-scoped, mechanical tasks where speed matters more than deep reasoning. The next wave's worker pass will catch and fix any issues:
+- Single-file edits, refactors, renames
+- Read/research: scan files, summarize findings
+- Build checks, postcondition verification
+- E2E test runs with concrete steps
+- Simple critiques, polish tweaks
+
+**Use "worker" (${workerModel})** for multi-file features, complex logic, architectural changes, and any task where model quality matters.
+
+Set "noWorktree": true for verify/user-test tasks -- they need the real project directory with env files, dependencies, and local config.
 
 OPTIONAL "postcondition": a single shell one-liner that exits 0 when the task is truly done. The framework runs it after merge; if it fails, the agent's "no-op" claim is rejected and the task is retried with the failure output as context. Use it whenever the task has a concrete, machine-checkable outcome. Examples: \`test -f src/tracking/watchlist-poller.ts && grep -q "runWatchlistPoll" src/tracking/watchlist-poller.ts\`, \`grep -q "watchlistPollerTask" src/scraper/scheduler.ts\`, \`pnpm run build\`, \`diff -q src/public/index.html frontend/dist/index.html\`. Keep it cheap (sub-second, no network). Omit for exploratory/research tasks where there is no crisp check.
 

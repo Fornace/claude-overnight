@@ -12,6 +12,29 @@ import type { Task, AgentState, SwarmPhase, MergeStrategy, RateLimitWindow, AITu
 import { gitExec, autoCommit, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult, ErroredBranchEvaluator } from "./merge.js";
 import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "./providers.js";
+
+/**
+ * Proxied Cursor models ignore SDK `cwd` and use their own workspace
+ * resolution. Inject `X-Cursor-Workspace` via ANTHROPIC_CUSTOM_HEADERS so the
+ * proxy's per-request workspace override points at this agent's cwd.
+ * Requires the proxy to run with `CURSOR_BRIDGE_WORKSPACE=/` (or a parent of
+ * all worktree paths) so the header value passes the safety check.
+ */
+function withCursorWorkspaceHeader(
+  env: Record<string, string> | undefined,
+  cwd: string,
+): Record<string, string> | undefined {
+  if (!env) return undefined;
+  if (env.ANTHROPIC_BASE_URL !== PROXY_DEFAULT_URL) return env;
+  const hdr = `X-Cursor-Workspace: ${cwd}`;
+  const existing = env.ANTHROPIC_CUSTOM_HEADERS?.trim();
+  return {
+    ...env,
+    ANTHROPIC_CUSTOM_HEADERS: existing
+      ? `${existing}\n${hdr}`
+      : hdr,
+  };
+}
 import { getModelCapability } from "./models.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "./turns.js";
 
@@ -571,7 +594,10 @@ export class Swarm {
               : `${preamble}${task.prompt}${postBlock}`;
 
           const effectiveModel = task.model || this.config.model;
-          const envOverride = this.config.envForModel?.(effectiveModel);
+          const envOverride = withCursorWorkspaceHeader(
+            this.config.envForModel?.(effectiveModel),
+            agentCwd,
+          );
           const agentQuery = query({
             prompt: agentPrompt,
             options: {
@@ -765,7 +791,9 @@ Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
             allowDangerouslySkipPermissions: true,
             maxTurns: 1,
             persistSession: false,
-            ...(envFor?.(evalModel) && { env: envFor!(evalModel) }),
+            ...(envFor?.(evalModel) && {
+              env: withCursorWorkspaceHeader(envFor!(evalModel), this.config.cwd)!,
+            }),
           },
         });
         this.activeQueries.add(eq);

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.25.41
+
+### Proxied fast-model parity (PROXIED_FAST_MODEL_RESEARCH.md — Path D)
+
+Fast models routed through the Cursor proxy (composer-2-fast and friends) now honour Anthropic skills and sub-agents the same way a direct Anthropic worker does. Three fixes, all driven by `docs/PROXIED_FAST_MODEL_RESEARCH.md`:
+
+- **Per-agent `X-Cursor-Workspace` header.** cursor-agent ignores the Agent SDK's `cwd` option and uses its own workspace resolution, so two proxied agents in separate worktrees both executed against the proxy's startup cwd — a real isolation bug. `swarm.ts` now injects `ANTHROPIC_CUSTOM_HEADERS: X-Cursor-Workspace: <agentCwd>` whenever the env routes through the proxy; each worktree agent now writes to its own tree.
+- **Proxy spawn sets `CURSOR_BRIDGE_WORKSPACE=/`.** Needed so the per-request workspace header validates against the proxy's configured base (was defaulting to the caller's cwd, which rejected worktree paths).
+- **Bundled skill translation + sub-agent tool parity.** Requires `cursor-composer-in-claude@^0.10.0`, which (a) materialises the four Anthropic bundled skills — `/init`, `/review`, `/simplify`, `/security-review` — as `.cursor/rules/<name>.mdc` in the workspace, so cursor-agent auto-discovers and follows them verbatim; and (b) translates cursor-agent's native `tool_call` events (including `taskToolCall` for parallel sub-agents) into Anthropic `tool_use` blocks, so claude-overnight's progress UI, budget tracking, and nudge-on-silence now see proxied-model tool activity turn by turn.
+
+Steering prompt and coach skill updated to recommend fast models more broadly (not only Haiku), now that proxied fast models behave like a first-class endpoint.
+
 ## 1.25.5
 
 ### Wave lifecycle hooks
