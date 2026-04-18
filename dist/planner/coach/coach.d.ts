@@ -11,5 +11,9 @@ export interface CoachContext {
     log?: PlannerLog;
     coachModel?: string;
     coachProvider?: ProviderConfig;
+    /** Full markdown plan content (e.g. from a .md plan file). Overrides URL fetching. */
+    planContent?: string;
+    /** When true, show only accept/skip and do not persist user settings. */
+    confirmOnly?: boolean;
 }
 export declare function runSetupCoach(rawObjective: string, cwd: string, ctx: CoachContext): Promise<CoachResult | null>;

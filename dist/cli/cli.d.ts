@@ -61,6 +61,11 @@ export interface FileArgs {
     usageCap?: number;
     flexiblePlan?: boolean;
 }
+/** Load a markdown plan file. Extracts the first H1 as objective and returns the full body as planContent. */
+export declare function loadPlanFile(file: string): {
+    objective: string;
+    planContent: string;
+};
 export declare function loadTaskFile(file: string): FileArgs;
 export declare function validateConcurrency(value: unknown): asserts value is number;
 export declare function isGitRepo(cwd: string): boolean;

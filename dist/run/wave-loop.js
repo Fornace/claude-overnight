@@ -154,10 +154,9 @@ export async function runWaveLoop(host, ctx) {
             // work the user expects to see on resume — save them under "stopped".
             const midWavePhase = (ctx.isStopping() || swarm.aborted) ? "stopped" : "steering";
             saveRunState(ctx.runDir, buildRunState(host, midWavePhase, neverStarted));
-            // Preserve the leftover tasks on the host so the outer run loop's final
-            // saveRunState writes them (instead of []), and resume has something to load.
-            if (midWavePhase === "stopped")
-                host.currentTasks = neverStarted;
+            // Preserve the leftover tasks on the host so resume / verifier see the
+            // real pending queue (not the full original batch) after each wave.
+            host.currentTasks = neverStarted;
             // ── Overlay merge outcomes into wave history ──
             const failedMergeBranches = new Set(swarm.mergeResults.filter(r => !r.ok).map(r => r.branch));
             const tasks = swarm.agents.map(a => {
@@ -311,14 +310,16 @@ export async function runWaveLoop(host, ctx) {
                     ctx.display.appendSteeringEvent(`Post-wave review: ${reviewResult.completed} done${reviewResult.failed > 0 ? ` / ${reviewResult.failed} failed` : ""}`);
                 }
             }
-            if (!ctx.flex || host.remaining <= 0 || swarm.aborted || swarm.cappedOut)
+            if (host.remaining <= 0 || swarm.aborted || swarm.cappedOut)
                 break;
-            // ── Steering ──
+            if (!ctx.flex && !ctx.runVerifier)
+                break;
+            // ── Transition: steering (flex) or verifier (no-flex) ──
             ctx.syncRunInfo();
             ctx.display.setSteering(ctx.rlGetter, ctx.buildSteeringContext());
             ctx.display.resume();
-            const steered = await ctx.runSteering();
-            if (!steered)
+            const transitioned = ctx.flex ? await ctx.runSteering() : await ctx.runVerifier();
+            if (!transitioned)
                 break;
             host.waveNum++;
         } // end inner while

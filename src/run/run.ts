@@ -5,6 +5,7 @@ import chalk from "chalk";
 import type { Task, MergeStrategy, RunState, RunConfigBase, BranchRecord, WaveSummary } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
 import { steerWave, STEER_SCHEMA } from "../planner/steering.js";
+import { verifyWave } from "../planner/verifier.js";
 import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver, attemptJsonParse } from "../planner/query.js";
 import type { ProviderConfig } from "../providers/index.js";
 import { buildEnvResolver, isCursorProxyProvider } from "../providers/index.js";
@@ -437,6 +438,34 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     return steered;
   };
 
+  // In non-flex mode with an objective, the verifier runs between waves instead of the steerer.
+  const runVerifier = async (): Promise<boolean> => {
+    if (!objective) return false;
+    const plannerCostBefore = getTotalPlannerCost();
+    try {
+      const result = await verifyWave(
+        objective, currentTasks, waveHistory[waveHistory.length - 1],
+        remaining, cwd, plannerModel, concurrency, steeringLog,
+        `verify-wave-${waveNum}`,
+      );
+      accCost += getTotalPlannerCost() - plannerCostBefore;
+      syncRunInfo();
+      if (result.statusUpdate) writeStatus(runDir, result.statusUpdate);
+      if (typeof result.estimatedSessionsRemaining === "number") lastEstimate = result.estimatedSessionsRemaining;
+      if (result.done || result.tasks.length === 0) {
+        objectiveComplete = result.done;
+        remaining = 0;
+        return false;
+      }
+      currentTasks = result.tasks;
+      return true;
+    } catch (err: any) {
+      accCost += getTotalPlannerCost() - plannerCostBefore;
+      display.appendSteeringEvent(`Verifier failed: ${err?.message?.slice(0, 200) || "(no details)"}`);
+      return false;
+    }
+  };
+
   // Resume: steer immediately if no queued tasks
   if (cfg.resuming && flex && currentTasks.length === 0 && remaining > 0) {
     display.setSteering(rlGetter, buildSteeringContext());
@@ -506,6 +535,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       lastEstimate,
       display,
       runSteering,
+      runVerifier,
       buildSteeringContext,
       rlGetter,
       isStopping: () => stopping,

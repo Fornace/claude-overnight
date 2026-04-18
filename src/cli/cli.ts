@@ -11,7 +11,7 @@ import type { Task, MergeStrategy } from "../core/types.js";
 
 export function parseCliFlags(argv: string[]) {
   const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget", "merge"]);
-  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex", "--allow-extra-usage", "--worktrees", "--no-worktrees", "--yolo"]);
+  const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--flex", "--no-flex", "--allow-extra-usage", "--worktrees", "--no-worktrees", "--yolo"]);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
 
@@ -316,6 +316,18 @@ export interface FileArgs {
 const KNOWN_TASK_FILE_KEYS = new Set([
   "tasks", "objective", "concurrency", "cwd", "model", "allowedTools", "beforeWave", "afterWave", "afterRun", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
+
+/** Load a markdown plan file. Extracts the first H1 as objective and returns the full body as planContent. */
+export function loadPlanFile(file: string): { objective: string; planContent: string } {
+  const path = resolve(file);
+  let raw: string;
+  try { raw = readFileSync(path, "utf-8"); } catch { throw new Error(`Cannot read plan file: ${path}`); }
+  const body = raw.trim();
+  if (!body) throw new Error(`Plan file is empty: ${path}`);
+  const h1 = body.match(/^#\s+(.+)$/m);
+  const objective = (h1?.[1] ?? body.split("\n").find(l => l.trim())!).trim();
+  return { objective, planContent: body };
+}
 
 export function loadTaskFile(file: string): FileArgs {
   const path = resolve(file);

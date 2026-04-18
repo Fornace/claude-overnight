@@ -21,7 +21,7 @@ import { executeRun } from "./run/run.js";
 import type { Task, MergeStrategy, RunState, WaveSummary } from "./core/types.js";
 import {
   parseCliFlags, fetchModels, ask, select, selectKey,
-  loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo,
+  loadTaskFile, loadPlanFile, validateConcurrency, isGitRepo, validateGitRepo,
   showPlan,
 } from "./cli/cli.js";
 import type { FileArgs } from "./cli/cli.js";
@@ -79,16 +79,24 @@ async function main() {
   // ── Load tasks ──
   let tasks: Task[] = [];
   let fileCfg: FileArgs | undefined;
+  let planFileContent: string | undefined;
   const jsonFiles = args.filter(a => a.endsWith(".json"));
+  const mdFiles = args.filter(a => a.endsWith(".md"));
   if (jsonFiles.length > 1) { console.error(chalk.red(`  Multiple task files provided. Only one .json file is supported.`)); process.exit(1); }
+  if (mdFiles.length > 1) { console.error(chalk.red(`  Multiple plan files provided. Only one .md file is supported.`)); process.exit(1); }
+  if (jsonFiles.length && mdFiles.length) { console.error(chalk.red(`  Cannot mix a .json task file with a .md plan file.`)); process.exit(1); }
 
   for (const arg of args) {
     if (arg.endsWith(".json")) {
       if (tasks.length > 0) { console.error(chalk.red(`  Cannot mix inline tasks with a task file. Use one or the other.`)); process.exit(1); }
       fileCfg = loadTaskFile(arg);
       tasks = fileCfg.tasks;
+    } else if (arg.endsWith(".md")) {
+      const plan = loadPlanFile(arg);
+      planFileContent = plan.planContent;
+      fileCfg = { tasks: [], objective: plan.objective, flexiblePlan: true };
     } else if (!arg.startsWith("-") && existsSync(resolve(arg))) {
-      console.error(chalk.red(`  "${arg}" looks like a file but doesn't end in .json. Rename it or quote the string.`));
+      console.error(chalk.red(`  "${arg}" looks like a file but doesn't end in .json or .md. Rename it or quote the string.`));
       process.exit(1);
     } else {
       if (fileCfg) { console.error(chalk.red(`  Cannot mix inline tasks with a task file. Use one or the other.`)); process.exit(1); }
@@ -325,6 +333,29 @@ async function main() {
     console.log(chalk.dim("  │") + `  ${fullLine}  ` + chalk.dim("│"));
     console.log(chalk.dim(`  ╰${"─".repeat(innerLen + 4)}╯`));
   } else {
+    // ── Setup coach in confirm-only mode (task/plan file on a TTY) ──
+    let coachResult: CoachResult | null = null;
+    if (fileCfg?.objective && process.stdin.isTTY
+        && !argv.includes("--no-coach") && !loadUserSettings().skipCoach) {
+      const settings = loadUserSettings();
+      const cModel = settings.coachModel ?? COACH_MODEL;
+      const cProvider = settings.coachProviderId
+        ? loadProviders().find(p => p.id === settings.coachProviderId) : undefined;
+      coachResult = await runSetupCoach(fileCfg.objective, cwd, {
+        providers: loadProviders(), cliFlags, coachModel: cModel, coachProvider: cProvider,
+        planContent: planFileContent, confirmOnly: true,
+      });
+      if (coachResult) {
+        coachedOriginal = fileCfg.objective;
+        coachedAt = Date.now();
+        fileCfg.objective = coachResult.improvedObjective;
+        objective = coachResult.improvedObjective;
+        const rec = coachResult.recommended;
+        if (fileCfg.concurrency == null) fileCfg.concurrency = rec.concurrency;
+        if (fileCfg.usageCap == null && rec.usageCap != null) fileCfg.usageCap = Math.round(rec.usageCap * 100);
+      }
+    }
+
     let models: Awaited<ReturnType<typeof fetchModels>> = [];
     if (!cliFlags.model && !fileCfg?.model) models = await fetchModels(5_000);
     // Multi-provider default resolution: match current ANTHROPIC_BASE_URL against
@@ -351,7 +382,7 @@ async function main() {
       if (matchedFast) { fastProvider = matchedFast; fastModel = matchedFast.model; }
     }
     concurrency = cliFlags.concurrency ? parseInt(cliFlags.concurrency) : (fileCfg?.concurrency ?? 5);
-    budget = cliFlags.budget ? parseInt(cliFlags.budget) : undefined;
+    budget = cliFlags.budget ? parseInt(cliFlags.budget) : coachResult?.recommended.budget;
     if (budget != null && (isNaN(budget) || budget < 1)) { console.error(chalk.red(`  --budget must be a positive integer`)); process.exit(1); }
     const capFlag = cliFlags["usage-cap"];
     if (capFlag != null) {
@@ -412,7 +443,8 @@ async function main() {
   }
 
   // ── Plan phase ──
-  const flex = !argv.includes("--no-flex") && (fileCfg?.flexiblePlan ?? objective != null) && objective != null && (budget ?? 10) > 2;
+  const flexFlag = argv.includes("--flex") ? true : argv.includes("--no-flex") ? false : undefined;
+  const flex = objective != null && (flexFlag ?? ((fileCfg?.flexiblePlan ?? true) && (budget ?? 10) > 2));
   const agentTimeoutMs = cliFlags.timeout ? parseFloat(cliFlags.timeout) * 1000 : undefined;
   let thinkingUsed = 0, thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
   let thinkingHistory: WaveSummary | undefined;

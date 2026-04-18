@@ -16,6 +16,7 @@ export function printHelp() {
   ${chalk.cyan("Usage")}
     claude-overnight                          ${chalk.dim("interactive mode")}
     claude-overnight tasks.json               ${chalk.dim("task file mode")}
+    claude-overnight plan.md                  ${chalk.dim("plan file mode (.md) — coach + flex")}
     claude-overnight "fix auth" "add tests"   ${chalk.dim("inline tasks")}
 
   ${chalk.cyan("Flags")}
@@ -30,7 +31,8 @@ export function printHelp() {
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}
     --extra-usage-budget=N Max $ for extra usage ${chalk.dim("(implies --allow-extra-usage)")}
     --timeout=SECONDS      Agent inactivity timeout ${chalk.dim("(default: 900s, nudges at timeout, kills at 2×)")}
-    --no-flex              Disable adaptive multi-wave planning ${chalk.dim("(run all tasks in one shot)")}
+    --flex                 Force adaptive multi-wave planning ${chalk.dim("(steering between waves)")}
+    --no-flex              Fixed plan mode ${chalk.dim("(verifier between waves, no re-planning)")}
     --worktrees            Force worktree isolation on ${chalk.dim("(default: auto-detect git repo)")}
     --no-worktrees         Disable worktree isolation ${chalk.dim("(all agents work in real cwd)")}
     --merge=MODE           Merge strategy: yolo or branch ${chalk.dim("(default: yolo)")}

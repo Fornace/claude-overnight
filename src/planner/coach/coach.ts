@@ -45,6 +45,10 @@ export interface CoachContext {
   log?: PlannerLog;
   coachModel?: string;
   coachProvider?: ProviderConfig;
+  /** Full markdown plan content (e.g. from a .md plan file). Overrides URL fetching. */
+  planContent?: string;
+  /** When true, show only accept/skip and do not persist user settings. */
+  confirmOnly?: boolean;
 }
 
 export async function runSetupCoach(
@@ -67,13 +71,15 @@ export async function runSetupCoach(
   const facts = collectRepoFacts(cwd);
   if (facts.srcFileCount > 1_000_000) return null;
 
-  const urls = rawObjective.match(URL_REGEX) ?? [];
-  let planContent: string | null = null;
-  if (urls.length > 0) {
-    const results = await Promise.all(urls.map(u => fetchUrlContent(u, 4_000)));
-    const fetched = results.filter(Boolean) as string[];
-    if (fetched.length > 0) {
-      planContent = fetched.map((c, i) => `[URL ${i + 1}: ${urls[i]}]\n${c}`).join("\n\n---\n\n");
+  let planContent: string | null = ctx.planContent ?? null;
+  if (!planContent) {
+    const urls = rawObjective.match(URL_REGEX) ?? [];
+    if (urls.length > 0) {
+      const results = await Promise.all(urls.map(u => fetchUrlContent(u, 4_000)));
+      const fetched = results.filter(Boolean) as string[];
+      if (fetched.length > 0) {
+        planContent = fetched.map((c, i) => `[URL ${i + 1}: ${urls[i]}]\n${c}`).join("\n\n---\n\n");
+      }
     }
   }
 
@@ -145,15 +151,20 @@ export async function runSetupCoach(
 
   renderCoachBlock(result, elapsedMs, model);
 
-  const choice = await selectKey("", [
-    { key: "y", desc: " accept" },
-    { key: "e", desc: "dit objective" },
-    { key: "s", desc: "kip coach" },
-    { key: "x", desc: " skip coach forever" },
-  ]);
+  const choice = ctx.confirmOnly
+    ? await selectKey("", [
+        { key: "y", desc: " accept" },
+        { key: "s", desc: "kip" },
+      ])
+    : await selectKey("", [
+        { key: "y", desc: " accept" },
+        { key: "e", desc: "dit objective" },
+        { key: "s", desc: "kip coach" },
+        { key: "x", desc: " skip coach forever" },
+      ]);
 
   if (choice === "y") {
-    saveUserSettings({ ...loadUserSettings(), lastCoachedAt: Date.now() });
+    if (!ctx.confirmOnly) saveUserSettings({ ...loadUserSettings(), lastCoachedAt: Date.now() });
     return result;
   }
   if (choice === "e") {

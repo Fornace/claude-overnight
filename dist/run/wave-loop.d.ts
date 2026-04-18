@@ -46,6 +46,8 @@ export interface WaveLoopCtx {
     lastEstimate: number | undefined;
     display: RunDisplay;
     runSteering: () => Promise<boolean>;
+    /** Verifier invoked between waves in no-flex mode. Mirrors runSteering's contract. */
+    runVerifier?: () => Promise<boolean>;
     buildSteeringContext: () => SteeringContext;
     rlGetter: RLGetter;
     isStopping: () => boolean;

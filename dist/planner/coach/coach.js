@@ -47,13 +47,15 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
     const facts = collectRepoFacts(cwd);
     if (facts.srcFileCount > 1_000_000)
         return null;
-    const urls = rawObjective.match(URL_REGEX) ?? [];
-    let planContent = null;
-    if (urls.length > 0) {
-        const results = await Promise.all(urls.map(u => fetchUrlContent(u, 4_000)));
-        const fetched = results.filter(Boolean);
-        if (fetched.length > 0) {
-            planContent = fetched.map((c, i) => `[URL ${i + 1}: ${urls[i]}]\n${c}`).join("\n\n---\n\n");
+    let planContent = ctx.planContent ?? null;
+    if (!planContent) {
+        const urls = rawObjective.match(URL_REGEX) ?? [];
+        if (urls.length > 0) {
+            const results = await Promise.all(urls.map(u => fetchUrlContent(u, 4_000)));
+            const fetched = results.filter(Boolean);
+            if (fetched.length > 0) {
+                planContent = fetched.map((c, i) => `[URL ${i + 1}: ${urls[i]}]\n${c}`).join("\n\n---\n\n");
+            }
         }
     }
     const userMessage = renderRepoFacts(facts, rawObjective, ctx.providers, ctx.cliFlags, planContent);
@@ -120,14 +122,20 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
         return null;
     }
     renderCoachBlock(result, elapsedMs, model);
-    const choice = await selectKey("", [
-        { key: "y", desc: " accept" },
-        { key: "e", desc: "dit objective" },
-        { key: "s", desc: "kip coach" },
-        { key: "x", desc: " skip coach forever" },
-    ]);
+    const choice = ctx.confirmOnly
+        ? await selectKey("", [
+            { key: "y", desc: " accept" },
+            { key: "s", desc: "kip" },
+        ])
+        : await selectKey("", [
+            { key: "y", desc: " accept" },
+            { key: "e", desc: "dit objective" },
+            { key: "s", desc: "kip coach" },
+            { key: "x", desc: " skip coach forever" },
+        ]);
     if (choice === "y") {
-        saveUserSettings({ ...loadUserSettings(), lastCoachedAt: Date.now() });
+        if (!ctx.confirmOnly)
+            saveUserSettings({ ...loadUserSettings(), lastCoachedAt: Date.now() });
         return result;
     }
     if (choice === "e") {

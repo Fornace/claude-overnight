@@ -73,6 +73,8 @@ export interface WaveLoopCtx {
   // callbacks into run.ts closures
   display: RunDisplay;
   runSteering: () => Promise<boolean>;
+  /** Verifier invoked between waves in no-flex mode. Mirrors runSteering's contract. */
+  runVerifier?: () => Promise<boolean>;
   buildSteeringContext: () => SteeringContext;
   rlGetter: RLGetter;
   isStopping: () => boolean;
@@ -213,9 +215,9 @@ export async function runWaveLoop(
       // work the user expects to see on resume — save them under "stopped".
       const midWavePhase = (ctx.isStopping() || swarm.aborted) ? "stopped" : "steering";
       saveRunState(ctx.runDir, buildRunState(host, midWavePhase, neverStarted));
-      // Preserve the leftover tasks on the host so the outer run loop's final
-      // saveRunState writes them (instead of []), and resume has something to load.
-      if (midWavePhase === "stopped") host.currentTasks = neverStarted;
+      // Preserve the leftover tasks on the host so resume / verifier see the
+      // real pending queue (not the full original batch) after each wave.
+      host.currentTasks = neverStarted;
 
       // ── Overlay merge outcomes into wave history ──
       const failedMergeBranches = new Set(swarm.mergeResults.filter(r => !r.ok).map(r => r.branch));
@@ -368,14 +370,15 @@ export async function runWaveLoop(
         }
       }
 
-      if (!ctx.flex || host.remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
+      if (host.remaining <= 0 || swarm.aborted || swarm.cappedOut) break;
+      if (!ctx.flex && !ctx.runVerifier) break;
 
-      // ── Steering ──
+      // ── Transition: steering (flex) or verifier (no-flex) ──
       ctx.syncRunInfo();
       ctx.display.setSteering(ctx.rlGetter, ctx.buildSteeringContext());
       ctx.display.resume();
-      const steered = await ctx.runSteering();
-      if (!steered) break;
+      const transitioned = ctx.flex ? await ctx.runSteering() : await ctx.runVerifier!();
+      if (!transitioned) break;
       host.waveNum++;
     } // end inner while
 
