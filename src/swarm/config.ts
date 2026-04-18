@@ -2,7 +2,6 @@
 // itself so callers can build a config without dragging in the worker loop.
 
 import type { Task, MergeStrategy } from "../core/types.js";
-import { PROXY_DEFAULT_URL } from "../providers/index.js";
 
 export interface SwarmConfig {
   tasks: Task[];
@@ -42,7 +41,14 @@ export function withCursorWorkspaceHeader(
   cwd: string,
 ): Record<string, string> | undefined {
   if (!env) return undefined;
-  if (env.ANTHROPIC_BASE_URL !== PROXY_DEFAULT_URL) return env;
+  // Detect "this env routes to a cursor-composer proxy" rather than matching a
+  // literal URL — per-project port resolution means the proxy frequently runs
+  // on e.g. :62717 instead of the default :8765, and a strict equality check
+  // would silently skip header injection on those runs. Without the header,
+  // Cursor ignores the SDK cwd, never invokes Skills, and emits zero tool_use
+  // blocks — agents sit idle for minutes, costing the whole run.
+  const isCursorEnv = !!(env.CURSOR_API_KEY || env.CURSOR_AUTH_TOKEN || env.CURSOR_BRIDGE_MODE);
+  if (!isCursorEnv) return env;
   const hdr = `X-Cursor-Workspace: ${cwd}`;
   const existing = env.ANTHROPIC_CUSTOM_HEADERS?.trim();
   return {

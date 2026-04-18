@@ -1,6 +1,5 @@
 // Inputs and constants the Swarm consumes — kept separate from the class
 // itself so callers can build a config without dragging in the worker loop.
-import { PROXY_DEFAULT_URL } from "../providers/index.js";
 /** Sent to an agent right after its main task completes, to take one more
  *  pass at trimming churn the agent introduced while exploring. */
 export const SIMPLIFY_PROMPT = `You just finished your task. Review and simplify your changes.
@@ -16,7 +15,14 @@ Invoke the \`simplify\` skill to review your changes for reuse, quality, and eff
 export function withCursorWorkspaceHeader(env, cwd) {
     if (!env)
         return undefined;
-    if (env.ANTHROPIC_BASE_URL !== PROXY_DEFAULT_URL)
+    // Detect "this env routes to a cursor-composer proxy" rather than matching a
+    // literal URL — per-project port resolution means the proxy frequently runs
+    // on e.g. :62717 instead of the default :8765, and a strict equality check
+    // would silently skip header injection on those runs. Without the header,
+    // Cursor ignores the SDK cwd, never invokes Skills, and emits zero tool_use
+    // blocks — agents sit idle for minutes, costing the whole run.
+    const isCursorEnv = !!(env.CURSOR_API_KEY || env.CURSOR_AUTH_TOKEN || env.CURSOR_BRIDGE_MODE);
+    if (!isCursorEnv)
         return env;
     const hdr = `X-Cursor-Workspace: ${cwd}`;
     const existing = env.ANTHROPIC_CUSTOM_HEADERS?.trim();
