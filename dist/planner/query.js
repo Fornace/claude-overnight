@@ -43,10 +43,9 @@ async function runViaDirectFetch(prompt, opts, onLog) {
     const BACKOFF = [30_000, 60_000, 120_000];
     const rl = cursorProxyRateLimiter;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        // Hard gate: fail fast if the endpoint budget is exhausted (triggers retry flow).
-        apiEndpointLimiter.assertCanRequest();
-        // Proactive gate: wait if the sliding window is full before hitting the API.
-        // This prevents burning retries on predictable 429s.
+        // Wait out both budgets — the retry loop catches HTTP 429s but not our own
+        // RateLimitError, so hard-asserting would abort the whole fetch path.
+        await apiEndpointLimiter.waitIfNeeded();
         const waited = await rl.waitIfNeeded();
         if (waited > 0)
             onLog(`Cursor proxy rate gate — waited ${Math.round(waited / 1000)}s`, "event");

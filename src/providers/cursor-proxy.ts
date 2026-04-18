@@ -395,8 +395,9 @@ export async function preflightCursorProxyViaHttp(
   const deadline = setTimeout(() => controller.abort(), authBudget);
 
   try {
-    // Hard gate: fail fast if the endpoint budget is exhausted.
-    apiEndpointLimiter.assertCanRequest();
+    // Wait out both window budgets — preflight runs auth+write back-to-back, so
+    // hard-asserting here trips the 1s min interval on the second probe.
+    await apiEndpointLimiter.waitIfNeeded();
     await _proxyRl.waitIfNeeded();
     // max_tokens must accommodate thinking tokens for `*-thinking-*` variants —
     // 1 leaves zero reasoning budget and crashes the subprocess.
@@ -465,8 +466,9 @@ async function probeCursorWriteCapability(
   if (key) headers["authorization"] = `Bearer ${key}`;
 
   try {
-    // Hard gate: fail fast if the endpoint budget is exhausted.
-    apiEndpointLimiter.assertCanRequest();
+    // Wait out both window budgets — the auth probe just recorded and the 1s
+    // min interval on apiEndpointLimiter would otherwise trip here.
+    await apiEndpointLimiter.waitIfNeeded();
     await _proxyRl.waitIfNeeded();
     const res = await fetch(`${baseURL}/v1/messages`, {
       method: "POST",
