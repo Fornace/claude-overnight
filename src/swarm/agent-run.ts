@@ -17,7 +17,7 @@ import type { Task, AgentState } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
 import type { ErroredBranchEvaluator } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
-import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, type SwarmConfig } from "./config.js";
+import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, getAgentTimeout, type SwarmConfig } from "./config.js";
 import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
 import { handleMsg, type MessageHandlerHost } from "./message-handler.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
@@ -103,7 +103,7 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
   const isResumed = !!task.resumeSessionId;
   host.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
   const maxRetries = host.config.maxRetries ?? 2;
-  const inactivityMs = host.config.agentTimeoutMs ?? 15 * 60 * 1000;
+  const inactivityMs = host.config.agentTimeoutMs ?? getAgentTimeout();
   const rl = sdkQueryRateLimiter;
 
   // Hoisted so the catch block can read the session captured during the turn

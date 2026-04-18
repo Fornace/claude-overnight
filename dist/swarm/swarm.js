@@ -5,6 +5,7 @@ import chalk from "chalk";
 import { RATE_LIMIT_WINDOW_SHORT } from "../core/types.js";
 import { gitExec, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "../providers/index.js";
+import { getAgentTimeout } from "./config.js";
 import { sleep } from "./errors.js";
 import { runAgent as runAgentImpl, buildErroredBranchEvaluator } from "./agent-run.js";
 export class Swarm {
@@ -315,6 +316,8 @@ export class Swarm {
                 const task = this.queue.shift();
                 if (!task)
                     break;
+                const watchdogMs = this.config.agentTimeoutMs ?? getAgentTimeout();
+                this.log(-1, `[swarm] Agent watchdog timeout: ${Math.round(watchdogMs / 1000)}s`);
                 try {
                     await this.runAgent(task);
                 }

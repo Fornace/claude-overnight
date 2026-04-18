@@ -1,6 +1,7 @@
-import { describe, it } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { Task } from "../core/types.js";
+import { DEFAULT_AGENT_TIMEOUT_MS, getAgentTimeout } from "../swarm/config.js";
 import { Swarm } from "../swarm/swarm.js";
 
 // ── Helpers ──
@@ -143,5 +144,37 @@ describe("Swarm.pending", () => {
     const swarm = makeSwarm();
     swarm.abort();
     assert.equal(swarm.pending, 0);
+  });
+});
+
+// ── getAgentTimeout ──
+
+describe("getAgentTimeout", () => {
+  const key = "AGENT_TIMEOUT_MS";
+  let prev: string | undefined;
+
+  beforeEach(() => {
+    prev = process.env[key];
+  });
+
+  afterEach(() => {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  });
+
+  it("returns 15 minutes by default", () => {
+    delete process.env[key];
+    assert.equal(getAgentTimeout(), DEFAULT_AGENT_TIMEOUT_MS);
+    assert.equal(DEFAULT_AGENT_TIMEOUT_MS, 15 * 60 * 1000);
+  });
+
+  it("returns the value from AGENT_TIMEOUT_MS when set", () => {
+    process.env[key] = "120000";
+    assert.equal(getAgentTimeout(), 120_000);
+  });
+
+  it("falls back to default when AGENT_TIMEOUT_MS is invalid", () => {
+    process.env[key] = "not-a-number";
+    assert.equal(getAgentTimeout(), DEFAULT_AGENT_TIMEOUT_MS);
   });
 });

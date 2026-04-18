@@ -13,7 +13,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
-import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader } from "./config.js";
+import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, getAgentTimeout } from "./config.js";
 import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
 import { handleMsg } from "./message-handler.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
@@ -87,7 +87,7 @@ export async function runAgent(host, task) {
     const isResumed = !!task.resumeSessionId;
     host.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
     const maxRetries = host.config.maxRetries ?? 2;
-    const inactivityMs = host.config.agentTimeoutMs ?? 15 * 60 * 1000;
+    const inactivityMs = host.config.agentTimeoutMs ?? getAgentTimeout();
     const rl = sdkQueryRateLimiter;
     // Hoisted so the catch block can read the session captured during the turn
     // when routing a pause-interrupt through the requeue path.
