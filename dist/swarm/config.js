@@ -33,3 +33,18 @@ export function withCursorWorkspaceHeader(env, cwd) {
             : hdr,
     };
 }
+/** Default per-agent inactivity watchdog (see `agent-run` race with SDK `query`). */
+export const DEFAULT_AGENT_TIMEOUT_MS = 15 * 60 * 1000;
+/**
+ * Per-agent watchdog timeout in ms. Override with `AGENT_TIMEOUT_MS` (integer).
+ * Explicit `SwarmConfig.agentTimeoutMs` still wins at call sites that pass it.
+ */
+export function getAgentTimeout() {
+    const raw = process.env.AGENT_TIMEOUT_MS;
+    if (raw == null || raw.trim() === "")
+        return DEFAULT_AGENT_TIMEOUT_MS;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n) || n <= 0)
+        return DEFAULT_AGENT_TIMEOUT_MS;
+    return n;
+}

@@ -8,7 +8,7 @@ import type { Task, AgentState, SwarmPhase, RateLimitWindow, AITurn } from "../c
 import { gitExec, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult } from "./merge.js";
 import { ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "../providers/index.js";
-import { type SwarmConfig } from "./config.js";
+import { type SwarmConfig, getAgentTimeout } from "./config.js";
 import { sleep } from "./errors.js";
 import type { PendingTool } from "./message-handler.js";
 import { runAgent as runAgentImpl, buildErroredBranchEvaluator } from "./agent-run.js";
@@ -316,6 +316,8 @@ export class Swarm {
         if (this.workerCount > this.targetConcurrency) return;
         const task = this.queue.shift();
         if (!task) break;
+        const watchdogMs = this.config.agentTimeoutMs ?? getAgentTimeout();
+        this.log(-1, `[swarm] Agent watchdog timeout: ${Math.round(watchdogMs / 1000)}s`);
         try { await this.runAgent(task); }
         catch (err: any) {
           const msg = String(err?.message || err).slice(0, 80);

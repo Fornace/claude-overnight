@@ -29,3 +29,10 @@ export declare const SIMPLIFY_PROMPT = "You just finished your task. Review and 
  * all worktree paths) so the header value passes the safety check.
  */
 export declare function withCursorWorkspaceHeader(env: Record<string, string> | undefined, cwd: string): Record<string, string> | undefined;
+/** Default per-agent inactivity watchdog (see `agent-run` race with SDK `query`). */
+export declare const DEFAULT_AGENT_TIMEOUT_MS: number;
+/**
+ * Per-agent watchdog timeout in ms. Override with `AGENT_TIMEOUT_MS` (integer).
+ * Explicit `SwarmConfig.agentTimeoutMs` still wins at call sites that pass it.
+ */
+export declare function getAgentTimeout(): number;

@@ -12,7 +12,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
-import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader } from "./config.js";
+import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, getAgentTimeout } from "./config.js";
 import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
 import { handleMsg } from "./message-handler.js";
 import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
@@ -75,7 +75,7 @@ export async function runAgent(host, task) {
     const isResumed = !!task.resumeSessionId;
     host.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
     const maxRetries = host.config.maxRetries ?? 2;
-    const inactivityMs = host.config.agentTimeoutMs ?? 15 * 60 * 1000;
+    const inactivityMs = host.config.agentTimeoutMs ?? getAgentTimeout();
     const rl = sdkQueryRateLimiter;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (attempt > 0) {
