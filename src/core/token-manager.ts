@@ -13,7 +13,6 @@ import {
   getCachedToken, peekCachedToken, cacheToken,
   revokeSession, clearTokenCache, isSessionRevoked,
   tryRefreshCachedToken,
-  isSessionRevoked,
   type TokenRecord,
 } from "./token-cache.js";
 

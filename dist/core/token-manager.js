@@ -9,7 +9,7 @@
  */
 import { storeKey } from "./key-vault.js";
 import { signToken, resignToken, verifyTokenWithResult } from "./jwt-signer.js";
-import { getCachedToken, peekCachedToken, cacheToken, revokeSession, clearTokenCache, tryRefreshCachedToken, isSessionRevoked, } from "./token-cache.js";
+import { getCachedToken, peekCachedToken, cacheToken, revokeSession, clearTokenCache, isSessionRevoked, tryRefreshCachedToken, } from "./token-cache.js";
 // ── Token lifecycle ──
 /**
  * Get a signed JWT for a provider.

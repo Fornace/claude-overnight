@@ -18,8 +18,8 @@ import { gitExec, autoCommit } from "./merge.js";
 import type { ErroredBranchEvaluator } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, getAgentTimeout, type SwarmConfig } from "./config.js";
-import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
-import { handleMsg, type MessageHandlerHost } from "./message-handler.js";
+import { AgentTimeoutError, StreamStalledError, isRateLimitError, isTransientError, sleep } from "./errors.js";
+import { handleMsg, checkStreamHealth, NO_CONTENT_TIMEOUT_MS, type MessageHandlerHost } from "./message-handler.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 
 /** Narrow surface `runAgent` / `buildErroredBranchEvaluator` need from the

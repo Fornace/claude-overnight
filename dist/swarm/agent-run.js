@@ -14,8 +14,8 @@ import { NudgeError } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, getAgentTimeout } from "./config.js";
-import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
-import { handleMsg } from "./message-handler.js";
+import { AgentTimeoutError, StreamStalledError, isRateLimitError, isTransientError, sleep } from "./errors.js";
+import { handleMsg, checkStreamHealth, NO_CONTENT_TIMEOUT_MS } from "./message-handler.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 export async function runAgent(host, task) {
     // Guard: if pause was triggered between dispatch and here, re-queue immediately.

@@ -99,11 +99,6 @@ export function clearRevocations() {
 export function getRevocationCount() {
     return revokedSessions.size;
 }
-/** Check if a session ID has been revoked, pruning expired entries first. */
-export function isSessionRevoked(sessionId) {
-    pruneRevocations();
-    return revokedSessions.has(sessionId);
-}
 /** Remove expired revocation entries and enforce max size. */
 function pruneRevocations() {
     if (revokedSessions.size === 0)
