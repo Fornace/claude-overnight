@@ -11,7 +11,7 @@ import {
   getTurn,
   peakContextTurn,
   resetTurns,
-} from "../turns.js";
+} from "../core/turns.js";
 
 beforeEach(() => { resetTurns(); });
 

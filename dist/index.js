@@ -3,22 +3,22 @@ import { readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync } from 
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
-import { VERSION } from "./_version.js";
+import { VERSION } from "./core/_version.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { Swarm } from "./swarm.js";
-import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner.js";
-import { formatContextWindow, DEFAULT_MODEL } from "./models.js";
-import { setPlannerEnvResolver } from "./planner-query.js";
-import { setTranscriptRunDir } from "./transcripts.js";
-import { getProxyPort, buildProxyUrl } from "./proxy-port.js";
-import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, readCursorProxyLogTail, ensureCursorProxyRunning, bundledComposerProxyShellCommand, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, } from "./providers.js";
-import { RunDisplay } from "./ui.js";
-import { renderSummary, wrap } from "./render.js";
-import { executeRun } from "./run.js";
-import { parseCliFlags, isAuthError, fetchModels, ask, select, selectKey, loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo, showPlan, makeProgressLog, } from "./cli.js";
-import { loadRunState, findIncompleteRuns, findOrphanedDesigns, backfillOrphanedPlans, formatTimeAgo, showRunHistory, readPreviousRunKnowledge, createRunDir, updateLatestSymlink, readMdDir, saveRunState, autoMergeBranches, } from "./state.js";
-import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL } from "./coach.js";
-import { editRunSettings, formatSettingsSummary } from "./settings.js";
+import { Swarm } from "./swarm/swarm.js";
+import { planTasks, refinePlan, identifyThemes, buildThinkingTasks, orchestrate, salvageFromFile } from "./planner/planner.js";
+import { formatContextWindow, DEFAULT_MODEL } from "./core/models.js";
+import { setPlannerEnvResolver } from "./planner/planner-query.js";
+import { setTranscriptRunDir } from "./core/transcripts.js";
+import { getProxyPort, buildProxyUrl } from "./core/proxy-port.js";
+import { pickModel, loadProviders, preflightProvider, buildEnvResolver, healthCheckCursorProxy, PROXY_DEFAULT_URL, isCursorProxyProvider, readCursorProxyLogTail, ensureCursorProxyRunning, bundledComposerProxyShellCommand, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, } from "./providers/index.js";
+import { RunDisplay } from "./ui/ui.js";
+import { renderSummary, wrap } from "./ui/render.js";
+import { executeRun } from "./run/run.js";
+import { parseCliFlags, isAuthError, fetchModels, ask, select, selectKey, loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo, showPlan, makeProgressLog, } from "./cli/cli.js";
+import { loadRunState, findIncompleteRuns, findOrphanedDesigns, backfillOrphanedPlans, formatTimeAgo, showRunHistory, readPreviousRunKnowledge, createRunDir, updateLatestSymlink, readMdDir, saveRunState, autoMergeBranches, } from "./state/state.js";
+import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL } from "./planner/coach.js";
+import { editRunSettings, formatSettingsSummary } from "./cli/settings.js";
 function countTasksInFile(path) {
     try {
         const parsed = JSON.parse(readFileSync(path, "utf-8"));

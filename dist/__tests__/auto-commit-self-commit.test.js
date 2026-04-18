@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoCommit } from "../merge.js";
+import { autoCommit } from "../swarm/merge.js";
 // Regression test for the pre-1.11.10 filesChanged=0 orphan-branch bug.
 //
 // autoCommit() used to measure work by counting `git status --porcelain` lines

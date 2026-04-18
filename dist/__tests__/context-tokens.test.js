@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Swarm } from "../swarm.js";
+import { Swarm } from "../swarm/swarm.js";
 function makeSwarm() {
     const tasks = [{ id: "t0", prompt: "do" }];
     return new Swarm({ tasks, concurrency: 1, cwd: "/tmp", model: "claude-sonnet-4-6" });

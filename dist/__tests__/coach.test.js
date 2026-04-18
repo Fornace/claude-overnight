@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { resolveCoachSkillPath, validateCoachOutput } from "../coach.js";
+import { resolveCoachSkillPath, validateCoachOutput } from "../planner/coach.js";
 function validPayload(overrides = {}) {
     return {
         scope: "bugfix",

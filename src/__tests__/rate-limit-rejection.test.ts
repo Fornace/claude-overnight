@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { AgentState } from "../types.js";
-import { Swarm } from "../swarm.js";
+import type { AgentState } from "../core/types.js";
+import { Swarm } from "../swarm/swarm.js";
 
 function makeSwarm() {
   return new Swarm({

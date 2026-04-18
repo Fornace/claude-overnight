@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { salvageFromFile } from "../planner.js";
+import { salvageFromFile } from "../planner/planner.js";
 // Regression test for 1.11.x plan-phase loss-of-work:
 // `runPlannerQuery` can throw "Planner query failed after retries" after the
 // orchestrate agent already wrote a valid tasks.json via its Write tool.

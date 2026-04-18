@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findIncompleteRuns, saveRunState, backfillOrphanedPlans, loadRunState } from "../state.js";
+import { findIncompleteRuns, saveRunState, backfillOrphanedPlans, loadRunState } from "../state/state.js";
 // Regression test for resume visibility of plan-phase runs.
 // Before 1.11.7, findIncompleteRuns only returned runs with a run.json, but
 // run.json was only written inside executeRun  -- so a plan-phase failure was

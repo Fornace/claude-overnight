@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { envFor, PROXY_DEFAULT_URL, hasCursorAgentToken, getCursorAgentToken } from "../providers.js";
+import { envFor, PROXY_DEFAULT_URL, hasCursorAgentToken, getCursorAgentToken } from "../providers/index.js";
 describe("Cursor env injection (keychain avoidance)", () => {
     const saved = { ...process.env };
     beforeEach(() => {

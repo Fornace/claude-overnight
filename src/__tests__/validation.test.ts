@@ -4,8 +4,8 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import type { Task } from "../types.js";
-import type { PermMode } from "../types.js";
+import type { Task } from "../core/types.js";
+import type { PermMode } from "../core/types.js";
 
 // ── Inline replica of loadTaskFile validation logic ──
 // The real loadTaskFile is not exported from src/index.ts, so we replicate

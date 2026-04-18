@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Swarm } from "../swarm.js";
+import { Swarm } from "../swarm/swarm.js";
 function makeSwarm() {
     return new Swarm({
         tasks: [{ id: "t-0", prompt: "do something" }],

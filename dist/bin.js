@@ -30,7 +30,7 @@ if (process.stdout.isTTY && !quiet && !process.env.CLAUDE_OVERNIGHT_UPDATED) {
             writeFileSync(tsFile, String(Date.now())); // stamp first so failures don't re-trigger
             const { execFileSync, spawnSync } = await import("node:child_process");
             const latest = execFileSync("npm", ["show", "claude-overnight", "version"], { encoding: "utf-8", timeout: 6000 }).trim();
-            const { VERSION } = await import("./_version.js");
+            const { VERSION } = await import("./core/_version.js");
             if (latest !== VERSION) {
                 process.stdout.write(`\r\x1b[2K  🌙  claude-overnight \x1b[33m${VERSION} → ${latest}\x1b[0m  updating…\n`);
                 execFileSync("npm", ["i", "-g", `claude-overnight@${latest}`], { stdio: "inherit", timeout: 60000 });

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Swarm } from "../swarm.js";
+import { Swarm } from "../swarm/swarm.js";
 // ── Helpers ──
 function makeTasks(n) {
     return Array.from({ length: n }, (_, i) => ({

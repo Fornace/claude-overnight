@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createTurn, beginTurn, endTurn, updateTurn, allTurns, focusedTurn, cycleFocused, getTurn, peakContextTurn, resetTurns, } from "../turns.js";
+import { createTurn, beginTurn, endTurn, updateTurn, allTurns, focusedTurn, cycleFocused, getTurn, peakContextTurn, resetTurns, } from "../core/turns.js";
 beforeEach(() => { resetTurns(); });
 describe("createTurn", () => {
     it("creates a turn with pending status", () => {
