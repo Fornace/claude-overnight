@@ -1,15 +1,50 @@
-import { describe, it, after } from "node:test";
+import { describe, it, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { PTYProcess, canSpawnPty } from "./pty-helpers.js";
+import { ensureCursorProxyRunning, healthCheckCursorProxy } from "../providers/cursor-proxy.js";
+import { PROXY_DEFAULT_URL } from "../providers/cursor-env.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
-/** Skip entire E2E file when PTY is unavailable (sandbox/CI). */
-const e2e = canSpawnPty() ? describe : describe.skip;
 const FIXTURES = resolve(__dirname, "../../src/__tests__/fixtures");
 const BIN = resolve(__dirname, "../../dist/bin.js");
 // Skip provider preflight in e2e tests — the swarm handles proxy startup on its own.
 process.env.NO_PREFLIGHT = "1";
+/**
+ * The full PTY suite is slow (~10 min) and flaky by nature (timing-based
+ * assertions against terminal rendering). It stays in the drawer — use
+ * scripts/e2e-smoke*.mjs for fast liveness checks instead. Set RUN_E2E_TTY=1
+ * to actually run this file.
+ */
+const hasApiKey = !!(process.env.ANTHROPIC_API_KEY?.trim() ||
+    process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim() ||
+    process.env.CURSOR_API_KEY?.trim());
+const optedIn = process.env.RUN_E2E_TTY === "1";
+/**
+ * Boot the cursor proxy once before all tests when only CURSOR_API_KEY is set.
+ * Each test spawns `node dist/bin.js` with no `--model` flag, so the swarm
+ * dispatches through whatever ANTHROPIC_BASE_URL is wired — we point it at the
+ * bundled proxy so every child bin inherits a working backend.
+ */
+const cursorOnly = !process.env.ANTHROPIC_API_KEY?.trim()
+    && !process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()
+    && !!process.env.CURSOR_API_KEY?.trim();
+let proxyReady = !cursorOnly;
+const e2e = (canSpawnPty() && hasApiKey && optedIn) ? describe : describe.skip;
+if (cursorOnly && optedIn) {
+    before(async () => {
+        if (await healthCheckCursorProxy(PROXY_DEFAULT_URL)) {
+            proxyReady = true;
+        }
+        else {
+            proxyReady = await ensureCursorProxyRunning(PROXY_DEFAULT_URL);
+        }
+        if (proxyReady) {
+            process.env.ANTHROPIC_BASE_URL = PROXY_DEFAULT_URL;
+            process.env.ANTHROPIC_AUTH_TOKEN = process.env.CURSOR_API_KEY;
+        }
+    });
+}
 // ── helpers ──
 function waitForSwarm(p, timeoutMs = 45000) {
     return p.waitFor("active", timeoutMs);

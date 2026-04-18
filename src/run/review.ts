@@ -1,4 +1,4 @@
-import type { PermMode, MergeStrategy } from "../core/types.js";
+import type { MergeStrategy } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
 
 // ── Review helpers: post-wave and post-run quality gates ──
@@ -6,7 +6,6 @@ import { Swarm } from "../swarm/swarm.js";
 export interface ReviewOpts {
   cwd: string;
   plannerModel: string;
-  permissionMode: PermMode;
   concurrency: number;
   remaining: number;
   usageCap: number | undefined;
@@ -44,7 +43,7 @@ async function runReview(
 ): Promise<ReviewResult | null> {
   const swarm = new Swarm({
     tasks: [{ id: `${scope}-review`, prompt: reviewPrompt(scope, objective), noWorktree: false, type: "review" }],
-    concurrency: 1, cwd: opts.cwd, model: opts.plannerModel, permissionMode: opts.permissionMode,
+    concurrency: 1, cwd: opts.cwd, model: opts.plannerModel,
     useWorktrees: opts.useWorktrees, mergeStrategy: opts.mergeStrategy, usageCap: opts.usageCap,
     allowExtraUsage: opts.allowExtraUsage, extraUsageBudget: opts.extraUsageBudget,
     baseCostUsd: opts.baseCostUsd, envForModel: opts.envForModel,

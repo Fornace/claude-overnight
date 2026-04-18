@@ -10,7 +10,7 @@ import { isCursorProxyProvider } from "../providers/index.js";
 import { readMdDir, saveRunState } from "../state/state.js";
 import { selectKey, ask, showPlan, makeProgressLog, isJWTAuthError } from "./cli.js";
 export async function runPlanPhase(input) {
-    const { objective, noTTY, flex, budget, concurrency, cwd, plannerModel, workerModel, fastModel, plannerProvider, workerProvider, fastProvider, permissionMode, usageCap, allowExtraUsage, extraUsageBudget, useWorktrees, mergeStrategy, agentTimeoutMs, runDir, designDir, previousKnowledge, envForModel, coachedOriginal, coachedAt, } = input;
+    const { objective, noTTY, flex, budget, concurrency, cwd, plannerModel, workerModel, fastModel, plannerProvider, workerProvider, fastProvider, usageCap, allowExtraUsage, extraUsageBudget, useWorktrees, mergeStrategy, agentTimeoutMs, runDir, designDir, previousKnowledge, envForModel, coachedOriginal, coachedAt, } = input;
     let tasks = [];
     let thinkingHistory;
     let thinkingUsed = 0, thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
@@ -26,7 +26,7 @@ export async function runPlanPhase(input) {
                 workerModel, plannerModel, fastModel,
                 workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
                 fastProviderId: fastProvider?.id,
-                concurrency, permissionMode,
+                concurrency,
                 usageCap, allowExtraUsage, extraUsageBudget,
                 flex, useWorktrees, mergeStrategy,
                 waveNum: 0, currentTasks: [],
@@ -58,7 +58,7 @@ export async function runPlanPhase(input) {
                 }
                 catch { }
             };
-            let themes = await identifyThemes(objective, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog(), "themes");
+            let themes = await identifyThemes(objective, thinkingCount, cwd, plannerModel, makeProgressLog(), "themes");
             saveThemesMd(themes);
             process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`);
             planRestore();
@@ -78,7 +78,7 @@ export async function runPlanPhase(input) {
                         continue;
                     process.stdout.write("\x1B[?25l");
                     try {
-                        themes = await identifyThemes(`${objective}\n\nUser feedback: ${feedback}`, thinkingCount, cwd, plannerModel, permissionMode, makeProgressLog(), "themes-refine");
+                        themes = await identifyThemes(`${objective}\n\nUser feedback: ${feedback}`, thinkingCount, cwd, plannerModel, makeProgressLog(), "themes-refine");
                         saveThemesMd(themes);
                         process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${themes.length} themes`)}\n\n`);
                     }
@@ -97,7 +97,7 @@ export async function runPlanPhase(input) {
                         const plannerEnv = envForModel(plannerModel);
                         for await (const msg of query({
                             prompt: `You're planning work for: "${objective}"\n\nThemes identified:\n${themes.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n\nUser question: ${question}`,
-                            options: { cwd, model: plannerModel, permissionMode, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
+                            options: { cwd, model: plannerModel, permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
                         })) {
                             if (msg.type === "result" && msg.subtype === "success")
                                 answer = msg.result || "";
@@ -136,7 +136,7 @@ export async function runPlanPhase(input) {
                 const thinkingTasks = buildThinkingTasks(objective, themes, designDir, researchModel, previousKnowledge || undefined);
                 console.log(chalk.cyan(`\n  ◆ Thinking: ${thinkingTasks.length} agents exploring...\n`));
                 const thinkingSwarm = new Swarm({
-                    tasks: thinkingTasks, concurrency, cwd, model: researchModel, permissionMode,
+                    tasks: thinkingTasks, concurrency, cwd, model: researchModel,
                     useWorktrees: false, mergeStrategy: "yolo", agentTimeoutMs, usageCap, allowExtraUsage, extraUsageBudget,
                     envForModel,
                     cursorProxy: [plannerProvider, workerProvider, fastProvider].some(p => p && isCursorProxyProvider(p)),
@@ -159,7 +159,7 @@ export async function runPlanPhase(input) {
                             workerModel, plannerModel, fastModel,
                             workerProviderId: workerProvider?.id, plannerProviderId: plannerProvider?.id,
                             fastProviderId: fastProvider?.id,
-                            concurrency, permissionMode,
+                            concurrency,
                             usageCap, allowExtraUsage, extraUsageBudget,
                             flex, useWorktrees, mergeStrategy,
                             waveNum: 0, currentTasks: [],
@@ -206,13 +206,13 @@ export async function runPlanPhase(input) {
                 const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
                 const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
                 console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
-                tasks = await orchestrate(objective, designs, cwd, plannerModel, workerModel, permissionMode, orchBudget, concurrency, makeProgressLog(), flexNote, taskFile);
+                tasks = await orchestrate(objective, designs, cwd, plannerModel, workerModel, orchBudget, concurrency, makeProgressLog(), flexNote, taskFile);
                 process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
             }
             else {
                 console.log(chalk.yellow(`\n  No design docs  -- falling back to direct planning\n`));
                 const waveBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
-                tasks = await planTasks(objective, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), undefined, taskFile);
+                tasks = await planTasks(objective, cwd, plannerModel, workerModel, waveBudget, concurrency, makeProgressLog(), undefined, taskFile);
                 process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
             }
         }
@@ -220,7 +220,7 @@ export async function runPlanPhase(input) {
             const waveBudget = flex ? Math.min(50, Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5))) : budget;
             const flexNote = flex ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.` : undefined;
             console.log(chalk.cyan(`\n  ◆ Planning${flex ? " wave 1" : ""}...\n`));
-            tasks = await planTasks(objective, cwd, plannerModel, workerModel, permissionMode, waveBudget, concurrency, makeProgressLog(), flexNote);
+            tasks = await planTasks(objective, cwd, plannerModel, workerModel, waveBudget, concurrency, makeProgressLog(), flexNote);
             process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}${flex ? chalk.dim(` · wave 1`) : ""}\n\n`);
             planRestore();
             let reviewing = true;
@@ -238,7 +238,7 @@ export async function runPlanPhase(input) {
                         console.log(chalk.cyan("\n  ◆ Re-planning...\n"));
                         process.stdout.write("\x1B[?25l");
                         try {
-                            tasks = await refinePlan(objective, tasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, makeProgressLog());
+                            tasks = await refinePlan(objective, tasks, feedback, cwd, plannerModel, workerModel, budget, concurrency, makeProgressLog());
                             process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
                         }
                         catch (err) {
@@ -257,7 +257,7 @@ export async function runPlanPhase(input) {
                             const plannerEnv = envForModel(plannerModel);
                             for await (const msg of query({
                                 prompt: `You planned these tasks for the objective "${objective}":\n${tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n")}\n\nUser question: ${question}`,
-                                options: { cwd, model: plannerModel, permissionMode, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
+                                options: { cwd, model: plannerModel, permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
                             })) {
                                 if (msg.type === "result" && msg.subtype === "success")
                                     answer = msg.result || "";

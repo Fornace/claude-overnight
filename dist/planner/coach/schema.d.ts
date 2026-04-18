@@ -1,4 +1,3 @@
-export type CoachPermMode = "auto" | "bypassPermissions" | "default";
 export type CoachScope = "bugfix" | "feature-add" | "refactor" | "audit-and-fix" | "migration" | "research-and-implement" | "polish-and-verify";
 export type ChecklistLevel = "blocking" | "warning" | "info";
 export type ChecklistRemediation = "provider:anthropic" | "provider:cursor" | "git:dirty" | "git:branch" | "env:missing" | "port:busy" | "none";
@@ -17,7 +16,6 @@ export interface CoachRecommended {
     fastModel: string | null;
     flex: boolean;
     usageCap: number | null;
-    permissionMode: CoachPermMode;
 }
 export interface CoachResult {
     improvedObjective: string;
@@ -71,10 +69,6 @@ export declare const COACH_SCHEMA: {
                     };
                     usageCap: {
                         type: string[];
-                    };
-                    permissionMode: {
-                        type: string;
-                        enum: string[];
                     };
                 };
             };

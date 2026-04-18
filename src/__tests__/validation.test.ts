@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { Task } from "../core/types.js";
-import type { PermMode } from "../core/types.js";
 
 // ── Inline replica of loadTaskFile validation logic ──
 // The real loadTaskFile is not exported from src/index.ts, so we replicate
@@ -15,14 +14,13 @@ interface FileArgs {
   tasks: Task[];
   concurrency?: number;
   model?: string;
-  permissionMode?: PermMode;
   cwd?: string;
   allowedTools?: string[];
   useWorktrees?: boolean;
 }
 
 const KNOWN_TASK_FILE_KEYS = new Set([
-  "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
+  "tasks", "objective", "concurrency", "cwd", "model", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 
 function validateConcurrency(value: unknown): asserts value is number {
@@ -89,7 +87,6 @@ function loadTaskFile(file: string): FileArgs {
     concurrency: parsed.concurrency,
     model: parsed.model,
     cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
-    permissionMode: parsed.permissionMode,
     allowedTools: parsed.allowedTools,
     useWorktrees: parsed.worktrees,
   };
@@ -178,12 +175,10 @@ describe("loadTaskFile validation", () => {
           tasks: ["go"],
           concurrency: 2,
           model: "haiku",
-          permissionMode: "auto",
           allowedTools: ["Bash", "Read"],
           worktrees: true,
         });
         const result = loadTaskFile(file);
-        assert.strictEqual(result.permissionMode, "auto");
         assert.deepStrictEqual(result.allowedTools, ["Bash", "Read"]);
         assert.strictEqual(result.useWorktrees, true);
       } finally {

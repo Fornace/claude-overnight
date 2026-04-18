@@ -74,7 +74,7 @@ export async function runWaveLoop(host, ctx) {
             // ── Swarm run ──
             const swarm = new Swarm({
                 tasks: host.currentTasks, concurrency: host.concurrency, cwd: ctx.cwd, model: host.workerModel,
-                permissionMode: host.permissionMode, allowedTools: undefined,
+                allowedTools: undefined,
                 useWorktrees: ctx.useWorktrees, mergeStrategy: ctx.waveMerge, agentTimeoutMs: ctx.agentTimeoutMs,
                 usageCap: host.usageCap, allowExtraUsage: ctx.allowExtraUsage, extraUsageBudget: ctx.extraUsageBudget,
                 baseCostUsd: host.accCost, envForModel: ctx.envForModel, cursorProxy: ctx.cursorProxy,
@@ -138,8 +138,6 @@ export async function runWaveLoop(host, ctx) {
                     host.plannerModel = host.liveConfig.plannerModel;
                 if (host.liveConfig.fastModel !== undefined)
                     host.fastModel = host.liveConfig.fastModel;
-                if (host.liveConfig.permissionMode)
-                    host.permissionMode = host.liveConfig.permissionMode;
                 host.concurrency = host.liveConfig.concurrency;
                 host.liveConfig.dirty = false;
             }
@@ -268,7 +266,7 @@ export async function runWaveLoop(host, ctx) {
             if (ctx.flex && host.remaining > 0 && !swarm.aborted && !swarm.cappedOut && host.waveNum > 0) {
                 ctx.display.appendSteeringEvent(`Review: scanning wave ${host.waveNum + 1} diff\u2026`);
                 const reviewResult = await runPostWaveReview({
-                    cwd: ctx.cwd, plannerModel: host.plannerModel, permissionMode: host.permissionMode, concurrency: host.concurrency,
+                    cwd: ctx.cwd, plannerModel: host.plannerModel, concurrency: host.concurrency,
                     remaining: host.remaining, usageCap: host.usageCap, allowExtraUsage: ctx.allowExtraUsage,
                     extraUsageBudget: ctx.extraUsageBudget, baseCostUsd: host.accCost,
                     envForModel: ctx.envForModel, mergeStrategy: ctx.waveMerge, useWorktrees: ctx.useWorktrees,
@@ -371,7 +369,7 @@ function handleZeroWorkRetry(swarm, host, ctx) {
     });
     const retrySwarm = new Swarm({
         tasks: retryTasks, concurrency: Math.min(host.concurrency, retryTasks.length), cwd: ctx.cwd, model: host.workerModel,
-        permissionMode: host.permissionMode, allowedTools: undefined, useWorktrees: ctx.useWorktrees, mergeStrategy: ctx.waveMerge,
+        allowedTools: undefined, useWorktrees: ctx.useWorktrees, mergeStrategy: ctx.waveMerge,
         agentTimeoutMs: ctx.agentTimeoutMs, usageCap: host.usageCap, allowExtraUsage: ctx.allowExtraUsage,
         extraUsageBudget: ctx.extraUsageBudget, baseCostUsd: host.accCost, envForModel: ctx.envForModel,
         cursorProxy: ctx.cursorProxy,
@@ -426,7 +424,7 @@ function buildRunState(host, phase, currentTasks) {
     return {
         remaining: host.remaining, phase, currentTasks,
         workerModel: host.workerModel, plannerModel: host.plannerModel, fastModel: host.fastModel,
-        concurrency: host.concurrency, permissionMode: host.permissionMode,
+        concurrency: host.concurrency,
         usageCap: host.usageCap, flex: true, waveNum: host.waveNum,
         accCost: host.accCost, accCompleted: host.accCompleted, accFailed: host.accFailed,
         accIn: host.accIn, accOut: host.accOut, accTools: host.accTools,

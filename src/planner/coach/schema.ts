@@ -1,4 +1,3 @@
-export type CoachPermMode = "auto" | "bypassPermissions" | "default";
 export type CoachScope =
   | "bugfix" | "feature-add" | "refactor" | "audit-and-fix"
   | "migration" | "research-and-implement" | "polish-and-verify";
@@ -25,7 +24,6 @@ export interface CoachRecommended {
   fastModel: string | null;
   flex: boolean;
   usageCap: number | null;
-  permissionMode: CoachPermMode;
 }
 
 export interface CoachResult {
@@ -49,7 +47,7 @@ export const COACH_SCHEMA = {
       recommended: {
         type: "object",
         additionalProperties: false,
-        required: ["budget", "concurrency", "plannerModel", "workerModel", "fastModel", "flex", "usageCap", "permissionMode"],
+        required: ["budget", "concurrency", "plannerModel", "workerModel", "fastModel", "flex", "usageCap"],
         properties: {
           budget: { type: "integer", minimum: 1 },
           concurrency: { type: "integer", minimum: 1, maximum: 12 },
@@ -58,7 +56,6 @@ export const COACH_SCHEMA = {
           fastModel: { type: ["string", "null"] },
           flex: { type: "boolean" },
           usageCap: { type: ["number", "null"] },
-          permissionMode: { type: "string", enum: ["auto", "bypassPermissions", "default"] },
         },
       },
       checklist: {
@@ -98,8 +95,6 @@ export function validateCoachOutput(raw: unknown): CoachResult | null {
   const fastModel = rec.fastModel == null ? null : (typeof rec.fastModel === "string" ? rec.fastModel : null);
   if (typeof rec.flex !== "boolean") return null;
   const usageCap = rec.usageCap == null ? null : (typeof rec.usageCap === "number" && rec.usageCap > 0 && rec.usageCap <= 1 ? rec.usageCap : null);
-  const perms: CoachPermMode[] = ["auto", "bypassPermissions", "default"];
-  if (typeof rec.permissionMode !== "string" || !perms.includes(rec.permissionMode as CoachPermMode)) return null;
 
   const rawChecklist = Array.isArray(r.checklist) ? r.checklist : [];
   const checklist: ChecklistItem[] = [];
@@ -127,7 +122,6 @@ export function validateCoachOutput(raw: unknown): CoachResult | null {
       fastModel,
       flex: rec.flex,
       usageCap,
-      permissionMode: rec.permissionMode as CoachPermMode,
     },
     checklist,
   };

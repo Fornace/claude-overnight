@@ -26,7 +26,7 @@ function makeRun(id) {
 function baseState(phase) {
     return {
         id: "r", objective: "do the thing", budget: 10, remaining: 10,
-        workerModel: "opus", plannerModel: "opus", concurrency: 2, permissionMode: "auto",
+        workerModel: "opus", plannerModel: "opus", concurrency: 2,
         flex: true, useWorktrees: true, mergeStrategy: "yolo",
         waveNum: 0, currentTasks: [],
         accCost: 0, accCompleted: 0, accFailed: 0,

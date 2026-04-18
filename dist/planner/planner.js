@@ -153,7 +153,7 @@ Respond with ONLY a JSON object (no markdown fences):
 }`;
 }
 // ── Planning functions ──
-export async function planTasks(objective, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, onLog, flexNote, outFile, transcriptName = "plan") {
+export async function planTasks(objective, cwd, plannerModel, workerModel, budget, concurrency, onLog, flexNote, outFile, transcriptName = "plan") {
     onLog("Analyzing codebase...");
     const turn = createTurn("plan", "Plan", "plan-0", plannerModel);
     beginTurn(turn);
@@ -161,7 +161,7 @@ export async function planTasks(objective, cwd, plannerModel, workerModel, permi
     const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
     let resultText;
     try {
-        resultText = await runPlannerQuery(prompt + fileInstruction, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 40,
+        resultText = await runPlannerQuery(prompt + fileInstruction, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 40,
             tools: ["Read", "Glob", "Grep", "Write"], turnId: turn.id }, onLog);
     }
     catch (err) {
@@ -175,7 +175,7 @@ export async function planTasks(objective, cwd, plannerModel, workerModel, permi
     try {
         const parsed = await extractTaskJson(resultText, async () => {
             onLog("Retrying...");
-            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15, turnId: turn.id }, onLog);
+            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15, turnId: turn.id }, onLog);
         }, onLog, outFile);
         tasks = (parsed.tasks || []).map((t, i) => ({
             id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
@@ -192,7 +192,7 @@ export async function planTasks(objective, cwd, plannerModel, workerModel, permi
     onLog(`${tasks.length} tasks`);
     return tasks;
 }
-export async function identifyThemes(objective, count, cwd, model, permissionMode, onLog = () => { }, transcriptName = "themes") {
+export async function identifyThemes(objective, count, cwd, model, onLog = () => { }, transcriptName = "themes") {
     const turn = createTurn("identify-themes", `Themes (${count})`, "themes-0", model);
     beginTurn(turn);
     try {
@@ -204,7 +204,7 @@ Then pick ${count} angles that carve up THIS specific codebase orthogonally. Pre
 
 Objective: ${objective}
 
-Return ONLY a JSON object: {"themes": ["angle description", ...]}`, { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id }, onLog);
+Return ONLY a JSON object: {"themes": ["angle description", ...]}`, { cwd, model, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id }, onLog);
         const parsed = attemptJsonParse(resultText);
         endTurn(turn, "done");
         if (parsed?.themes && Array.isArray(parsed.themes))
@@ -251,7 +251,7 @@ Be thorough  -- your findings drive the execution plan.`,
         model: plannerModel,
     }));
 }
-export async function orchestrate(objective, designDocs, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, onLog, flexNote, outFile, transcriptName = "orchestrate") {
+export async function orchestrate(objective, designDocs, cwd, plannerModel, workerModel, budget, concurrency, onLog, flexNote, outFile, transcriptName = "orchestrate") {
     const constraint = contextConstraintNote(workerModel);
     const flexLine = flexNote ? `\n\n${flexNote}` : "";
     const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
@@ -283,7 +283,7 @@ Respond with ONLY a JSON object (no markdown fences):
     beginTurn(turn);
     let resultText;
     try {
-        resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 25,
+        resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 25,
             tools: ["Write"], turnId: turn.id }, onLog);
     }
     catch (err) {
@@ -297,7 +297,7 @@ Respond with ONLY a JSON object (no markdown fences):
     try {
         const parsed = await extractTaskJson(resultText, async () => {
             onLog("Retrying...");
-            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10, turnId: turn.id }, onLog);
+            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10, turnId: turn.id }, onLog);
         }, onLog, outFile);
         tasks = (parsed.tasks || []).map((t, i) => ({
             id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
@@ -314,7 +314,7 @@ Respond with ONLY a JSON object (no markdown fences):
     onLog(`${tasks.length} tasks`);
     return tasks;
 }
-export async function refinePlan(objective, previousTasks, feedback, cwd, plannerModel, workerModel, permissionMode, budget, concurrency, onLog, transcriptName = "refine") {
+export async function refinePlan(objective, previousTasks, feedback, cwd, plannerModel, workerModel, budget, concurrency, onLog, transcriptName = "refine") {
     onLog("Refining plan...");
     const turn = createTurn("plan-refine", "Refine plan", "refine-0", plannerModel);
     beginTurn(turn);
@@ -341,7 +341,7 @@ Respond with ONLY a JSON object (no markdown):
 {"tasks":[{"prompt":"..."}]}`;
     let resultText;
     try {
-        resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15, turnId: turn.id }, onLog);
+        resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15, turnId: turn.id }, onLog);
     }
     catch (err) {
         endTurn(turn, "error");
@@ -351,7 +351,7 @@ Respond with ONLY a JSON object (no markdown):
     try {
         const parsed = await extractTaskJson(resultText, async () => {
             onLog("Retrying...");
-            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8, turnId: turn.id }, onLog);
+            return runPlannerQuery(`Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8, turnId: turn.id }, onLog);
         }, onLog);
         tasks = (parsed.tasks || []).map((t, i) => ({
             id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",

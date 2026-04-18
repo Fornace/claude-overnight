@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 const KNOWN_TASK_FILE_KEYS = new Set([
-    "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
+    "tasks", "objective", "concurrency", "cwd", "model", "allowedTools", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 function validateConcurrency(value) {
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
@@ -66,7 +66,6 @@ function loadTaskFile(file) {
         concurrency: parsed.concurrency,
         model: parsed.model,
         cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
-        permissionMode: parsed.permissionMode,
         allowedTools: parsed.allowedTools,
         useWorktrees: parsed.worktrees,
     };
@@ -148,12 +147,10 @@ describe("loadTaskFile validation", () => {
                     tasks: ["go"],
                     concurrency: 2,
                     model: "haiku",
-                    permissionMode: "auto",
                     allowedTools: ["Bash", "Read"],
                     worktrees: true,
                 });
                 const result = loadTaskFile(file);
-                assert.strictEqual(result.permissionMode, "auto");
                 assert.deepStrictEqual(result.allowedTools, ["Bash", "Read"]);
                 assert.strictEqual(result.useWorktrees, true);
             }

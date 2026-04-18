@@ -1,4 +1,4 @@
-import type { Task, PermMode, SteerResult, RunMemory, WaveSummary } from "../core/types.js";
+import type { Task, SteerResult, RunMemory, WaveSummary } from "../core/types.js";
 import { runPlannerQuery, attemptJsonParse, postProcess, type PlannerLog } from "./query.js";
 import { contextConstraintNote } from "../core/models.js";
 import { DESIGN_THINKING } from "./planner.js";
@@ -57,7 +57,6 @@ export async function steerWave(
   plannerModel: string,
   workerModel: string,
   fastModel: string | undefined,
-  permissionMode: PermMode,
   concurrency: number,
   onLog: PlannerLog,
   runMemory?: RunMemory,
@@ -200,7 +199,7 @@ If done: {"done":true,"reasoning":"...","statusUpdate":"...","estimatedSessionsR
   onLog(`Reading codebase  -- wave ${history.length + 1}`, "event");
   const turn = createTurn("steer", `Steer wave ${history.length + 1}`, `steer-${history.length}`, plannerModel);
   beginTurn(turn);
-  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName, turnId: turn.id, maxTurns: 100 }, onLog);
+  const resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, outputFormat: STEER_SCHEMA, transcriptName, turnId: turn.id, maxTurns: 100 }, onLog);
 
   const parsed = await (async () => {
     const first = attemptJsonParse(resultText);
@@ -219,7 +218,7 @@ If done: {"done":true,"reasoning":"...","statusUpdate":"...","estimatedSessionsR
     const snippet = resultText.length > 2000 ? resultText.slice(0, 1000) + "\n...\n" + resultText.slice(-800) : resultText;
     const retryText = await runPlannerQuery(
       `Your previous steering response could not be parsed as JSON. Here is what you returned:\n\n---\n${snippet}\n---\n\nExtract or rewrite the above as ONLY a valid JSON object with this schema: {"done":boolean,"reasoning":"...","statusUpdate":"...","tasks":[{"prompt":"..."}]}\n\nRespond with ONLY the JSON, no markdown fences, no explanation.`,
-      { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName: `${transcriptName}-retry`, turnId: turn.id },
+      { cwd, model: plannerModel, outputFormat: STEER_SCHEMA, transcriptName: `${transcriptName}-retry`, turnId: turn.id },
       onLog,
     );
     const retryParsed = attemptJsonParse(retryText);

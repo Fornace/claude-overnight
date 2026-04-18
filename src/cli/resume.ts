@@ -11,7 +11,7 @@ import { setTranscriptRunDir } from "../core/transcripts.js";
 import { wrap } from "../ui/primitives.js";
 import { makeProgressLog, selectKey } from "./cli.js";
 import { editRunSettings } from "./settings.js";
-import type { PermMode, RunState, MutableRunSettings, Task } from "../core/types.js";
+import type { RunState, MutableRunSettings, Task } from "../core/types.js";
 
 export function countTasksInFile(path: string): number {
   try {
@@ -49,7 +49,6 @@ export async function promptResumeOverrides(
     if (!isNaN(v) && v > 0) { state.extraUsageBudget = v; state.allowExtraUsage = true; }
   }
   if (argv.includes("--allow-extra-usage")) state.allowExtraUsage = true;
-  if (cliFlags.perm) state.permissionMode = cliFlags.perm as PermMode;
 
   if (noTTY) {
     try { saveRunState(runDir, state); } catch {}
@@ -78,7 +77,6 @@ export async function promptResumeOverrides(
     console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
     console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
     console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
-    console.log(`  ${chalk.dim("perms      ")}${chalk.white(state.permissionMode === "bypassPermissions" ? "yolo" : state.permissionMode)}`);
   };
   fmtSummary();
 
@@ -101,7 +99,6 @@ export async function promptResumeOverrides(
     usageCap: state.usageCap,
     allowExtraUsage: state.allowExtraUsage ?? false,
     extraUsageBudget: state.extraUsageBudget,
-    permissionMode: state.permissionMode,
   };
 
   await editRunSettings({
@@ -269,7 +266,7 @@ export async function detectResume(input: DetectResumeInput): Promise<DetectResu
             try {
               const orchTasks = await orchestrate(
                 resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel,
-                resumeState.permissionMode, orchBudget, resumeState.concurrency, makeProgressLog(),
+                orchBudget, resumeState.concurrency, makeProgressLog(),
                 flexNote, join(resumeRunDir, "tasks.json"), "orchestrate-resume",
               );
               resumeState.currentTasks = orchTasks;

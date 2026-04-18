@@ -3,7 +3,7 @@ import { NudgeError, extractToolTarget, sumUsageTokens } from "../core/types.js"
 import { writeTranscriptEvent } from "../core/transcripts.js";
 import { getTurn, updateTurn } from "../core/turns.js";
 import { isRateLimitError, throttlePlanner, addPlannerCost, recordPeakContext, resetPlannerRateLimit, setContextTokens, applyRateLimitEvent, getPlannerRateLimitInfo, } from "./throttle.js";
-import { cursorProxyRateLimiter } from "../core/rate-limiter.js";
+import { cursorProxyRateLimiter, sdkQueryRateLimiter, apiEndpointLimiter } from "../core/rate-limiter.js";
 export { getTotalPlannerCost, getPeakPlannerContext, getPlannerRateLimitInfo, } from "./throttle.js";
 export { attemptJsonParse, extractTaskJson } from "./json.js";
 export { postProcess } from "./postprocess.js";
@@ -41,9 +41,15 @@ async function runViaDirectFetch(prompt, opts, onLog) {
     const authToken = env?.ANTHROPIC_AUTH_TOKEN ?? "";
     const MAX_RETRIES = 3;
     const BACKOFF = [30_000, 60_000, 120_000];
-    const rl = cursorProxyRateLimiter();
+    const rl = cursorProxyRateLimiter;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        await rl.waitIfNeeded();
+        // Hard gate: fail fast if the endpoint budget is exhausted (triggers retry flow).
+        apiEndpointLimiter.assertCanRequest();
+        // Proactive gate: wait if the sliding window is full before hitting the API.
+        // This prevents burning retries on predictable 429s.
+        const waited = await rl.waitIfNeeded();
+        if (waited > 0)
+            onLog(`Cursor proxy rate gate — waited ${Math.round(waited / 1000)}s`, "event");
         const res = await fetch(`${baseUrl}/v1/messages`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
@@ -58,6 +64,7 @@ async function runViaDirectFetch(prompt, opts, onLog) {
         if (!res.ok)
             throw new Error(`Cursor proxy ${res.status}: ${(await res.text().catch(() => ""))}`);
         rl.record();
+        apiEndpointLimiter.record();
         const data = await res.json();
         return data.content?.[0]?.text ?? "";
     }
@@ -103,6 +110,7 @@ export async function runPlannerQuery(prompt, opts, onLog) {
 }
 async function runPlannerQueryOnce(prompt, opts, onLog) {
     resetPlannerRateLimit(opts.model);
+    const rl = sdkQueryRateLimiter;
     let resultText = "";
     let structuredOutput;
     const startedAt = Date.now();
@@ -119,6 +127,7 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
             promptBytes: prompt.length,
         });
     }
+    await rl.waitIfNeeded();
     const pq = query({
         prompt,
         options: {
@@ -126,8 +135,8 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
             model: opts.model,
             tools: opts.tools ?? DEFAULT_TOOLS,
             allowedTools: opts.tools ?? DEFAULT_TOOLS,
-            permissionMode: opts.permissionMode,
-            ...(opts.permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
+            permissionMode: "bypassPermissions",
+            allowDangerouslySkipPermissions: true,
             persistSession: true,
             includePartialMessages: true,
             maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
@@ -403,6 +412,7 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
     finally {
         clearTimeout(timer);
         clearInterval(ticker);
+        rl.record();
     }
     if (structuredOutput != null && typeof structuredOutput === "object")
         return JSON.stringify(structuredOutput);

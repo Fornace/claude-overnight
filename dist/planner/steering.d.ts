@@ -1,4 +1,4 @@
-import type { PermMode, SteerResult, RunMemory, WaveSummary } from "../core/types.js";
+import type { SteerResult, RunMemory, WaveSummary } from "../core/types.js";
 import { type PlannerLog } from "./query.js";
 export declare const STEER_SCHEMA: {
     type: "json_schema";
@@ -49,4 +49,4 @@ export declare const STEER_SCHEMA: {
         required: string[];
     };
 };
-export declare function steerWave(objective: string, history: WaveSummary[], remainingBudget: number, cwd: string, plannerModel: string, workerModel: string, fastModel: string | undefined, permissionMode: PermMode, concurrency: number, onLog: PlannerLog, runMemory?: RunMemory, transcriptName?: string): Promise<SteerResult>;
+export declare function steerWave(objective: string, history: WaveSummary[], remainingBudget: number, cwd: string, plannerModel: string, workerModel: string, fastModel: string | undefined, concurrency: number, onLog: PlannerLog, runMemory?: RunMemory, transcriptName?: string): Promise<SteerResult>;

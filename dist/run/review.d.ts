@@ -1,9 +1,8 @@
-import type { PermMode, MergeStrategy } from "../core/types.js";
+import type { MergeStrategy } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
 export interface ReviewOpts {
     cwd: string;
     plannerModel: string;
-    permissionMode: PermMode;
     concurrency: number;
     remaining: number;
     usageCap: number | undefined;

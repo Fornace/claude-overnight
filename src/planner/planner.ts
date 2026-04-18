@@ -1,5 +1,5 @@
 import { readFileSync } from "fs";
-import type { Task, PermMode } from "../core/types.js";
+import type { Task } from "../core/types.js";
 import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./query.js";
 import { contextConstraintNote } from "../core/models.js";
 import { createTurn, beginTurn, endTurn } from "../core/turns.js";
@@ -164,7 +164,7 @@ Respond with ONLY a JSON object (no markdown fences):
 
 export async function planTasks(
   objective: string, cwd: string, plannerModel: string, workerModel: string,
-  permissionMode: PermMode, budget: number | undefined, concurrency: number,
+  budget: number | undefined, concurrency: number,
   onLog: (text: string) => void, flexNote?: string, outFile?: string,
   transcriptName: string = "plan",
 ): Promise<Task[]> {
@@ -177,7 +177,7 @@ export async function planTasks(
   try {
     resultText = await runPlannerQuery(
       prompt + fileInstruction,
-      { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 40,
+      { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 40,
         tools: ["Read", "Glob", "Grep", "Write"], turnId: turn.id }, onLog,
     );
   } catch (err: any) {
@@ -192,7 +192,7 @@ export async function planTasks(
       onLog("Retrying...");
       return runPlannerQuery(
         `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-        { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15, turnId: turn.id }, onLog,
+        { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15, turnId: turn.id }, onLog,
       );
     }, onLog, outFile);
     tasks = (parsed.tasks || []).map((t: any, i: number) => ({
@@ -207,7 +207,7 @@ export async function planTasks(
 }
 
 export async function identifyThemes(
-  objective: string, count: number, cwd: string, model: string, permissionMode: PermMode,
+  objective: string, count: number, cwd: string, model: string,
   onLog: (text: string) => void = () => {},
   transcriptName: string = "themes",
 ): Promise<string[]> {
@@ -224,7 +224,7 @@ Then pick ${count} angles that carve up THIS specific codebase orthogonally. Pre
 Objective: ${objective}
 
 Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
-      { cwd, model, permissionMode, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id }, onLog,
+      { cwd, model, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id }, onLog,
     );
     const parsed = attemptJsonParse(resultText);
     endTurn(turn, "done");
@@ -273,7 +273,7 @@ Be thorough  -- your findings drive the execution plan.`,
 
 export async function orchestrate(
   objective: string, designDocs: string, cwd: string, plannerModel: string, workerModel: string,
-  permissionMode: PermMode, budget: number, concurrency: number,
+  budget: number, concurrency: number,
   onLog: (text: string) => void, flexNote?: string, outFile?: string,
   transcriptName: string = "orchestrate",
 ): Promise<Task[]> {
@@ -310,7 +310,7 @@ Respond with ONLY a JSON object (no markdown fences):
   beginTurn(turn);
   let resultText: string;
   try {
-    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 25,
+    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 25,
       tools: ["Write"], turnId: turn.id }, onLog);
   } catch (err: any) {
     const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
@@ -324,7 +324,7 @@ Respond with ONLY a JSON object (no markdown fences):
       onLog("Retrying...");
       return runPlannerQuery(
         `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-        { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10, turnId: turn.id }, onLog,
+        { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10, turnId: turn.id }, onLog,
       );
     }, onLog, outFile);
     tasks = (parsed.tasks || []).map((t: any, i: number) => ({
@@ -340,7 +340,7 @@ Respond with ONLY a JSON object (no markdown fences):
 
 export async function refinePlan(
   objective: string, previousTasks: Task[], feedback: string, cwd: string,
-  plannerModel: string, workerModel: string, permissionMode: PermMode,
+  plannerModel: string, workerModel: string,
   budget: number | undefined, concurrency: number, onLog: (text: string) => void,
   transcriptName: string = "refine",
 ): Promise<Task[]> {
@@ -371,7 +371,7 @@ Respond with ONLY a JSON object (no markdown):
 
   let resultText: string;
   try {
-    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15, turnId: turn.id }, onLog);
+    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15, turnId: turn.id }, onLog);
   } catch (err) { endTurn(turn, "error"); throw err; }
   let tasks: Task[];
   try {
@@ -379,7 +379,7 @@ Respond with ONLY a JSON object (no markdown):
       onLog("Retrying...");
       return runPlannerQuery(
         `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
-        { cwd, model: plannerModel, permissionMode, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8, turnId: turn.id }, onLog,
+        { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8, turnId: turn.id }, onLog,
       );
     }, onLog);
     tasks = (parsed.tasks || []).map((t: any, i: number) => ({

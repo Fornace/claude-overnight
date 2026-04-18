@@ -1,6 +1,18 @@
 // Sliding-window rate limiter for outbound API calls.
 // Prevents hammering the Anthropic API / Cursor proxy by enforcing a minimum
 // interval between requests and tracking recent request volume.
+//
+// Shared singleton instances are exported so concurrent workers enforce
+// a single global limit rather than each having their own independent window.
+
+/** Thrown when an API call hits the hard rate-limit gate. Callers should
+ *  catch this and trigger their standard retry/backoff flow. */
+export class RateLimitError extends Error {
+  constructor(message = "rate limit exceeded") {
+    super(message);
+    this.name = "RateLimitError";
+  }
+}
 
 export interface RateLimiterConfig {
   maxRequests: number;
@@ -59,6 +71,20 @@ export class RateLimiter {
     this.lastRequestAt = 0;
   }
 
+  /** Hard gate: throws RateLimitError if the window is full. Unlike
+   *  `waitIfNeeded()` which blocks, this fails fast so callers can trigger
+   *  their retry/backoff flow. */
+  assertCanRequest(): void {
+    this.evict();
+    if (this.timestamps.length >= this.maxRequests) {
+      const resetMs = this.timestamps[0] + this.windowMs - Date.now();
+      throw new RateLimitError(`rate limit: ${this.timestamps.length}/${this.maxRequests} in window, resets in ${Math.ceil(resetMs / 1000)}s`);
+    }
+    if ((Date.now() - this.lastRequestAt) < this.minIntervalMs) {
+      throw new RateLimitError(`rate limit: min interval not elapsed`);
+    }
+  }
+
   private evict(): void {
     const cutoff = Date.now() - this.windowMs;
     let i = 0;
@@ -67,10 +93,27 @@ export class RateLimiter {
   }
 }
 
-export function cursorProxyRateLimiter(): RateLimiter {
-  return new RateLimiter({ maxRequests: 4, windowMs: 10_000 });
-}
+// ── Shared singleton instances ──
+// All callers share the same instance so concurrent workers enforce a
+// single global rate limit rather than multiplying the allowed rate.
 
-export function sdkQueryRateLimiter(): RateLimiter {
-  return new RateLimiter({ maxRequests: 2, windowMs: 5_000 });
+const _sdkQueryLimiter = new RateLimiter({ maxRequests: 2, windowMs: 5_000 });
+const _cursorProxyLimiter = new RateLimiter({ maxRequests: 4, windowMs: 10_000 });
+const _apiEndpointLimiter = new RateLimiter({ maxRequests: 6, windowMs: 15_000, minIntervalMs: 1_000 });
+
+/** Shared rate limiter for SDK query calls — enforced globally across all workers. */
+export const sdkQueryRateLimiter: RateLimiter = _sdkQueryLimiter;
+
+/** Shared rate limiter for Cursor proxy direct fetches — enforced globally. */
+export const cursorProxyRateLimiter: RateLimiter = _cursorProxyLimiter;
+
+/** Shared rate limiter for direct API endpoint calls — guards against rapid
+ *  bursts across all HTTP-based API paths (preflight, probes, health checks). */
+export const apiEndpointLimiter: RateLimiter = _apiEndpointLimiter;
+
+/** Reset all rate limiter state (useful for testing or manual recovery). */
+export function resetAllRateLimiters(): void {
+  _sdkQueryLimiter.reset();
+  _cursorProxyLimiter.reset();
+  _apiEndpointLimiter.reset();
 }

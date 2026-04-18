@@ -16,7 +16,6 @@ function validPayload(overrides: Record<string, unknown> = {}) {
       fastModel: null,
       flex: true,
       usageCap: 0.75,
-      permissionMode: "auto",
     },
     checklist: [
       { id: "anthropic-key", level: "info", title: "ANTHROPIC_API_KEY set", detail: "", remediation: "none" },
@@ -69,12 +68,6 @@ describe("validateCoachOutput", () => {
   it("returns null when recommended.concurrency exceeds 12", () => {
     const bad = validPayload();
     (bad as any).recommended.concurrency = 99;
-    assert.equal(validateCoachOutput(bad), null);
-  });
-
-  it("returns null when permissionMode is invalid", () => {
-    const bad = validPayload();
-    (bad as any).recommended.permissionMode = "yolo";
     assert.equal(validateCoachOutput(bad), null);
   });
 

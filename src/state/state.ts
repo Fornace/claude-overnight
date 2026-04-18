@@ -263,7 +263,7 @@ export function backfillOrphanedPlans(rootDir: string, filterCwd: string): numbe
           objective: `(recovered pre-1.11.7 plan · ${taskCount} tasks)`,
           budget: taskCount, remaining: taskCount,
           workerModel: FALLBACK_MODEL, plannerModel: FALLBACK_MODEL,
-          concurrency: 5, permissionMode: "bypassPermissions",
+          concurrency: 5,
           flex: false, useWorktrees: true, mergeStrategy: "yolo",
           allowExtraUsage: false,
           waveNum: 0, currentTasks: [],

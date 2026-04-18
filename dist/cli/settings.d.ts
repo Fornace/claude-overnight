@@ -1,4 +1,4 @@
-import type { MutableRunSettings, PermMode } from "../core/types.js";
+import type { MutableRunSettings } from "../core/types.js";
 interface EditSettingsOptions {
     /** Existing settings to show as current values (resume) or blank defaults. */
     current: MutableRunSettings;
@@ -11,7 +11,6 @@ interface EditSettingsOptions {
         fastModel?: string;
         concurrency?: number;
         usageCap?: number | null;
-        permissionMode?: PermMode;
     };
 }
 /** Interactively edit all mutable run settings. Mutates `options.current` in place. */

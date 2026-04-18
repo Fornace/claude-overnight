@@ -1,4 +1,4 @@
-import type { WaveSummary, PermMode } from "../core/types.js";
+import type { WaveSummary } from "../core/types.js";
 /** Short-lived context the steering view renders around its live log. */
 export interface SteeringContext {
     objective?: string;
@@ -40,8 +40,6 @@ export interface LiveConfig {
     plannerModel?: string;
     /** Fast model for quick verification tasks. */
     fastModel?: string;
-    /** SDK permission mode. Changed mid-run, picked up by next agent dispatch. */
-    permissionMode?: PermMode;
 }
 /** State of an in-flight or recently-completed ask side query. */
 export interface AskState {

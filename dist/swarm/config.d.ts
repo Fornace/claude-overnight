@@ -1,4 +1,4 @@
-import type { Task, MergeStrategy, PermMode } from "../core/types.js";
+import type { Task, MergeStrategy } from "../core/types.js";
 export interface SwarmConfig {
     tasks: Task[];
     concurrency: number;
@@ -6,7 +6,6 @@ export interface SwarmConfig {
     model?: string;
     allowedTools?: string[];
     useWorktrees?: boolean;
-    permissionMode?: PermMode;
     agentTimeoutMs?: number;
     maxRetries?: number;
     mergeStrategy?: MergeStrategy;

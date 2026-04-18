@@ -11,7 +11,7 @@ export const COACH_SCHEMA = {
             recommended: {
                 type: "object",
                 additionalProperties: false,
-                required: ["budget", "concurrency", "plannerModel", "workerModel", "fastModel", "flex", "usageCap", "permissionMode"],
+                required: ["budget", "concurrency", "plannerModel", "workerModel", "fastModel", "flex", "usageCap"],
                 properties: {
                     budget: { type: "integer", minimum: 1 },
                     concurrency: { type: "integer", minimum: 1, maximum: 12 },
@@ -20,7 +20,6 @@ export const COACH_SCHEMA = {
                     fastModel: { type: ["string", "null"] },
                     flex: { type: "boolean" },
                     usageCap: { type: ["number", "null"] },
-                    permissionMode: { type: "string", enum: ["auto", "bypassPermissions", "default"] },
                 },
             },
             checklist: {
@@ -68,9 +67,6 @@ export function validateCoachOutput(raw) {
     if (typeof rec.flex !== "boolean")
         return null;
     const usageCap = rec.usageCap == null ? null : (typeof rec.usageCap === "number" && rec.usageCap > 0 && rec.usageCap <= 1 ? rec.usageCap : null);
-    const perms = ["auto", "bypassPermissions", "default"];
-    if (typeof rec.permissionMode !== "string" || !perms.includes(rec.permissionMode))
-        return null;
     const rawChecklist = Array.isArray(r.checklist) ? r.checklist : [];
     const checklist = [];
     for (const item of rawChecklist) {
@@ -99,7 +95,6 @@ export function validateCoachOutput(raw) {
             fastModel,
             flex: rec.flex,
             usageCap,
-            permissionMode: rec.permissionMode,
         },
         checklist,
     };

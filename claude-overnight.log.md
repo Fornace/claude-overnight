@@ -2055,3 +2055,828 @@
 - **Tasks:** 1 done · **Waves:** 1
 - **Status:** ⊘ stopped
 
+## 2026-04-18T14-47-18
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:47:18 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-47-19
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:47:19 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-46-56
+- **Finished:** 2026-04-18 14:47:29 UTC (33s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-46-57
+- **Finished:** 2026-04-18 14:47:35 UTC (38s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-48-06
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:48:06 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 14:48:54 UTC (47s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 4 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-48-08
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:48:08 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-48-46
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:48:46 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 14:49:17 UTC (31s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-48-46
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:48:46 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 14:49:32 UTC (46s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-49-18
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:49:18 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 14:50:08 UTC (49s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-49-20
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:49:20 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-50-05
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:50:05 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Finished:** 2026-04-18 14:50:47 UTC (42s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 4 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-50-07
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:50:07 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-50-46
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:50:46 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-50-50
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:50:50 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-51-31
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:51:31 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-51-35
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:51:35 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-52-14
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:52:14 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 14:52:38 UTC (24s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T14-52-31
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:52:31 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T14-53-11
+- **Objective:** (none)
+- **Started:** 2026-04-18 14:53:11 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-16-33
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:16:33 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-17-16
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:17:16 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-17-25
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:17:25 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-18-01
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:18:01 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T13-25-58
+- **Finished:** 2026-04-18 15:20:40 UTC (1h 54m)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 2
+- **Status:** ⊘ stopped
+
+## 2026-04-18T15-46-26
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:46:26 UTC
+- **Model:** default · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-46-34
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:46:34 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:46:44 UTC (10s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-46-42
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:46:42 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-46-51
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:46:51 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:47:02 UTC (11s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-47-00
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:47:00 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-47-09
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:47:09 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-47-19
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:47:19 UTC
+- **Model:** default · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:47:32 UTC (13s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-47-29
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:47:29 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-47-40
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:47:40 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:47:50 UTC (10s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-47-50
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:47:50 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-48-04
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:48:04 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:48:19 UTC (15s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-48-18
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:48:18 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-48-32
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:48:32 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-48-44
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:48:44 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:48:57 UTC (13s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-48-53
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:48:53 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:49:14 UTC (20s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-49-03
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:49:03 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:49:25 UTC (22s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-49-07
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:49:07 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:49:37 UTC (30s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-49-28
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:49:28 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:49:49 UTC (22s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-49-30
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:49:30 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:50:02 UTC (32s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-49-52
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:49:52 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-49-55
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:49:55 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-50-16
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:50:16 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:50:25 UTC (9s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-50-18
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:50:18 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Finished:** 2026-04-18 15:50:38 UTC (20s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 4 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-50-29
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:50:29 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-50-31
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:50:31 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:51:00 UTC (29s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-50-51
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:50:51 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-50-54
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:50:54 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:51:23 UTC (29s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-51-07
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:51:07 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:51:33 UTC (26s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-51-15
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:51:15 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:51:45 UTC (30s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-51-28
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:51:28 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:52:00 UTC (32s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-51-37
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:51:37 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-51-53
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:51:53 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-52-04
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:52:04 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:52:24 UTC (21s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-53-43
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:53:43 UTC
+- **Model:** default · **Budget:** 4 · **Flex:** no
+- **Finished:** 2026-04-18 15:53:56 UTC (13s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 4 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-53-51
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:53:51 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:54:11 UTC (20s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-53-51
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:53:51 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-54-07
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:54:07 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-54-23
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:54:23 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:54:36 UTC (13s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-54-23
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:54:23 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:54:38 UTC (15s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-54-33
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:54:33 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:55:11 UTC (38s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-54-34
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:54:34 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-54-59
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:54:59 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:55:26 UTC (27s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-55-03
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:55:03 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:55:39 UTC (36s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-55-30
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:55:30 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:55:50 UTC (21s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-55-32
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:55:32 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-55-54
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:55:54 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-55-56
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:55:56 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-56-14
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:56:14 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-56-19
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:56:19 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Finished:** 2026-04-18 15:56:41 UTC (22s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-56-19
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:56:19 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:56:43 UTC (25s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 4 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-56-33
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:56:33 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:57:03 UTC (29s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-56-33
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:56:33 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:57:14 UTC (41s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-57-05
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:57:05 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:57:28 UTC (23s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-57-07
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:57:07 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-57-31
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:57:31 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:57:54 UTC (23s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-57-46
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:57:46 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 15:58:02 UTC (16s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-57-49
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:57:49 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-59-38
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:59:38 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T15-59-43
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:59:43 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Finished:** 2026-04-18 15:59:58 UTC (15s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 4 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T15-59-52
+- **Objective:** (none)
+- **Started:** 2026-04-18 15:59:52 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-00-08
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:00:08 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-00-22
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:00:22 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:00:34 UTC (11s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-00-33
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:00:33 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-00-44
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:00:44 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:00:58 UTC (14s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-00-57
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:00:57 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-01-09
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:01:09 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:01:26 UTC (17s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ⊘ capped
+
+## 2026-04-18T16-01-23
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:01:23 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-01-52
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:01:52 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:02:06 UTC (14s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-02-02
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:02:02 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:02:24 UTC (21s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-02-17
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:02:17 UTC
+- **Model:** qwen3.6-plus · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-02-31
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:02:31 UTC
+- **Model:** qwen3.6-plus · **Budget:** 4 · **Flex:** no
+- **Finished:** 2026-04-18 16:02:48 UTC (17s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 4 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-06-24
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:06:24 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-06-42
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:06:42 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:06:56 UTC (15s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-06-51
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:06:51 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:07:14 UTC (23s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-07-07
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:07:07 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-07-22
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:07:22 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:07:42 UTC (20s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-07-35
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:07:35 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-07-57
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:07:57 UTC
+- **Model:** auto · **Budget:** 4 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-08-43
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:08:43 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:09:01 UTC (18s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-08-55
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:08:55 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-09-13
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:09:13 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:09:32 UTC (19s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-09-28
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:09:28 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-09-45
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:09:45 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Finished:** 2026-04-18 16:10:13 UTC (29s)
+- **Cost:** $0.00
+- **Tasks:** 0 done / 2 failed · **Waves:** 1
+- **Status:** ✓ done
+
+## 2026-04-18T16-10-17
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:10:17 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-10-39
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:10:39 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-11-38
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:11:38 UTC
+- **Model:** auto · **Budget:** 2 · **Flex:** no
+- **Status:** running
+
+## 2026-04-18T16-14-41
+- **Objective:** (none)
+- **Started:** 2026-04-18 16:14:41 UTC
+- **Model:** auto · **Budget:** 1 · **Flex:** no
+- **Status:** running
+

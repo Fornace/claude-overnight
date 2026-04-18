@@ -15,6 +15,7 @@ import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader } from "./config.js";
 import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
 import { handleMsg } from "./message-handler.js";
+import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
 export async function runAgent(host, task) {
     // Guard: if pause was triggered between dispatch and here, re-queue immediately.
     // The worker already shifted this task, so unshift puts it back for resume.
@@ -75,6 +76,7 @@ export async function runAgent(host, task) {
     host.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
     const maxRetries = host.config.maxRetries ?? 2;
     const inactivityMs = host.config.agentTimeoutMs ?? 15 * 60 * 1000;
+    const rl = sdkQueryRateLimiter;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (attempt > 0) {
             const backoffMs = Math.min(30000, 1000 * 2 ** (attempt - 1)) * (0.5 + Math.random());
@@ -85,7 +87,6 @@ export async function runAgent(host, task) {
             agent.finishedAt = undefined;
         }
         try {
-            const perm = host._permMode ?? "auto";
             let resumeSessionId = task.resumeSessionId;
             let resumePrompt = "Continue. Complete the task.";
             const runOnce = async (isResume) => {
@@ -99,11 +100,12 @@ export async function runAgent(host, task) {
                         : `${preamble}${task.prompt}${postBlock}`;
                 const effectiveModel = task.model || host.config.model;
                 const envOverride = withCursorWorkspaceHeader(host.config.envForModel?.(effectiveModel), agentCwd);
+                await rl.waitIfNeeded();
                 const agentQuery = query({
                     prompt: agentPrompt,
                     options: {
-                        cwd: agentCwd, model: effectiveModel, permissionMode: perm,
-                        ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
+                        cwd: agentCwd, model: effectiveModel,
+                        permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
                         allowedTools: host.config.allowedTools, includePartialMessages: true, persistSession: true,
                         ...(isResume && resumeSessionId && { resume: resumeSessionId }),
                         ...(envOverride && { env: envOverride }),
@@ -159,6 +161,7 @@ export async function runAgent(host, task) {
                         agentQuery.close();
                     }
                     catch { }
+                    rl.record();
                 }
             };
             // Helper: re-queue this task with resume info when paused mid-turn.
@@ -303,8 +306,10 @@ Is this partial work coherent enough to land? Consider:
 - Would merging this improve or degrade the codebase?
 
 Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
+        const rl = sdkQueryRateLimiter;
         let eq;
         try {
+            await rl.waitIfNeeded();
             eq = query({
                 prompt,
                 options: {
@@ -353,6 +358,7 @@ Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
             return { keep: true, reason: "eval API error, keeping by default" };
         }
         finally {
+            rl.record();
             if (eq) {
                 host.activeQueries.delete(eq);
                 try {

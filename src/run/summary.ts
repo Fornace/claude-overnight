@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import chalk from "chalk";
-import type { BranchRecord, PermMode, WaveSummary } from "../core/types.js";
+import type { BranchRecord, WaveSummary } from "../core/types.js";
 import { getPeakPlannerContext, runPlannerQuery } from "../planner/query.js";
 import { fmtTokens } from "../ui/primitives.js";
 import { getModelCapability } from "../core/models.js";
@@ -14,14 +14,13 @@ export interface FinalNarrativeDeps {
   previousKnowledge: string;
   workerModel: string;
   fastModel?: string;
-  permissionMode: PermMode;
   waveHistory: WaveSummary[];
 }
 
 /** Generate a longer narrative summary at run end. Awaited (not fire-and-forget)
  *  because the caller wants the text inline in the final status block. */
 export async function generateFinalNarrative(deps: FinalNarrativeDeps, phase: string): Promise<string> {
-  const { cwd, runDir, objective, previousKnowledge, workerModel, fastModel, permissionMode, waveHistory } = deps;
+  const { cwd, runDir, objective, previousKnowledge, workerModel, fastModel, waveHistory } = deps;
   const debriefModel = fastModel || workerModel;
   const memory = readRunMemory(runDir, previousKnowledge || undefined);
   const cap = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
@@ -35,7 +34,7 @@ export async function generateFinalNarrative(deps: FinalNarrativeDeps, phase: st
   ].filter(Boolean).join("\n\n");
   const prompt = `The autonomous run just ended. Final phase: ${phase}.\n\n${ctx}\n\nWrite 3–5 plain sentences for the user: what was accomplished, what's still open, and any follow-ups they should do manually. No bullet points, no preamble, no markdown headers.`;
   try {
-    const text = await runPlannerQuery(prompt, { cwd, model: debriefModel, permissionMode }, () => {});
+    const text = await runPlannerQuery(prompt, { cwd, model: debriefModel }, () => {});
     return text.trim();
   } catch {
     return "";

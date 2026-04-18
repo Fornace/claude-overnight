@@ -6,11 +6,10 @@
 // commits a typed value back into liveConfig + swarm.
 
 import type { Swarm } from "../swarm/swarm.js";
-import type { PermMode } from "../core/types.js";
 import type { LiveConfig } from "./types.js";
 
 export const SETTINGS_FIELDS = [
-  "budget", "cap", "conc", "extra", "worker", "planner", "fast", "perms", "pause",
+  "budget", "cap", "conc", "extra", "worker", "planner", "fast", "pause",
 ] as const;
 export type SettingsField = typeof SETTINGS_FIELDS[number];
 
@@ -27,7 +26,6 @@ export const SETTINGS_LABELS: Record<SettingsField, string> = {
   worker: "Worker model (for agent tasks)",
   planner: "Planner model (steering/thinking)",
   fast: "Fast model (optional, empty=skip)",
-  perms: "Permission mode (auto/yolo/prompt)",
   pause: "Pause/resume workers",
 };
 
@@ -41,10 +39,6 @@ export function readSettingValue(field: SettingsField, lc: LiveConfig | undefine
     case "worker": return lc?.workerModel ?? swarm?.model ?? "—";
     case "planner": return lc?.plannerModel ?? "—";
     case "fast": return lc?.fastModel ?? "(none)";
-    case "perms": {
-      const p = lc?.permissionMode ?? "auto";
-      return p === "bypassPermissions" ? "yolo" : p;
-    }
     case "pause": return swarm?.paused ? "paused" : "running";
   }
 }
@@ -114,16 +108,6 @@ export function applySettingEdit(
     case "fast": {
       lc.fastModel = raw || undefined;
       lc.dirty = true;
-      return;
-    }
-    case "perms": {
-      if (!raw) return;
-      const m = raw.toLowerCase();
-      const mode: PermMode = m.startsWith("yolo") || m.startsWith("bypass") ? "bypassPermissions"
-        : m.startsWith("prompt") || m === "default" ? "default" : "auto";
-      lc.permissionMode = mode;
-      lc.dirty = true;
-      swarm?.setPermissionMode(mode);
       return;
     }
     case "pause": {

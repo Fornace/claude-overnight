@@ -18,7 +18,7 @@ import {
 } from "./providers/index.js";
 import type { ProviderConfig } from "./providers/index.js";
 import { executeRun } from "./run/run.js";
-import type { Task, PermMode, MergeStrategy, RunState, WaveSummary } from "./core/types.js";
+import type { Task, MergeStrategy, RunState, WaveSummary } from "./core/types.js";
 import {
   parseCliFlags, fetchModels, ask, select, selectKey,
   loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo,
@@ -163,7 +163,6 @@ async function main() {
   let usageCap: number | undefined;
   let allowExtraUsage = false;
   let extraUsageBudget: number | undefined;
-  let permissionMode: PermMode = "auto";
   let useWorktrees = false;
   let mergeStrategy: MergeStrategy = "yolo";
   let coachedOriginal: string | undefined;
@@ -190,7 +189,6 @@ async function main() {
     objective = resumeState!.objective; usageCap = resumeState!.usageCap;
     allowExtraUsage = resumeState!.allowExtraUsage ?? false;
     extraUsageBudget = resumeState!.extraUsageBudget;
-    permissionMode = resumeState!.permissionMode;
     useWorktrees = resumeState!.useWorktrees;
     mergeStrategy = resumeState!.mergeStrategy;
     coachedOriginal = resumeState!.coachedObjective;
@@ -267,7 +265,6 @@ async function main() {
       concurrency: Math.min(coach?.concurrency ?? 5, budget),
       usageCap: coach?.usageCap ?? undefined,
       allowExtraUsage: false,
-      permissionMode: cliYolo ? "bypassPermissions" : (coach?.permissionMode as PermMode | undefined) ?? "auto",
     };
 
     const settings = await editRunSettings({
@@ -279,7 +276,6 @@ async function main() {
         fastModel: coach.fastModel ?? undefined,
         concurrency: Math.min(coach.concurrency, budget),
         usageCap: coach.usageCap,
-        permissionMode: cliYolo ? "bypassPermissions" : (coach.permissionMode as PermMode),
       } : undefined,
     });
 
@@ -290,7 +286,6 @@ async function main() {
     usageCap = settings.usageCap;
     allowExtraUsage = settings.allowExtraUsage;
     extraUsageBudget = settings.extraUsageBudget;
-    permissionMode = (cliFlags.perm as PermMode | undefined) ?? (cliYolo ? "bypassPermissions" : settings.permissionMode);
 
     const savedProviders = loadProviders();
     plannerProvider = settings.plannerProviderId ? savedProviders.find(p => p.id === settings.plannerProviderId) : undefined;
@@ -318,7 +313,7 @@ async function main() {
       mergeStrategy = "yolo";
     }
 
-    const inner = formatSettingsSummary({ ...settings, permissionMode });
+    const inner = formatSettingsSummary(settings);
     const parts2 = [`budget ${budget}`, `${concurrency}×`];
     if (budget > 2) parts2.push("flex");
     if (useWorktrees) parts2.push(mergeStrategy === "branch" ? "wt→branch" : "wt→yolo");
@@ -376,15 +371,9 @@ async function main() {
   }
 
   validateConcurrency(concurrency);
-  // Resolve permissionMode, useWorktrees, mergeStrategy for non-interactive + non-resume
+  // Resolve useWorktrees, mergeStrategy for non-interactive + non-resume
   if (!resuming && nonInteractive) {
     const yolo = argv.includes("--yolo");
-    permissionMode = cliFlags.perm ? cliFlags.perm as PermMode
-      : yolo ? "bypassPermissions"
-      : (fileCfg?.permissionMode ?? "auto");
-    if (!["auto", "bypassPermissions", "default"].includes(permissionMode)) {
-      console.error(chalk.red(`  --perm must be auto, bypassPermissions, or default (got ${permissionMode})`)); process.exit(1);
-    }
     useWorktrees = argv.includes("--no-worktrees") || yolo ? false
       : argv.includes("--worktrees") ? true
       : (fileCfg?.useWorktrees ?? isGitRepo(cwd));
@@ -417,7 +406,7 @@ async function main() {
   if (nonInteractive) {
     const capStr = usageCap != null ? `  cap=${Math.round(usageCap * 100)}%` : "";
     const extraStr = allowExtraUsage ? (extraUsageBudget ? `  extra=$${extraUsageBudget}` : "  extra=∞") : "  extra=off";
-    console.log(chalk.dim(`  ${workerModel}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}  perms=${permissionMode}${capStr}${extraStr}`));
+    console.log(chalk.dim(`  ${workerModel}  concurrency=${concurrency}  worktrees=${useWorktrees}  merge=${mergeStrategy}${capStr}${extraStr}`));
   }
 
   // ── Plan phase ──
@@ -443,7 +432,7 @@ async function main() {
       objective, noTTY, flex, budget, concurrency, cwd,
       plannerModel, workerModel, fastModel,
       plannerProvider, workerProvider, fastProvider,
-      permissionMode, usageCap, allowExtraUsage, extraUsageBudget,
+      usageCap, allowExtraUsage, extraUsageBudget,
       useWorktrees, mergeStrategy, agentTimeoutMs,
       runDir, designDir, previousKnowledge, envForModel,
       coachedOriginal, coachedAt,
@@ -465,7 +454,7 @@ async function main() {
   await executeRun({
     tasks, objective, budget: budget ?? tasks.length, workerModel, plannerModel, fastModel,
     workerProvider, plannerProvider, fastProvider, concurrency,
-    permissionMode, useWorktrees, mergeStrategy, usageCap, allowExtraUsage, extraUsageBudget,
+    useWorktrees, mergeStrategy, usageCap, allowExtraUsage, extraUsageBudget,
     flex, agentTimeoutMs, cwd, allowedTools, beforeWave, afterWave, afterRun, runDir, previousKnowledge,
     resuming, resumeState: resumeState ?? undefined,
     thinkingUsed, thinkingCost, thinkingIn, thinkingOut, thinkingTools, thinkingHistory,

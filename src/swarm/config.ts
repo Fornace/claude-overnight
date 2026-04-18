@@ -1,7 +1,7 @@
 // Inputs and constants the Swarm consumes — kept separate from the class
 // itself so callers can build a config without dragging in the worker loop.
 
-import type { Task, MergeStrategy, PermMode } from "../core/types.js";
+import type { Task, MergeStrategy } from "../core/types.js";
 import { PROXY_DEFAULT_URL } from "../providers/index.js";
 
 export interface SwarmConfig {
@@ -11,7 +11,6 @@ export interface SwarmConfig {
   model?: string;
   allowedTools?: string[];
   useWorktrees?: boolean;
-  permissionMode?: PermMode;
   agentTimeoutMs?: number;
   maxRetries?: number;
   mergeStrategy?: MergeStrategy;

@@ -1,4 +1,4 @@
-import type { BranchRecord, PermMode, WaveSummary } from "../core/types.js";
+import type { BranchRecord, WaveSummary } from "../core/types.js";
 export interface FinalNarrativeDeps {
     cwd: string;
     runDir: string;
@@ -6,7 +6,6 @@ export interface FinalNarrativeDeps {
     previousKnowledge: string;
     workerModel: string;
     fastModel?: string;
-    permissionMode: PermMode;
     waveHistory: WaveSummary[];
 }
 /** Generate a longer narrative summary at run end. Awaited (not fire-and-forget)

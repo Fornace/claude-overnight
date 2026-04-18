@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
-import type { Task, MergeStrategy, RunState, RunConfigBase, BranchRecord, WaveSummary, PermMode } from "../core/types.js";
+import type { Task, MergeStrategy, RunState, RunConfigBase, BranchRecord, WaveSummary } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
 import { steerWave, STEER_SCHEMA } from "../planner/steering.js";
 import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver, attemptJsonParse } from "../planner/query.js";
@@ -76,7 +76,7 @@ export interface RunConfig extends RunConfigBase {
 export async function executeRun(cfg: RunConfig): Promise<void> {
   const restore = () => { try { process.stdout.write("\x1B[?25h\n"); } catch {} };
   const { objective, cwd, beforeWave: beforeWaveCmds, afterWave: afterWaveCmds, afterRun: afterRunCmds, runDir, previousKnowledge } = cfg;
-  let { workerModel, plannerModel, fastModel, concurrency, permissionMode } = cfg;
+  let { workerModel, plannerModel, fastModel, concurrency } = cfg;
 
   const envForModel = buildEnvResolver({
     plannerModel, plannerProvider: cfg.plannerProvider,
@@ -103,7 +103,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const liveConfig: LiveConfig = {
     remaining: 0, usageCap, concurrency, paused: false, dirty: false,
     extraUsageBudget: cfg.extraUsageBudget,
-    workerModel, plannerModel, fastModel, permissionMode,
+    workerModel, plannerModel, fastModel,
   };
   let waveNum: number;
   const waveHistory: WaveSummary[] = [];
@@ -182,7 +182,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         const prompt = `You are answering a user question about an in-progress autonomous agent run. Use the context below; read files in the repo if needed. Answer concisely (a few sentences) and cite files or waves when relevant.\n\n${memBlob}\n\n---\nUser question: ${question}`;
         const answer = await runPlannerQuery(
           prompt,
-          { cwd, model: plannerModel, permissionMode },
+          { cwd, model: plannerModel },
           () => { /* swallow ticker  -- don't clobber main status */ },
         );
         accCost += getTotalPlannerCost() - plannerCostBefore;
@@ -232,7 +232,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     const prompt = `${label}\n\n${ctx}\n\nWrite one short sentence (max 180 chars) summarising progress and what's next. No preamble.`;
     // Show in-flight feedback so the panel isn't empty while the planner thinks.
     display.setDebrief(`Summarizing ${label.toLowerCase().replace(/\.$/, "")}\u2026`);
-    void runPlannerQuery(prompt, { cwd, model: debriefModel, permissionMode }, () => {})
+    void runPlannerQuery(prompt, { cwd, model: debriefModel }, () => {})
       .then(text => { display.setDebrief(text.trim().slice(0, 210), label); })
       .catch(() => { display.setDebrief(undefined); });
   };
@@ -275,7 +275,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     remaining, workerModel, plannerModel, fastModel,
     workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
     fastProviderId: cfg.fastProvider?.id,
-    concurrency, permissionMode,
+    concurrency,
     usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
     flex, useWorktrees, mergeStrategy, waveNum,
     currentTasks: varying.currentTasks,
@@ -335,7 +335,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         if (appliedGuidance) display.appendSteeringEvent(`User directives applied: ${appliedGuidance.slice(0, 80)}`);
         const steer = await steerWave(
           objective!, waveHistory, remaining, cwd, plannerModel, workerModel, fastModel,
-          permissionMode, concurrency, steeringLog, memory,
+          concurrency, steeringLog, memory,
           `steer-wave-${waveNum}-attempt-${steerAttempts}`,
         );
         accCost += getTotalPlannerCost() - plannerCostBefore;
@@ -410,7 +410,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
           let statusText = "";
           try { statusText = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
           const minimalPrompt = `${objective ? `Objective: ${objective}` : ""}\n\nStatus:\n${statusText || "(none)"}\n\nReturn tasks: string[] — 3-6 specific follow-ups. JSON only. {"tasks":[{"prompt":"..."}]}`;
-          const minimalText = await runPlannerQuery(minimalPrompt, { cwd, model: plannerModel, permissionMode, outputFormat: STEER_SCHEMA, transcriptName: "decomposer-minimal", maxTurns: 40 }, () => {});
+          const minimalText = await runPlannerQuery(minimalPrompt, { cwd, model: plannerModel, outputFormat: STEER_SCHEMA, transcriptName: "decomposer-minimal", maxTurns: 40 }, () => {});
           const parsed = attemptJsonParse(minimalText);
           if (parsed?.tasks?.length > 0) {
             currentTasks = parsed.tasks.map((t: any, i: number) => ({
@@ -481,8 +481,6 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       set plannerModel(v: string) { plannerModel = v; },
       get fastModel() { return fastModel; },
       set fastModel(v: string | undefined) { fastModel = v; },
-      get permissionMode() { return permissionMode; },
-      set permissionMode(v: PermMode) { permissionMode = v; },
       get concurrency() { return concurrency; },
       set concurrency(v: number) { concurrency = v; },
       get usageCap() { return usageCap; },
@@ -531,7 +529,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     display.start();
     const finalReview = await runPostRunReview(
       objective || "", {
-        cwd, plannerModel, permissionMode, concurrency,
+        cwd, plannerModel, concurrency,
         remaining, usageCap, allowExtraUsage: cfg.allowExtraUsage,
         extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: accCost,
         envForModel, mergeStrategy: waveMerge, useWorktrees,
@@ -596,7 +594,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     currentSwarmLogFile: currentSwarm?.logFile,
     narrativeDeps: {
       cwd, runDir, objective, previousKnowledge,
-      workerModel, fastModel, permissionMode, waveHistory,
+      workerModel, fastModel, waveHistory,
     },
   });
 

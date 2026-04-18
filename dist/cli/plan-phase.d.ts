@@ -1,5 +1,5 @@
 import type { ProviderConfig, EnvResolver } from "../providers/index.js";
-import type { Task, PermMode, MergeStrategy, WaveSummary } from "../core/types.js";
+import type { Task, MergeStrategy, WaveSummary } from "../core/types.js";
 export interface PlanPhaseInput {
     objective: string | undefined;
     noTTY: boolean;
@@ -13,7 +13,6 @@ export interface PlanPhaseInput {
     plannerProvider: ProviderConfig | undefined;
     workerProvider: ProviderConfig | undefined;
     fastProvider: ProviderConfig | undefined;
-    permissionMode: PermMode;
     usageCap: number | undefined;
     allowExtraUsage: boolean;
     extraUsageBudget: number | undefined;

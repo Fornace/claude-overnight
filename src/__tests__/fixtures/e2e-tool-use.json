@@ -1,0 +1,8 @@
+{
+  "tasks": [
+    {
+      "prompt": "Read README.md and print its first line. No edits. Just Read."
+    }
+  ],
+  "concurrency": 1
+}

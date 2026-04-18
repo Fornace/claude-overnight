@@ -5,12 +5,12 @@ import { createInterface } from "readline";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { Task, PermMode, MergeStrategy } from "../core/types.js";
+import type { Task, MergeStrategy } from "../core/types.js";
 
 // ── CLI flag parsing ──
 
 export function parseCliFlags(argv: string[]) {
-  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget", "merge", "perm"]);
+  const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget", "merge"]);
   const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex", "--allow-extra-usage", "--worktrees", "--no-worktrees", "--yolo"]);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
@@ -302,7 +302,6 @@ export interface FileArgs {
   objective?: string;
   concurrency?: number;
   model?: string;
-  permissionMode?: PermMode;
   cwd?: string;
   allowedTools?: string[];
   beforeWave?: string | string[];
@@ -315,7 +314,7 @@ export interface FileArgs {
 }
 
 const KNOWN_TASK_FILE_KEYS = new Set([
-  "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "beforeWave", "afterWave", "afterRun", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
+  "tasks", "objective", "concurrency", "cwd", "model", "allowedTools", "beforeWave", "afterWave", "afterRun", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 
 export function loadTaskFile(file: string): FileArgs {
@@ -369,7 +368,6 @@ export function loadTaskFile(file: string): FileArgs {
     concurrency: parsed.concurrency,
     model: parsed.model,
     cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
-    permissionMode: parsed.permissionMode,
     allowedTools: parsed.allowedTools,
     beforeWave: parsed.beforeWave,
     afterWave: parsed.afterWave,

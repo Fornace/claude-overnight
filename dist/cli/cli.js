@@ -6,7 +6,7 @@ import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 // ── CLI flag parsing ──
 export function parseCliFlags(argv) {
-    const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget", "merge", "perm"]);
+    const known = new Set(["concurrency", "model", "timeout", "budget", "usage-cap", "extra-usage-budget", "merge"]);
     const booleans = new Set(["--dry-run", "-h", "--help", "-v", "--version", "--no-flex", "--allow-extra-usage", "--worktrees", "--no-worktrees", "--yolo"]);
     const flags = {};
     const positional = [];
@@ -332,7 +332,7 @@ export async function selectKey(label, options) {
     });
 }
 const KNOWN_TASK_FILE_KEYS = new Set([
-    "tasks", "objective", "concurrency", "cwd", "model", "permissionMode", "allowedTools", "beforeWave", "afterWave", "afterRun", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
+    "tasks", "objective", "concurrency", "cwd", "model", "allowedTools", "beforeWave", "afterWave", "afterRun", "worktrees", "mergeStrategy", "usageCap", "flexiblePlan",
 ]);
 export function loadTaskFile(file) {
     const path = resolve(file);
@@ -392,7 +392,6 @@ export function loadTaskFile(file) {
         concurrency: parsed.concurrency,
         model: parsed.model,
         cwd: parsed.cwd ? resolve(parsed.cwd) : undefined,
-        permissionMode: parsed.permissionMode,
         allowedTools: parsed.allowedTools,
         beforeWave: parsed.beforeWave,
         afterWave: parsed.afterWave,

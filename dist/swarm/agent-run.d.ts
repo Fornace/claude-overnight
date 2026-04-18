@@ -1,5 +1,4 @@
 import { type Query } from "@anthropic-ai/claude-agent-sdk";
-import { type PermMode } from "../core/types.js";
 import type { Task, AgentState } from "../core/types.js";
 import type { ErroredBranchEvaluator } from "./merge.js";
 import { type SwarmConfig } from "./config.js";
@@ -12,7 +11,6 @@ export interface AgentRunHost extends MessageHandlerHost {
     readonly queue: Task[];
     readonly config: SwarmConfig;
     readonly activeQueries: Set<Query>;
-    readonly _permMode: PermMode | undefined;
     readonly worktreeBase?: string;
     nextId: number;
     paused: boolean;

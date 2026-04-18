@@ -1,6 +1,6 @@
 import chalk from "chalk";
-import type { MutableRunSettings, PermMode } from "../core/types.js";
-import { modelDisplayName, formatContextWindow, DEFAULT_MODEL } from "../core/models.js";
+import type { MutableRunSettings } from "../core/types.js";
+import { modelDisplayName, formatContextWindow } from "../core/models.js";
 import { fetchModels, ask, select, BRAILLE } from "./cli.js";
 import { pickModel } from "../providers/index.js";
 
@@ -16,7 +16,6 @@ interface EditSettingsOptions {
     fastModel?: string;
     concurrency?: number;
     usageCap?: number | null;
-    permissionMode?: PermMode;
   };
 }
 
@@ -102,15 +101,6 @@ export async function editRunSettings(options: EditSettingsOptions): Promise<Mut
     s.extraUsageBudget = undefined;
   }
 
-  const permItems = [
-    { name: "Auto", value: "auto" as PermMode, hint: "accept low-risk, reject high-risk" },
-    { name: "Bypass all", value: "bypassPermissions" as PermMode, hint: "agents can run anything (yolo)" },
-    { name: "Prompt each", value: "default" as PermMode, hint: "ask for every dangerous op" },
-  ];
-  const permDefault = options.defaults?.permissionMode === "bypassPermissions" ? 1
-    : options.defaults?.permissionMode === "default" ? 2 : 0;
-  s.permissionMode = await select(`${chalk.cyan("⑦")} Permissions:`, permItems, permDefault);
-
   const modelLine = (label: string, m: string | undefined) =>
     m ? `${chalk.dim(label.padEnd(11))}${chalk.white(m)} ${chalk.dim(`(${formatContextWindow(m)} context)`)}` : null;
   const lines = [
@@ -125,7 +115,6 @@ export async function editRunSettings(options: EditSettingsOptions): Promise<Mut
   console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(s.concurrency))}`);
   console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
   console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
-  console.log(`  ${chalk.dim("perms      ")}${chalk.white(s.permissionMode === "bypassPermissions" ? "yolo" : s.permissionMode)}`);
   console.log();
 
   return s;
@@ -139,6 +128,5 @@ export function formatSettingsSummary(s: MutableRunSettings): string {
   else parts.push(modelDisplayName(s.workerModel));
   if (s.usageCap != null) parts.push(`cap ${Math.round(s.usageCap * 100)}%`);
   parts.push(s.allowExtraUsage ? (s.extraUsageBudget ? `extra $${s.extraUsageBudget}` : "extra ∞") : "no extra");
-  if (s.permissionMode !== "auto") parts.push(s.permissionMode === "bypassPermissions" ? "yolo" : "prompt");
   return parts.join(chalk.dim(" · "));
 }

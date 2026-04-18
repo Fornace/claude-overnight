@@ -36,12 +36,11 @@ export function printHelp(): void {
     --worktrees            Force worktree isolation on ${chalk.dim("(default: auto-detect git repo)")}
     --no-worktrees         Disable worktree isolation ${chalk.dim("(all agents work in real cwd)")}
     --merge=MODE           Merge strategy: yolo or branch ${chalk.dim("(default: yolo)")}
-    --perm=MODE            Permission mode: auto, bypassPermissions, default ${chalk.dim("(default: auto)")}
-    --yolo                 Shorthand for --perm=bypassPermissions --no-worktrees
+    --yolo                 Shorthand for --no-worktrees
     --no-coach             Skip the setup coach ${chalk.dim("(raw objective, no preflight rewrite)")}
     --coach-model          Re-pick coach model ${chalk.dim("(overrides saved choice)")}
 
   ${chalk.cyan("Defaults")} ${chalk.dim("(non-interactive)")}
-    model: first available    concurrency: 5    worktrees: auto    merge: yolo    perms: auto
+    model: first available    concurrency: 5    worktrees: auto    merge: yolo
     `);
 }

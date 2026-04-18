@@ -5,7 +5,7 @@
 // the "current: …" hint shown next to the input prompt; `applySettingEdit`
 // commits a typed value back into liveConfig + swarm.
 export const SETTINGS_FIELDS = [
-    "budget", "cap", "conc", "extra", "worker", "planner", "fast", "perms", "pause",
+    "budget", "cap", "conc", "extra", "worker", "planner", "fast", "pause",
 ];
 export const NUMERIC_SETTINGS_FIELDS = new Set([
     "budget", "cap", "conc", "extra",
@@ -19,7 +19,6 @@ export const SETTINGS_LABELS = {
     worker: "Worker model (for agent tasks)",
     planner: "Planner model (steering/thinking)",
     fast: "Fast model (optional, empty=skip)",
-    perms: "Permission mode (auto/yolo/prompt)",
     pause: "Pause/resume workers",
 };
 /** Format the current value of `field` for display in the settings prompt. */
@@ -32,10 +31,6 @@ export function readSettingValue(field, lc, swarm) {
         case "worker": return lc?.workerModel ?? swarm?.model ?? "—";
         case "planner": return lc?.plannerModel ?? "—";
         case "fast": return lc?.fastModel ?? "(none)";
-        case "perms": {
-            const p = lc?.permissionMode ?? "auto";
-            return p === "bypassPermissions" ? "yolo" : p;
-        }
         case "pause": return swarm?.paused ? "paused" : "running";
     }
 }
@@ -102,17 +97,6 @@ export function applySettingEdit(field, raw, lc, swarm) {
         case "fast": {
             lc.fastModel = raw || undefined;
             lc.dirty = true;
-            return;
-        }
-        case "perms": {
-            if (!raw)
-                return;
-            const m = raw.toLowerCase();
-            const mode = m.startsWith("yolo") || m.startsWith("bypass") ? "bypassPermissions"
-                : m.startsWith("prompt") || m === "default" ? "default" : "auto";
-            lc.permissionMode = mode;
-            lc.dirty = true;
-            swarm?.setPermissionMode(mode);
             return;
         }
         case "pause": {

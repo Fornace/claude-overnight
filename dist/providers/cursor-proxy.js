@@ -8,14 +8,17 @@ import { VERSION } from "../core/_version.js";
 import { getProxyPort, buildProxyUrl } from "../core/proxy-port.js";
 import { loadProviders } from "./index.js";
 import { PROXY_DEFAULT_URL, cursorProxyOutLogPath, cursorProxyFetchOpts, resolveAgentPaths, resolveCursorComposerCli, getEmbeddedComposerProxyVersion, resolveCursorAgentToken, resolveCursorProxyKey, ensureCursorAccountPool, warnMacCursorAgentShellPatchIfNeeded, } from "./cursor-env.js";
-import { cursorProxyRateLimiter } from "../core/rate-limiter.js";
-// Shared rate limiter for all proxy HTTP calls (preflight, probes).
-const _proxyRl = cursorProxyRateLimiter();
+import { cursorProxyRateLimiter, apiEndpointLimiter } from "../core/rate-limiter.js";
+// Shared rate limiter for all proxy HTTP calls (health checks, preflight, probes).
+// Uses the singleton so planner direct-fetch calls share the same budget.
+const _proxyRl = cursorProxyRateLimiter;
 // ── Health check ──
 export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL) {
     const url = `${baseUrl.replace(/\/$/, "")}/health`;
     try {
+        await _proxyRl.waitIfNeeded();
         const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000), ...cursorProxyFetchOpts() });
+        _proxyRl.record();
         return res.ok;
     }
     catch {
@@ -26,9 +29,11 @@ export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL) {
 async function getCursorProxyHealthInfo(baseUrl = PROXY_DEFAULT_URL) {
     try {
         const url = `${baseUrl.replace(/\/$/, "")}/health`;
+        await _proxyRl.waitIfNeeded();
         const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000), ...cursorProxyFetchOpts() });
         if (!res.ok)
             return null;
+        _proxyRl.record();
         const json = (await res.json());
         return {
             ok: json.ok,
@@ -46,16 +51,20 @@ async function getCursorProxyHealthInfo(baseUrl = PROXY_DEFAULT_URL) {
 async function verifyCursorProxy(baseUrl = PROXY_DEFAULT_URL) {
     const url = baseUrl.replace(/\/$/, "");
     const opts = cursorProxyFetchOpts();
+    await _proxyRl.waitIfNeeded();
     try {
         const res = await fetch(`${url}/health`, { method: "GET", signal: AbortSignal.timeout(3_000), ...opts });
-        if (res.ok)
+        if (res.ok) {
+            _proxyRl.record();
             return true;
+        }
     }
     catch { }
     try {
         const res = await fetch(`${url}/v1/models`, { method: "GET", signal: AbortSignal.timeout(3_000), ...opts });
         if (!res.ok)
             return false;
+        _proxyRl.record();
         const json = (await res.json());
         return Array.isArray(json["data"]);
     }
@@ -238,6 +247,12 @@ async function startProxyProcess(baseUrl, _url, port) {
         // check. Without this, proxied agents in worktrees all resolve to the
         // proxy's startup cwd.
         CURSOR_BRIDGE_WORKSPACE: "/",
+        // Inbound rate limiting on the proxy protects against runaway requests.
+        // Default: 20 req/min per IP — enough for 5+ parallel agents while still
+        // guarding against abuse. Override via CURSOR_BRIDGE_RATE_LIMIT_MAX=0 to
+        // disable, or set custom values.
+        CURSOR_BRIDGE_RATE_LIMIT_MAX: process.env.CURSOR_BRIDGE_RATE_LIMIT_MAX ?? "20",
+        CURSOR_BRIDGE_RATE_LIMIT_WINDOW_MS: process.env.CURSOR_BRIDGE_RATE_LIMIT_WINDOW_MS ?? "60000",
     };
     if (sysNode && agentJs) {
         proxyEnv.CURSOR_AGENT_NODE = sysNode;
@@ -334,6 +349,8 @@ export async function preflightCursorProxyViaHttp(p, timeoutMs, opts) {
     }, PROGRESS_INTERVAL_MS);
     const deadline = setTimeout(() => controller.abort(), authBudget);
     try {
+        // Hard gate: fail fast if the endpoint budget is exhausted.
+        apiEndpointLimiter.assertCanRequest();
         await _proxyRl.waitIfNeeded();
         // max_tokens must accommodate thinking tokens for `*-thinking-*` variants —
         // 1 leaves zero reasoning budget and crashes the subprocess.
@@ -353,6 +370,7 @@ export async function preflightCursorProxyViaHttp(p, timeoutMs, opts) {
         }
         await res.text().catch(() => "");
         _proxyRl.record();
+        apiEndpointLimiter.record();
     }
     catch (err) {
         if (err?.name === "AbortError") {
@@ -396,6 +414,8 @@ async function probeCursorWriteCapability(baseURL, key, model, timeoutMs, opts) 
     if (key)
         headers["authorization"] = `Bearer ${key}`;
     try {
+        // Hard gate: fail fast if the endpoint budget is exhausted.
+        apiEndpointLimiter.assertCanRequest();
         await _proxyRl.waitIfNeeded();
         const res = await fetch(`${baseURL}/v1/messages`, {
             method: "POST",
@@ -412,6 +432,8 @@ async function probeCursorWriteCapability(baseURL, key, model, timeoutMs, opts) 
             return `write probe: HTTP ${res.status}: ${text.slice(0, 200)}`;
         }
         await res.text().catch(() => "");
+        _proxyRl.record();
+        apiEndpointLimiter.record();
     }
     catch (err) {
         if (err?.name === "AbortError")

@@ -30,8 +30,6 @@ export interface TaskFile {
   cwd?: string;
   /** Default Claude model for all tasks. */
   model?: string;
-  /** How the SDK handles permission prompts for dangerous operations. */
-  permissionMode?: PermMode;
   /** Allowlist of SDK tool names agents are permitted to use. */
   allowedTools?: string[];
   /** Shell command(s) to run in cwd before each wave starts (e.g. "pnpm run generate"). */
@@ -139,14 +137,6 @@ export interface AITurn {
 }
 
 /**
- * How the SDK handles permission prompts for potentially dangerous operations.
- * - "auto": SDK decides what's safe  -- accepts low-risk tools, rejects high-risk ones.
- * - "bypassPermissions": Skip all permission prompts (dangerous  -- agents can run anything).
- * - "default": Prompt the user for each dangerous operation.
- */
-export type PermMode = "auto" | "bypassPermissions" | "default";
-
-/**
  * Current phase of the swarm lifecycle.
  * - "planning": An LLM is decomposing an objective into individual tasks.
  * - "running": Agents are actively executing their assigned tasks.
@@ -234,7 +224,6 @@ export interface MutableRunSettings {
   usageCap?: number;
   allowExtraUsage: boolean;
   extraUsageBudget?: number;
-  permissionMode: PermMode;
   beforeWave?: string | string[];
   afterWave?: string | string[];
   afterRun?: string | string[];
@@ -258,8 +247,6 @@ export interface RunConfigBase {
   fastProviderId?: string;
   /** Max parallel agents. */
   concurrency: number;
-  /** Permission mode for SDK tool calls. */
-  permissionMode: PermMode;
   /** Stop dispatching when rate-limit utilization reaches this %. */
   usageCap?: number;
   /** Whether extra/overage usage is allowed. */

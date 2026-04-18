@@ -16,7 +16,6 @@ export { loadUserSettings, saveUserSettings, type UserSettings } from "./setting
 export {
   validateCoachOutput,
   type CoachResult,
-  type CoachPermMode,
   type CoachScope,
   type ChecklistLevel,
   type ChecklistRemediation,
@@ -110,7 +109,6 @@ export async function runSetupCoach(
     const queryPromise = runPlannerQuery(prompt, {
       cwd,
       model,
-      permissionMode: "bypassPermissions",
       outputFormat: COACH_SCHEMA,
       transcriptName: "coach",
       maxTurns: 3,
@@ -168,7 +166,7 @@ export async function runSetupCoach(
       const coachEnv = ctx.coachProvider ? envFor(ctx.coachProvider) : undefined;
       const raw2 = await Promise.race([
         runPlannerQuery(amendedPrompt, {
-          cwd, model, permissionMode: "bypassPermissions",
+          cwd, model,
           outputFormat: COACH_SCHEMA, transcriptName: "coach-retry", maxTurns: 3, tools: [],
           env: coachEnv,
           turnId: amendTurn.id,
@@ -220,7 +218,7 @@ function renderCoachBlock(r: CoachResult, elapsedMs: number, model: string): voi
   console.log(`    planner=${rec.plannerModel}  worker=${rec.workerModel}${fastStr}`);
   const capStr = rec.usageCap != null ? `${Math.round(rec.usageCap * 100)}%` : "unlimited";
   console.log(`    budget=${rec.budget}  concurrency=${rec.concurrency}  flex=${rec.flex ? "on" : "off"}  cap=${capStr}`);
-  console.log(`    scope: ${r.scope}  perm=${rec.permissionMode}`);
+  console.log(`    scope: ${r.scope}`);
 
   if (r.checklist.length) {
     console.log(`\n  ${chalk.cyan("🔑")} ${chalk.bold("Preflight")}`);

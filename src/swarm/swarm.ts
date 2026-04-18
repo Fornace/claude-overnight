@@ -3,7 +3,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import chalk from "chalk";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import { RATE_LIMIT_WINDOW_SHORT, type PermMode } from "../core/types.js";
+import { RATE_LIMIT_WINDOW_SHORT } from "../core/types.js";
 import type { Task, AgentState, SwarmPhase, RateLimitWindow, AITurn } from "../core/types.js";
 import { gitExec, mergeAllBranches, warnDirtyTree, cleanStaleWorktrees, writeSwarmLog } from "./merge.js";
 import type { MergeResult } from "./merge.js";
@@ -91,9 +91,6 @@ export class Swarm {
   extraUsageBudget: number | undefined;
   readonly baseCostUsd: number;
   mergeBranch?: string;
-  /** Permission mode read from config on each agent dispatch. Writable for mid-run changes.
-   *  @internal -- friend surface for swarm-agent-run. */
-  _permMode: PermMode | undefined;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) throw new Error("SwarmConfig: tasks array must not be empty");
@@ -115,7 +112,6 @@ export class Swarm {
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
     this.targetConcurrency = config.concurrency;
-    this._permMode = config.permissionMode;
   }
 
   get active() { return this.agents.filter(a => a.status === "running").length; }
@@ -217,15 +213,6 @@ export class Swarm {
     const prev = this.model;
     this.model = m;
     this.log(-1, `Worker model: ${prev} → ${m}`);
-  }
-
-  /** Live-adjust the SDK permission mode. Picked up by next agent dispatch. */
-  setPermissionMode(m: PermMode): void {
-    if (this._permMode === m) return;
-    const prev = this._permMode ?? "auto";
-    this._permMode = m;
-    const label = m === "bypassPermissions" ? "yolo" : m;
-    this.log(-1, `Permission mode: ${prev === "bypassPermissions" ? "yolo" : prev} → ${label}`);
   }
 
   async run(): Promise<void> {

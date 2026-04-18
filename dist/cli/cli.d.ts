@@ -1,5 +1,5 @@
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { Task, PermMode, MergeStrategy } from "../core/types.js";
+import type { Task, MergeStrategy } from "../core/types.js";
 export declare function parseCliFlags(argv: string[]): {
     flags: Record<string, string>;
     positional: string[];
@@ -51,7 +51,6 @@ export interface FileArgs {
     objective?: string;
     concurrency?: number;
     model?: string;
-    permissionMode?: PermMode;
     cwd?: string;
     allowedTools?: string[];
     beforeWave?: string | string[];

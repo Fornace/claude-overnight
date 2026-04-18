@@ -1,5 +1,4 @@
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import { type PermMode } from "../core/types.js";
 import type { Task, AgentState, SwarmPhase, RateLimitWindow, AITurn } from "../core/types.js";
 import type { MergeResult } from "./merge.js";
 import { type SwarmConfig } from "./config.js";
@@ -77,9 +76,6 @@ export declare class Swarm {
     extraUsageBudget: number | undefined;
     readonly baseCostUsd: number;
     mergeBranch?: string;
-    /** Permission mode read from config on each agent dispatch. Writable for mid-run changes.
-     *  @internal -- friend surface for swarm-agent-run. */
-    _permMode: PermMode | undefined;
     constructor(config: SwarmConfig);
     get active(): number;
     get blocked(): number;
@@ -101,8 +97,6 @@ export declare class Swarm {
     setExtraUsageBudget(n: number | undefined): void;
     /** Live-adjust the worker model. Picked up by next agent dispatch. */
     setModel(m: string): void;
-    /** Live-adjust the SDK permission mode. Picked up by next agent dispatch. */
-    setPermissionMode(m: PermMode): void;
     run(): Promise<void>;
     abort(): void;
     /** Re-queue all errored agents' tasks for retry within this wave. */

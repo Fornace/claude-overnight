@@ -1,4 +1,5 @@
 node_modules/
 .claude-overnight/
+.claude/worktrees/
 .vercel
 .DS_Store

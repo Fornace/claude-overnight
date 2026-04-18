@@ -10,7 +10,7 @@ Invoke the \`simplify\` skill to review changed code for reuse, quality, and eff
 async function runReview(opts, scope, objective, onSwarm) {
     const swarm = new Swarm({
         tasks: [{ id: `${scope}-review`, prompt: reviewPrompt(scope, objective), noWorktree: false, type: "review" }],
-        concurrency: 1, cwd: opts.cwd, model: opts.plannerModel, permissionMode: opts.permissionMode,
+        concurrency: 1, cwd: opts.cwd, model: opts.plannerModel,
         useWorktrees: opts.useWorktrees, mergeStrategy: opts.mergeStrategy, usageCap: opts.usageCap,
         allowExtraUsage: opts.allowExtraUsage, extraUsageBudget: opts.extraUsageBudget,
         baseCostUsd: opts.baseCostUsd, envForModel: opts.envForModel,

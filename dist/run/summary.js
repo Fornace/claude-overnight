@@ -8,7 +8,7 @@ import { readRunMemory } from "../state/state.js";
 /** Generate a longer narrative summary at run end. Awaited (not fire-and-forget)
  *  because the caller wants the text inline in the final status block. */
 export async function generateFinalNarrative(deps, phase) {
-    const { cwd, runDir, objective, previousKnowledge, workerModel, fastModel, permissionMode, waveHistory } = deps;
+    const { cwd, runDir, objective, previousKnowledge, workerModel, fastModel, waveHistory } = deps;
     const debriefModel = fastModel || workerModel;
     const memory = readRunMemory(runDir, previousKnowledge || undefined);
     const cap = (s, n) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
@@ -22,7 +22,7 @@ export async function generateFinalNarrative(deps, phase) {
     ].filter(Boolean).join("\n\n");
     const prompt = `The autonomous run just ended. Final phase: ${phase}.\n\n${ctx}\n\nWrite 3–5 plain sentences for the user: what was accomplished, what's still open, and any follow-ups they should do manually. No bullet points, no preamble, no markdown headers.`;
     try {
-        const text = await runPlannerQuery(prompt, { cwd, model: debriefModel, permissionMode }, () => { });
+        const text = await runPlannerQuery(prompt, { cwd, model: debriefModel }, () => { });
         return text.trim();
     }
     catch {

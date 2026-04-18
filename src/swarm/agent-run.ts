@@ -11,7 +11,7 @@ import { rmSync } from "fs";
 import { join } from "path";
 import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
-import { NudgeError, type PermMode } from "../core/types.js";
+import { NudgeError } from "../core/types.js";
 import type { Task, AgentState } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
 import type { ErroredBranchEvaluator } from "./merge.js";
@@ -19,6 +19,7 @@ import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, type SwarmConfig } from "./config.js";
 import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
 import { handleMsg, type MessageHandlerHost } from "./message-handler.js";
+import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
 
 /** Narrow surface `runAgent` / `buildErroredBranchEvaluator` need from the
  *  Swarm instance. Inherits the message-handler host because the message loop
@@ -28,7 +29,6 @@ export interface AgentRunHost extends MessageHandlerHost {
   readonly queue: Task[];
   readonly config: SwarmConfig;
   readonly activeQueries: Set<Query>;
-  readonly _permMode: PermMode | undefined;
   readonly worktreeBase?: string;
 
   nextId: number;
@@ -97,6 +97,7 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
   host.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
   const maxRetries = host.config.maxRetries ?? 2;
   const inactivityMs = host.config.agentTimeoutMs ?? 15 * 60 * 1000;
+  const rl = sdkQueryRateLimiter;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
@@ -107,7 +108,6 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
     }
 
     try {
-      const perm = host._permMode ?? "auto";
       let resumeSessionId: string | undefined = task.resumeSessionId;
       let resumePrompt = "Continue. Complete the task.";
 
@@ -126,11 +126,13 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
           host.config.envForModel?.(effectiveModel),
           agentCwd,
         );
+
+        await rl.waitIfNeeded();
         const agentQuery = query({
           prompt: agentPrompt,
           options: {
-            cwd: agentCwd, model: effectiveModel, permissionMode: perm,
-            ...(perm === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
+            cwd: agentCwd, model: effectiveModel,
+            permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
             allowedTools: host.config.allowedTools, includePartialMessages: true, persistSession: true,
             ...(isResume && resumeSessionId && { resume: resumeSessionId }),
             ...(envOverride && { env: envOverride }),
@@ -177,6 +179,7 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
           host.activeQueries.delete(agentQuery);
           if (sessionId) resumeSessionId = sessionId;
           try { agentQuery.close(); } catch {}
+          rl.record();
         }
       };
 
@@ -297,8 +300,10 @@ Is this partial work coherent enough to land? Consider:
 
 Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
 
+    const rl = sdkQueryRateLimiter;
     let eq: ReturnType<typeof query> | undefined;
     try {
+      await rl.waitIfNeeded();
       eq = query({
         prompt,
         options: {
@@ -343,6 +348,7 @@ Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
       host.log(agentId, `Branch eval API error: ${String(err?.message || err).slice(0, 120)}`);
       return { keep: true, reason: "eval API error, keeping by default" };
     } finally {
+      rl.record();
       if (eq) {
         host.activeQueries.delete(eq);
         try { eq.close(); } catch {}

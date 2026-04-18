@@ -17,6 +17,7 @@ import {
 } from "./cursor-env.js";
 import { preflightCursorProxyViaHttp } from "./cursor-proxy.js";
 import { pickCursorModel } from "./cursor-picker.js";
+import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
 
 // Re-export Cursor utilities so callers can keep a single import point.
 export {
@@ -302,7 +303,9 @@ export async function preflightProvider(
   opts?.onProgress?.(`checking ${p.model} (${keyInfo})…`);
 
   let pq: ReturnType<typeof query> | undefined;
+  const rl = sdkQueryRateLimiter;
   try {
+    await rl.waitIfNeeded();
     pq = query({
       prompt: "Reply with exactly the word ok and nothing else.",
       options: {
@@ -348,6 +351,7 @@ export async function preflightProvider(
   } catch (err: any) {
     return { ok: false, error: String(err?.message || err).slice(0, 200) };
   } finally {
+    rl.record();
     try { pq?.close(); } catch {}
   }
 }

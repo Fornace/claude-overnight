@@ -1,4 +1,3 @@
-import type { PermMode } from "../core/types.js";
 import { type PlannerLog } from "./throttle.js";
 export { type PlannerLog, type PlannerRateLimitInfo, getTotalPlannerCost, getPeakPlannerContext, getPlannerRateLimitInfo, } from "./throttle.js";
 export { attemptJsonParse, extractTaskJson } from "./json.js";
@@ -6,7 +5,6 @@ export { postProcess } from "./postprocess.js";
 export interface PlannerOpts {
     cwd: string;
     model: string;
-    permissionMode: PermMode;
     resumeSessionId?: string;
     outputFormat?: {
         type: "json_schema";

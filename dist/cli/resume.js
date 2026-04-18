@@ -47,8 +47,6 @@ export async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir
     }
     if (argv.includes("--allow-extra-usage"))
         state.allowExtraUsage = true;
-    if (cliFlags.perm)
-        state.permissionMode = cliFlags.perm;
     if (noTTY) {
         try {
             saveRunState(runDir, state);
@@ -78,7 +76,6 @@ export async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir
         console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
         console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
         console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
-        console.log(`  ${chalk.dim("perms      ")}${chalk.white(state.permissionMode === "bypassPermissions" ? "yolo" : state.permissionMode)}`);
     };
     fmtSummary();
     const action = await selectKey("", [
@@ -101,7 +98,6 @@ export async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir
         usageCap: state.usageCap,
         allowExtraUsage: state.allowExtraUsage ?? false,
         extraUsageBudget: state.extraUsageBudget,
-        permissionMode: state.permissionMode,
     };
     await editRunSettings({
         current: settings,
@@ -284,7 +280,7 @@ export async function detectResume(input) {
                         // land alongside the prior run's planning trail.
                         setTranscriptRunDir(resumeRunDir);
                         try {
-                            const orchTasks = await orchestrate(resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel, resumeState.permissionMode, orchBudget, resumeState.concurrency, makeProgressLog(), flexNote, join(resumeRunDir, "tasks.json"), "orchestrate-resume");
+                            const orchTasks = await orchestrate(resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel, orchBudget, resumeState.concurrency, makeProgressLog(), flexNote, join(resumeRunDir, "tasks.json"), "orchestrate-resume");
                             resumeState.currentTasks = orchTasks;
                             process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${orchTasks.length} tasks`)}\n`);
                         }

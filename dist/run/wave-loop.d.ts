@@ -2,7 +2,6 @@ import type { Task, MergeStrategy, BranchRecord, WaveSummary, RLGetter } from ".
 import { Swarm } from "../swarm/swarm.js";
 import { RunDisplay } from "../ui/ui.js";
 import type { LiveConfig, SteeringContext } from "../ui/ui.js";
-import type { PermMode } from "../core/types.js";
 /** Mutable state the wave loop reads and writes. */
 export interface WaveLoopHost {
     currentSwarm: Swarm | undefined;
@@ -24,7 +23,6 @@ export interface WaveLoopHost {
     workerModel: string;
     plannerModel: string;
     fastModel: string | undefined;
-    permissionMode: PermMode;
     concurrency: number;
     usageCap: number | undefined;
     branches: BranchRecord[];
