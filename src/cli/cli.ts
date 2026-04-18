@@ -416,13 +416,28 @@ export function showPlan(tasks: Task[]) {
 
 export const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
-export function makeProgressLog(): (text: string) => void {
+/** Dual-mode progress renderer.
+ *
+ *  - `status` (default): transient single-line ticker — clears itself each frame.
+ *    Use for elapsed-time / cost / rolling tail of model text.
+ *  - `event`: permanent log line — scrolls up, ticker redraws underneath.
+ *    Use for tool calls and notable state changes.
+ *
+ *  The two modes cooperate: an event clears the current ticker, writes the
+ *  event on its own line, and the next status tick redraws the ticker below.
+ *  That gives the user a visible history of what the planner did, with a live
+ *  "now" indicator that always stays pinned at the bottom. */
+export function makeProgressLog(): (text: string, kind?: "status" | "event") => void {
   let frame = 0;
-  return (text: string) => {
-    const spin = chalk.cyan(BRAILLE[frame++ % BRAILLE.length]);
+  return (text: string, kind: "status" | "event" = "status") => {
     const maxW = (process.stdout.columns ?? 80) - 6;
     const clean = text.replace(/\n/g, " ");
     const line = clean.length > maxW ? clean.slice(0, maxW - 1) + "\u2026" : clean;
+    if (kind === "event") {
+      process.stdout.write(`\x1B[2K\r  ${chalk.cyan("›")} ${chalk.dim(line)}\n`);
+      return;
+    }
+    const spin = chalk.cyan(BRAILLE[frame++ % BRAILLE.length]);
     process.stdout.write(`\x1B[2K\r  ${spin} ${chalk.dim(line)}`);
   };
 }

@@ -152,6 +152,7 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
     let lastLogText = "thinking…";
     let toolCount = 0;
     let costUsd = 0;
+    let msgCount = 0;
     const jsonOutput = opts.outputFormat?.type === "json_schema";
     let jsonCharCount = 0;
     // Dedup identical text snippets: cursor-agent with json_schema-ignoring
@@ -167,8 +168,12 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
         const costStr = costUsd > 0 ? ` · $${costUsd.toFixed(3)}` : "";
         const rlPct = getPlannerRateLimitInfo().utilization;
         const rlStr = rlPct > 0 ? ` · ${Math.round(rlPct * 100)}%` : "";
+        // msg counter distinguishes "model thinking silently" (msgs arriving, no
+        // text yet) from "proxy/network stuck" (zero msgs after 30s+). Surfacing
+        // this makes silent waits legible instead of feeling frozen.
+        const msgStr = ` · ${msgCount} msg${msgCount === 1 ? "" : "s"}`;
         const extra = lastLogText ? ` · ${lastLogText}` : "";
-        onLog(`${timeStr}${toolStr}${costStr}${rlStr}${extra}`, "status");
+        onLog(`${timeStr}${toolStr}${costStr}${rlStr}${msgStr}${extra}`, "status");
     }, 500);
     const timeoutMs = isResume ? HARD_TIMEOUT_MS : NUDGE_MS;
     let sessionId;
@@ -213,6 +218,7 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
     const consume = async () => {
         for await (const msg of pq) {
             lastActivity = Date.now();
+            msgCount++;
             if (!sessionId && "session_id" in msg)
                 sessionId = msg.session_id;
             if (msg.type === "stream_event") {

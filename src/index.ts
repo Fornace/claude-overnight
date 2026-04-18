@@ -390,10 +390,12 @@ async function main() {
   const envForModel = buildEnvResolver({ plannerModel, plannerProvider, workerModel, workerProvider, fastModel, fastProvider });
   setPlannerEnvResolver(envForModel);
 
-  // Fail fast if a custom provider is misconfigured  -- one bad key would
-  // otherwise surface as N agent failures scattered across the run.
-  // Skip when NO_PREFLIGHT=1 (used by e2e tests).
-  if ((plannerProvider || workerProvider || fastProvider) && process.env.NO_PREFLIGHT !== "1") {
+  // Opt-in preflight: `--preflight` or `RUN_PREFLIGHT=1`. Each provider probe
+  // spawns a real query through the proxy and takes ~10s, so skipping by
+  // default saves ~30s on cold start. Misconfigurations still surface — just
+  // on the first agent dispatch rather than at the loader.
+  const wantPreflight = argv.includes("--preflight") || process.env.RUN_PREFLIGHT === "1";
+  if (wantPreflight && (plannerProvider || workerProvider || fastProvider)) {
     const { fastDegraded } = await runProviderPreflight({
       plannerModel, plannerProvider, workerModel, workerProvider, fastModel, fastProvider, cwd,
     });
