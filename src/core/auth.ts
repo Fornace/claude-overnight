@@ -1,6 +1,8 @@
-import { homedir } from "os";
-import { join } from "path";
-import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { randomBytes, createHmac } from "node:crypto";
+import jwt from "jsonwebtoken";
 
 // JWT token lifecycle for claude-overnight.
 // Agents carry short-lived tokens signed by a local secret instead of raw API keys.
@@ -20,13 +22,15 @@ export interface TokenRecord {
 }
 
 const SECRET_PATH = join(homedir(), ".claude", "claude-overnight", "jwt-secret.key");
+const DEFAULT_TTL_SEC = 300; // 5 minutes
+const tokenCache = new Map<string, TokenRecord>();
 
 export function loadSecret(): Buffer {
   try {
     const raw = readFileSync(SECRET_PATH);
     if (raw.length >= 32) return raw;
   } catch {}
-  const secret = cryptoRandomBytes(32);
+  const secret = randomBytes(32);
   mkdirSync(join(homedir(), ".claude", "claude-overnight"), { recursive: true });
   writeFileSync(SECRET_PATH, secret);
   try { chmodSync(SECRET_PATH, 0o600); } catch {}
@@ -34,24 +38,26 @@ export function loadSecret(): Buffer {
 }
 
 function deriveKey(secret: Buffer, providerId: string): Buffer {
-  const crypto = require("crypto");
-  return crypto.createHmac("sha256", secret).update(providerId).digest();
+  return createHmac("sha256", secret).update(providerId).digest();
 }
 
-const DEFAULT_TTL_SEC = 300; // 5 minutes
-
 export function signToken(providerId: string, model: string, bearer: string, baseURL: string): TokenRecord {
-  const jwt = require("jsonwebtoken");
   const secret = loadSecret();
   const key = deriveKey(secret, providerId);
   const now = Math.floor(Date.now() / 1000);
-  const payload: JWTPayload = { sub: providerId, model, bearer, aud: baseURL, iat: now, exp: now + DEFAULT_TTL_SEC };
+  const payload: JWTPayload = {
+    sub: providerId,
+    model,
+    bearer,
+    aud: baseURL,
+    iat: now,
+    exp: now + DEFAULT_TTL_SEC,
+  };
   const signedToken = jwt.sign(payload, key, { algorithm: "HS256" });
   return { signedToken, payload };
 }
 
 export function verifyToken(token: string, providerId: string): JWTPayload | null {
-  const jwt = require("jsonwebtoken");
   const secret = loadSecret();
   const key = deriveKey(secret, providerId);
   try {
@@ -69,8 +75,6 @@ export function refreshToken(oldToken: string, providerId: string): TokenRecord 
   return signToken(payload.sub, payload.model, payload.bearer, payload.aud);
 }
 
-const tokenCache = new Map<string, TokenRecord>();
-
 export function getBearerToken(providerId: string, model: string, bearer: string, baseURL: string): string {
   const cached = tokenCache.get(providerId);
   if (cached) {
@@ -86,11 +90,6 @@ export function getBearerToken(providerId: string, model: string, bearer: string
 
 export function clearTokenCache(): void {
   tokenCache.clear();
-}
-
-function cryptoRandomBytes(length: number): Buffer {
-  const crypto = require("crypto");
-  return crypto.randomBytes(length);
 }
 
 export function isJWTAuthError(err: unknown): boolean {
