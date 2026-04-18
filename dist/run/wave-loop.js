@@ -15,6 +15,7 @@ import { getModelCapability } from "../core/models.js";
 import { isJWTAuthError } from "../core/auth.js";
 import { saveRunState, saveWaveSession, } from "../state/state.js";
 import { throttleBeforeWave } from "./throttle.js";
+import { updateCircuitBreakerStreak } from "./circuit-breaker-state.js";
 import { checkProjectHealth } from "./health.js";
 import { runPostWaveReview } from "./review.js";
 import { promptBudgetExtension } from "./budget.js";
@@ -152,18 +153,27 @@ export async function runWaveLoop(host, ctx) {
             saveRunState(ctx.runDir, buildRunState(host, "steering", neverStarted));
             // ── Overlay merge outcomes into wave history ──
             const failedMergeBranches = new Set(swarm.mergeResults.filter(r => !r.ok).map(r => r.branch));
+            const tasks = swarm.agents.map(a => {
+                const mergeFailed = a.branch && failedMergeBranches.has(a.branch);
+                return {
+                    prompt: a.task.prompt,
+                    status: a.status,
+                    type: a.task.type,
+                    filesChanged: mergeFailed ? 0 : a.filesChanged,
+                    toolCalls: a.toolCalls,
+                    error: mergeFailed ? `merge-failed: branch ${a.branch} did not land` : a.error,
+                };
+            });
+            const nonHealTasks = tasks.filter(t => t.type !== "heal");
+            const nonHealFiles = nonHealTasks.reduce((sum, t) => sum + (t.filesChanged ?? 0), 0);
+            const nonHealToolCalls = nonHealTasks.reduce((sum, t) => sum + (t.toolCalls ?? 0), 0);
+            const totalToolCalls = swarm.agents.reduce((sum, a) => sum + a.toolCalls, 0);
+            const suspectedInfraFailure = host.waveNum > 0 && nonHealFiles === 0 && nonHealToolCalls > 0;
             host.waveHistory.push({
                 wave: host.waveNum,
-                tasks: swarm.agents.map(a => {
-                    const mergeFailed = a.branch && failedMergeBranches.has(a.branch);
-                    return {
-                        prompt: a.task.prompt,
-                        status: a.status,
-                        type: a.task.type,
-                        filesChanged: mergeFailed ? 0 : a.filesChanged,
-                        error: mergeFailed ? `merge-failed: branch ${a.branch} did not land` : a.error,
-                    };
-                }),
+                tasks,
+                totalToolCalls,
+                suspectedInfraFailure,
             });
             // ── Heal fail streak ──
             const lastWave = host.waveHistory[host.waveHistory.length - 1];
@@ -175,21 +185,26 @@ export async function runWaveLoop(host, ctx) {
                 healFailStreak = 0;
             }
             // ── Circuit breaker ──
-            const nonHealFiles = lastWave?.tasks.filter(t => t.type !== "heal").reduce((sum, t) => sum + (t.filesChanged ?? 0), 0) ?? 0;
-            if (nonHealFiles === 0 && host.waveNum > 0) {
-                zeroFileWaves++;
-                if (zeroFileWaves >= 2) {
-                    ctx.display.appendSteeringEvent(`Circuit breaker: 2 consecutive waves produced no merged changes — halting to prevent budget drain`);
-                    ctx.display.stop();
-                    saveRunState(ctx.runDir, buildRunState(host, "stopped", []));
-                    ctx.display.stop();
-                    console.log(chalk.red(`\n  Circuit breaker: 2 consecutive waves produced no merged changes.`));
-                    console.log(chalk.red(`  Halting to prevent budget drain. Run preserved at ${ctx.runDir}.`));
-                    process.exit(3);
-                }
+            const { streak: nextZeroFileWaves, shouldHalt: circuitHalt } = updateCircuitBreakerStreak({
+                waveNum: host.waveNum,
+                prevStreak: zeroFileWaves,
+                nonHealFiles,
+                totalToolCallsAllAgents: totalToolCalls,
+            });
+            if (host.waveNum > 0 && nonHealFiles === 0 && nonHealToolCalls > 0) {
+                const msg = "[circuit-breaker] Agents completed with tool calls but 0 files landed — possible worktree/merge bug, NOT a stuck agent. Continuing run.";
+                console.warn(chalk.yellow(`\n  ${msg}`));
+                ctx.display.appendSteeringEvent(msg);
             }
-            else {
-                zeroFileWaves = 0;
+            zeroFileWaves = nextZeroFileWaves;
+            if (circuitHalt) {
+                ctx.display.appendSteeringEvent(`Circuit breaker: 2 consecutive waves produced no merged changes — halting to prevent budget drain`);
+                ctx.display.stop();
+                saveRunState(ctx.runDir, buildRunState(host, "stopped", []));
+                ctx.display.stop();
+                console.log(chalk.red(`\n  Circuit breaker: 2 consecutive waves produced no merged changes.`));
+                console.log(chalk.red(`  Halting to prevent budget drain. Run preserved at ${ctx.runDir}.`));
+                process.exit(3);
             }
             // ── Hook-blocked work ──
             const hookBlocked = swarm.agents.filter(a => swarm.logs.some(l => l.agentId === a.id && l.text.includes("did NOT land")));

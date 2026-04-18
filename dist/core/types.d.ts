@@ -173,8 +173,13 @@ export interface WaveSummary {
         status: string;
         type?: string;
         filesChanged?: number;
+        toolCalls?: number;
         error?: string;
     }[];
+    /** Sum of `toolCalls` across all agents in this wave (diagnostics). */
+    totalToolCalls?: number;
+    /** Non-heal tasks landed 0 files but agents invoked tools — possible worktree/merge bug. */
+    suspectedInfraFailure?: boolean;
 }
 /** Result from the steering function. */
 export interface SteerResult {
