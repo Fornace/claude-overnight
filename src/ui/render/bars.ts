@@ -5,11 +5,11 @@
 // keep everything Swarm-aware here and out of the pure primitives.
 
 import chalk from "chalk";
-import type { Swarm } from "../swarm/swarm.js";
-import { RATE_LIMIT_WINDOW_SHORT } from "../core/types.js";
-import type { AITurn, RLGetter } from "../core/types.js";
-import { getModelCapability, modelDisplayName } from "../core/models.js";
-import { allTurns, focusedTurn } from "../core/turns.js";
+import type { Swarm } from "../../swarm/swarm.js";
+import { RATE_LIMIT_WINDOW_SHORT } from "../../core/types.js";
+import type { AITurn, RLGetter } from "../../core/types.js";
+import { getModelCapability, modelDisplayName } from "../../core/models.js";
+import { allTurns, focusedTurn } from "../../core/turns.js";
 import { fmtTokens, renderWaitingIndicator } from "./primitives.js";
 
 /** Context-fill percentage and color function for a token count vs safe limit.

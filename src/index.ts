@@ -30,7 +30,7 @@ import {
   readPreviousRunKnowledge,
   createRunDir, updateLatestSymlink,
 } from "./state/state.js";
-import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL, type CoachResult } from "./planner/coach.js";
+import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL, type CoachResult } from "./planner/coach/coach.js";
 import { editRunSettings, formatSettingsSummary } from "./cli/settings.js";
 import type { MutableRunSettings } from "./core/types.js";
 import { printVersion, printHelp } from "./cli/help.js";

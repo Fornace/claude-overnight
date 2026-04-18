@@ -12,7 +12,7 @@ import { execSync } from "child_process";
 import chalk from "chalk";
 import type { Task, MergeStrategy, BranchRecord, WaveSummary, RLGetter } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
-import { contextFillInfo } from "../ui/render.js";
+import { contextFillInfo } from "../ui/render/render.js";
 import { getModelCapability } from "../core/models.js";
 import { RunDisplay } from "../ui/ui.js";
 import type { LiveConfig, SteeringContext } from "../ui/ui.js";

@@ -3,7 +3,7 @@
 // objective line, an optional status block, a last-wave recap, and a live
 // ticker of planner activity.
 import chalk from "chalk";
-import { modelDisplayName } from "../core/models.js";
+import { modelDisplayName } from "../../core/models.js";
 import { colorEvent, renderWaitingIndicator, section, truncate, wrap, } from "./primitives.js";
 import { renderUnifiedFrame } from "./layout.js";
 import { renderSteeringUsageBar } from "./bars.js";

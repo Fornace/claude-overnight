@@ -1,6 +1,6 @@
-import type { RLGetter } from "../core/types.js";
-import type { RunInfo, SteeringContext, SteeringEvent } from "./ui.js";
-import type { InteractivePanel } from "./interactive-panel.js";
+import type { RLGetter } from "../../core/types.js";
+import type { RunInfo, SteeringContext, SteeringEvent } from "../ui.js";
+import type { InteractivePanel } from "../interactive-panel.js";
 /** Everything the steering frame needs to render, produced fresh each tick. */
 export interface SteeringViewData {
     /** The ephemeral ticker heartbeat — elapsed, tool count, cost, current reasoning snippet. */

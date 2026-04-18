@@ -3,7 +3,7 @@ import { join } from "path";
 import chalk from "chalk";
 import type { BranchRecord, PermMode, WaveSummary } from "../core/types.js";
 import { getPeakPlannerContext, runPlannerQuery } from "../planner/query.js";
-import { fmtTokens } from "../ui/render.js";
+import { fmtTokens } from "../ui/render/render.js";
 import { getModelCapability } from "../core/models.js";
 import { readRunMemory } from "../state/state.js";
 

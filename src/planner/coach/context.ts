@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
-import type { ProviderConfig } from "../providers/index.js";
+import type { ProviderConfig } from "../../providers/index.js";
 
 export const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
 

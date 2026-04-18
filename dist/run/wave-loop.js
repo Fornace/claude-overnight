@@ -10,7 +10,7 @@ import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
 import { Swarm } from "../swarm/swarm.js";
-import { contextFillInfo } from "../ui/render.js";
+import { contextFillInfo } from "../ui/render/render.js";
 import { getModelCapability } from "../core/models.js";
 import { isJWTAuthError } from "../core/auth.js";
 import { saveRunState, saveWaveSession, } from "../state/state.js";

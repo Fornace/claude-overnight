@@ -10,7 +10,7 @@
 //
 // All input *state* lives in `InputState`. All settings *fields* live in
 // `settings.ts`. This file owns lifecycle and rendering only.
-import { renderFrame, renderSteeringFrame } from "./render.js";
+import { renderFrame, renderSteeringFrame } from "./render/render.js";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";

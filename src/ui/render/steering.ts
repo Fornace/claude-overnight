@@ -4,10 +4,10 @@
 // ticker of planner activity.
 
 import chalk from "chalk";
-import type { RLGetter, WaveSummary } from "../core/types.js";
-import type { RunInfo, SteeringContext, SteeringEvent } from "./ui.js";
-import { modelDisplayName } from "../core/models.js";
-import type { InteractivePanel } from "./interactive-panel.js";
+import type { RLGetter, WaveSummary } from "../../core/types.js";
+import type { RunInfo, SteeringContext, SteeringEvent } from "../ui.js";
+import { modelDisplayName } from "../../core/models.js";
+import type { InteractivePanel } from "../interactive-panel.js";
 import {
   colorEvent,
   renderWaitingIndicator,

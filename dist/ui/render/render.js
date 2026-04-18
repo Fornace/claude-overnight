@@ -4,7 +4,7 @@
 // "active swarm" frame and the post-run summary, and re-exports the rest of
 // the API so external callers see a single entry point.
 import chalk from "chalk";
-import { getModelCapability, modelDisplayName } from "../core/models.js";
+import { getModelCapability, modelDisplayName } from "../../core/models.js";
 import { colorEvent, fmtDur, fmtTokens, renderWaitingIndicator, spinnerFrame, truncate, } from "./primitives.js";
 import { renderUnifiedFrame } from "./layout.js";
 import { contextFillInfo, renderUsageBars } from "./bars.js";

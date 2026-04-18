@@ -5,11 +5,11 @@
 // the API so external callers see a single entry point.
 
 import chalk from "chalk";
-import type { Swarm } from "../swarm/swarm.js";
-import type { AgentState } from "../core/types.js";
-import type { RunInfo } from "./ui.js";
-import { getModelCapability, modelDisplayName } from "../core/models.js";
-import type { InteractivePanel } from "./interactive-panel.js";
+import type { Swarm } from "../../swarm/swarm.js";
+import type { AgentState } from "../../core/types.js";
+import type { RunInfo } from "../ui.js";
+import { getModelCapability, modelDisplayName } from "../../core/models.js";
+import type { InteractivePanel } from "../interactive-panel.js";
 import {
   colorEvent,
   fmtDur,

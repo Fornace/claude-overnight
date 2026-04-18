@@ -13,7 +13,7 @@
 
 import type { Swarm } from "../swarm/swarm.js";
 import type { RLGetter } from "../core/types.js";
-import { renderFrame, renderSteeringFrame } from "./render.js";
+import { renderFrame, renderSteeringFrame } from "./render/render.js";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";

@@ -2,24 +2,24 @@ import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
-import { runPlannerQuery, attemptJsonParse } from "./query.js";
-import { renderWaitingIndicator } from "../ui/render.js";
-import { createTurn, beginTurn, endTurn } from "../core/turns.js";
-import { selectKey, ask } from "../cli/cli.js";
-import { envFor, isCursorProxyProvider, ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "../providers/index.js";
-import { COACH_SCHEMA, validateCoachOutput } from "./coach-schema.js";
-import { URL_REGEX, fetchUrlContent, collectRepoFacts, renderRepoFacts } from "./coach-context.js";
-import { loadUserSettings, saveUserSettings } from "./coach-settings.js";
-export { loadUserSettings, saveUserSettings } from "./coach-settings.js";
-export { validateCoachOutput, } from "./coach-schema.js";
+import { runPlannerQuery, attemptJsonParse } from "../query.js";
+import { renderWaitingIndicator } from "../../ui/render/render.js";
+import { createTurn, beginTurn, endTurn } from "../../core/turns.js";
+import { selectKey, ask } from "../../cli/cli.js";
+import { envFor, isCursorProxyProvider, ensureCursorProxyRunning, PROXY_DEFAULT_URL } from "../../providers/index.js";
+import { COACH_SCHEMA, validateCoachOutput } from "./schema.js";
+import { URL_REGEX, fetchUrlContent, collectRepoFacts, renderRepoFacts } from "./context.js";
+import { loadUserSettings, saveUserSettings } from "./settings.js";
+export { loadUserSettings, saveUserSettings } from "./settings.js";
+export { validateCoachOutput, } from "./schema.js";
 export const COACH_MODEL = "claude-haiku-4-5";
 const COACH_TIMEOUT_MS = 60_000;
 export function resolveCoachSkillPath() {
     const here = dirname(fileURLToPath(import.meta.url));
-    const installRoot = dirname(dirname(here)); // <pkg>/dist/planner → <pkg>
+    const installRoot = dirname(dirname(dirname(here))); // <pkg>/dist/planner/coach → <pkg>
     const candidates = [
         join(installRoot, "plugins", "claude-overnight", "skills", "coach", "SKILL.md"),
-        join(here, "..", "..", "plugins", "claude-overnight", "skills", "coach", "SKILL.md"),
+        join(here, "..", "..", "..", "plugins", "claude-overnight", "skills", "coach", "SKILL.md"),
     ];
     for (const p of candidates) {
         try {

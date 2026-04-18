@@ -1,4 +1,4 @@
-import type { ProviderConfig } from "../providers/index.js";
+import type { ProviderConfig } from "../../providers/index.js";
 export declare const URL_REGEX: RegExp;
 export declare function fetchUrlContent(url: string, timeoutMs?: number): Promise<string | null>;
 export interface RepoFacts {

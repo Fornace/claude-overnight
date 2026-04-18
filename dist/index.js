@@ -10,7 +10,7 @@ import { pickModel, loadProviders, buildEnvResolver, healthCheckCursorProxy, PRO
 import { executeRun } from "./run/run.js";
 import { parseCliFlags, fetchModels, ask, select, selectKey, loadTaskFile, validateConcurrency, isGitRepo, validateGitRepo, showPlan, } from "./cli/cli.js";
 import { loadRunState, findOrphanedDesigns, backfillOrphanedPlans, readPreviousRunKnowledge, createRunDir, updateLatestSymlink, } from "./state/state.js";
-import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL } from "./planner/coach.js";
+import { runSetupCoach, loadUserSettings, saveUserSettings, COACH_MODEL } from "./planner/coach/coach.js";
 import { editRunSettings, formatSettingsSummary } from "./cli/settings.js";
 import { printVersion, printHelp } from "./cli/help.js";
 import { detectResume } from "./cli/resume.js";
