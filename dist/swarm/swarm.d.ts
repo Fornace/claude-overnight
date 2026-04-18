@@ -1,3 +1,4 @@
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { type PermMode } from "../core/types.js";
 import type { Task, AgentState, SwarmPhase, RateLimitWindow, AITurn } from "../core/types.js";
 import type { MergeResult } from "./merge.js";

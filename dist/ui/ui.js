@@ -1,110 +1,169 @@
-// Live in-terminal display for a run.
-//
-// `RunDisplay` orchestrates three things at 4 Hz:
-//   1. Pull state from the active phase (a Swarm during a wave, or steering
-//      data between waves) and hand it to the unified frame renderer.
-//   2. Compose the frame with the input-prompt strip + interactive panel so
-//      the prompt is never clipped off the bottom of the terminal.
-//   3. Wire raw stdin through the keyboard pipeline (`keyboard.ts`) so
-//      hotkeys (s/p/i/?/d/0-9/q) and paste behave consistently.
-//
-// All input *state* lives in `InputState`. All settings *fields* live in
-// `settings.ts`. This file owns lifecycle and rendering only.
-import { renderFrame, renderSteeringFrame } from "./render/render.js";
+import { jsx as _jsx } from "react/jsx-runtime";
+import { render as inkRender } from "ink";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
-import { InteractivePanel } from "./interactive-panel.js";
-import { InputState, bindKeyboard, renderInputPrompt, } from "./keyboard.js";
-import { newNavState, navigate as navigateNav, highlightKey as navHighlightKey, } from "./nav.js";
+import { UiStore, makeInitialState } from "./store.js";
+import { App } from "./shell.js";
 const MAX_STEERING_EVENTS = 60;
 const MAX_ASK_LINES = 40;
-/** Visible lines for the ask panel, clamped to leave room for header/content/footer/input. */
+const MAX_DEBRIEF_HISTORY = 20;
 function askDisplayCap() {
     return Math.max(3, Math.min(MAX_ASK_LINES, (process.stdout.rows || 40) - 20));
 }
 let askTempDir;
 export class RunDisplay {
     runInfo;
-    panel = new InteractivePanel();
-    // Phase state — exactly one of `swarm` or `steeringActive` is meaningful at a time.
-    _swarm;
-    _liveConfig;
-    steeringActive = false;
-    steeringStatusLine = "Assessing...";
-    steeringStartedAt = 0;
-    steeringEvents = [];
-    steeringContext;
-    rlGetter;
-    // Render loop state
-    interval;
-    keyHandler;
+    store;
+    ink;
     started = false;
     isTTY;
+    askTempFile;
+    // Plain-mode (non-TTY) tracking
+    plainInterval;
     lastSeq = 0;
     lastCompleted = -1;
-    lastFrame = "";
-    // Input + selection state — KeyboardHost surface.
-    inputState = new InputState();
-    _selectedAgentId;
-    navState = newNavState();
-    // Side-query (ask) state
-    _askState;
-    _askBusy = false;
-    askTempFile;
-    // External callbacks
     onSteer;
     onAsk;
     constructor(runInfo, liveConfig, callbacks) {
         this.runInfo = runInfo;
-        this._liveConfig = liveConfig;
         this.onSteer = callbacks?.onSteer;
         this.onAsk = callbacks?.onAsk;
         this.isTTY = !!process.stdout.isTTY;
+        this.store = new UiStore(makeInitialState(runInfo, liveConfig, {
+            hasOnSteer: !!this.onSteer,
+            hasOnAsk: !!this.onAsk,
+        }));
     }
-    // ── KeyboardHost surface ──
-    get swarm() { return this._swarm; }
-    get liveConfig() { return this._liveConfig; }
-    get selectedAgentId() { return this._selectedAgentId; }
-    get askState() { return this._askState; }
-    get askBusy() { return this._askBusy; }
-    get hasOnSteer() { return !!this.onSteer; }
-    get hasOnAsk() { return !!this.onAsk; }
-    get hasAskTempFile() { return !!this.askTempFile; }
-    // Backwards-compat alias (used by run.ts via callsites that read .swarm directly).
-    getSelectedAgentId() { return this._selectedAgentId; }
+    // ── Lifecycle ──
+    start() {
+        if (this.started)
+            return;
+        this.started = true;
+        if (this.isTTY) {
+            const callbacks = {
+                onSteer: (t) => this.onSteer?.(t),
+                onAsk: (t) => this.onAsk?.(t),
+                clearAsk: () => this.clearAskState(),
+                openAskTempFile: () => this.openAskTempFile(),
+                cycleAgent: (dir) => this.cycleSelectedAgent(dir),
+                selectAgent: (id) => this.selectAgent(id),
+                clearSelectedAgent: () => this.clearSelectedAgent(),
+                settingsTick: () => this.nudge(),
+            };
+            this.ink = inkRender(_jsx(App, { store: this.store, callbacks: callbacks }));
+        }
+        else {
+            this.plainInterval = setInterval(() => this.plainTick(), 500);
+        }
+    }
+    pause() {
+        // Ink mode: unmount to free stdout so a string block (summary, prompts)
+        // can be printed in the gap. Resume remounts fresh state from the store.
+        if (this.ink) {
+            try {
+                this.ink.unmount();
+            }
+            catch { }
+            this.ink = undefined;
+        }
+        if (this.plainInterval) {
+            clearInterval(this.plainInterval);
+            this.plainInterval = undefined;
+        }
+    }
+    resume() {
+        if (!this.started)
+            return;
+        if (this.isTTY && !this.ink) {
+            const callbacks = {
+                onSteer: (t) => this.onSteer?.(t),
+                onAsk: (t) => this.onAsk?.(t),
+                clearAsk: () => this.clearAskState(),
+                openAskTempFile: () => this.openAskTempFile(),
+                cycleAgent: (dir) => this.cycleSelectedAgent(dir),
+                selectAgent: (id) => this.selectAgent(id),
+                clearSelectedAgent: () => this.clearSelectedAgent(),
+                settingsTick: () => this.nudge(),
+            };
+            this.ink = inkRender(_jsx(App, { store: this.store, callbacks: callbacks }));
+            return;
+        }
+        if (!this.isTTY && !this.plainInterval) {
+            this.plainInterval = setInterval(() => this.plainTick(), 500);
+        }
+    }
+    stop() {
+        this.pause();
+        this.clearAskTempFile();
+        this.started = false;
+    }
+    // ── Phase updates ──
+    setWave(swarm) {
+        this.lastSeq = 0;
+        this.lastCompleted = -1;
+        this.store.patch({
+            phase: "run",
+            swarm,
+            rlGetter: undefined,
+            steeringContext: undefined,
+        });
+    }
+    setSteering(rlGetter, ctx) {
+        this.store.patch({
+            phase: "steering",
+            swarm: undefined,
+            selectedAgentId: undefined,
+            rlGetter,
+            steeringContext: ctx,
+            steeringStatusLine: "Assessing...",
+            steeringStartedAt: Date.now(),
+            steeringEvents: [],
+        });
+    }
+    updateSteeringStatus(text) {
+        this.store.patch({ steeringStatusLine: text });
+    }
+    appendSteeringEvent(text) {
+        const cur = this.store.get().steeringEvents;
+        const next = [...cur, { time: Date.now(), text }];
+        if (next.length > MAX_STEERING_EVENTS)
+            next.shift();
+        this.store.patch({ steeringEvents: next });
+    }
+    /** Backwards-compat alias. */
+    updateText(text) { this.updateSteeringStatus(text); }
     // ── Selection ──
-    /** Cycle the selected agent detail to the next running agent (or first running if none selected). */
-    cycleSelectedAgent() {
-        if (!this._swarm)
-            return;
-        const running = this._swarm.agents.filter(a => a.status === "running");
-        if (running.length === 0) {
-            this._selectedAgentId = undefined;
-            return;
-        }
-        if (this._selectedAgentId == null) {
-            this._selectedAgentId = running[0].id;
-            return;
-        }
-        const idx = running.findIndex(a => a.id === this._selectedAgentId);
-        this._selectedAgentId = running[(idx + 1) % running.length].id;
-    }
-    /** Select a specific agent by ID for the detail panel. */
     selectAgent(id) {
-        if (!this._swarm)
+        const swarm = this.store.get().swarm;
+        if (!swarm)
             return;
-        const agent = this._swarm.agents.find(a => a.id === id);
-        if (agent && agent.status === "running")
-            this._selectedAgentId = id;
+        const a = swarm.agents.find(ag => ag.id === id);
+        if (a && a.status === "running")
+            this.store.patch({ selectedAgentId: id });
     }
-    /** Clear the agent detail panel. */
-    clearSelectedAgent() { this._selectedAgentId = undefined; }
-    // ── Ask side-query ──
-    /** Replace the ask state. Called by run.ts as the side query streams and completes. */
+    clearSelectedAgent() { this.store.patch({ selectedAgentId: undefined }); }
+    cycleSelectedAgent(direction = 1) {
+        const { swarm, selectedAgentId } = this.store.get();
+        if (!swarm)
+            return;
+        const running = swarm.agents.filter(a => a.status === "running");
+        if (running.length === 0) {
+            this.store.patch({ selectedAgentId: undefined });
+            return;
+        }
+        if (selectedAgentId == null) {
+            const pick = direction > 0 ? running[0] : running[running.length - 1];
+            this.store.patch({ selectedAgentId: pick.id });
+            return;
+        }
+        const idx = running.findIndex(a => a.id === selectedAgentId);
+        const next = (idx + direction + running.length) % running.length;
+        this.store.patch({ selectedAgentId: running[next].id });
+    }
+    // ── Ask ──
     setAsk(state) {
-        this._askState = state;
         this.clearAskTempFile();
         if (state && !state.streaming && !state.error && state.answer) {
             const lines = state.answer.split("\n");
@@ -116,27 +175,13 @@ export class RunDisplay {
                 }
                 catch { }
             }
-            const preview = state.answer.split("\n")[0]?.slice(0, 120) || "(answered)";
-            this.panel.set({
-                mode: "ask",
-                header: `Ask`,
-                preview,
-                body: `Q: ${state.question}\n\nA: ${state.answer}`,
-            });
         }
-        else if (state && state.error) {
-            this.panel.set({ mode: "ask", header: "Ask", preview: state.error, body: `Q: ${state.question}\n\nError: ${state.error}` });
-        }
-        else if (!state && this.panel.state.mode === "ask") {
-            this.panel.set({ mode: "none", header: "", preview: "", body: "" });
-        }
+        this.store.patch({ ask: state, askTempFileAvailable: !!this.askTempFile });
     }
-    setAskBusy(busy) { this._askBusy = busy; }
-    /** Used by the keyboard pipeline to dismiss a completed ask without
-     *  re-running the full setAsk teardown. */
+    setAskBusy(busy) { this.store.patch({ askBusy: busy }); }
     clearAskState() {
-        this._askState = undefined;
         this.clearAskTempFile();
+        this.store.patch({ ask: undefined, askTempFileAvailable: false });
     }
     openAskTempFile() {
         if (!this.askTempFile)
@@ -162,207 +207,31 @@ export class RunDisplay {
             askTempDir = undefined;
         }
     }
-    // ── Steer / ask callbacks invoked from the keyboard pipeline ──
-    emitSteer(text) { this.onSteer?.(text); }
-    emitAsk(text) { this.onAsk?.(text); }
-    // ── Debrief (panel content) ──
-    /** Set or clear the debrief text shown in the interactive panel. */
+    // ── Debrief ──
     setDebrief(text, label) {
-        if (text) {
-            this.panel.set({ mode: "debrief", header: "Debrief", preview: text, body: text });
-            if (label && !text.startsWith("Summarizing")) {
-                this.panel.appendHistory(label, text);
-            }
-        }
-        else if (this.panel.state.mode === "debrief") {
-            this.panel.set({ mode: "none", header: "", preview: "", body: "" });
-        }
-    }
-    // ── Navigation ──
-    /** The view of phase state the navigator needs. Built fresh each call so it
-     *  always reflects the latest swarm/steering snapshot. */
-    navContext() {
-        return {
-            swarm: this._swarm,
-            steeringActive: this.steeringActive,
-            steeringEvents: this.steeringEvents,
-            steeringContext: this.steeringContext,
-            selectedAgentId: this._selectedAgentId,
-            selectAgent: (id) => this.selectAgent(id),
-            clearSelectedAgent: () => this.clearSelectedAgent(),
-        };
-    }
-    /** Arrow-key navigation dispatched by the keyboard pipeline. */
-    navigate(direction) {
-        return navigateNav(this.navContext(), this.navState, direction);
-    }
-    /** Returns the unique highlight key for the currently focused row, used by renderer. */
-    getHighlightKey() {
-        return navHighlightKey(this.navContext(), this.navState);
-    }
-    // ── Lifecycle ──
-    start() {
-        if (this.started)
-            return;
-        this.started = true;
-        this.lastFrame = "";
-        this.setupHotkeys();
-        this.resumeInterval();
-    }
-    setWave(swarm) {
-        this._swarm = swarm;
-        this.steeringActive = false;
-        this.rlGetter = undefined;
-        this.lastSeq = 0;
-        this.lastCompleted = -1;
-    }
-    setSteering(rlGetter, ctx) {
-        this._swarm = undefined;
-        this.steeringActive = true;
-        this.steeringStatusLine = "Assessing...";
-        this.steeringStartedAt = Date.now();
-        this.steeringEvents = [];
-        this.steeringContext = ctx;
-        this.rlGetter = rlGetter;
-    }
-    /** Replace the single live status line (ticker heartbeat). */
-    updateSteeringStatus(text) { this.steeringStatusLine = text; }
-    /** Append a discrete, persistent line to the steering scrollback. */
-    appendSteeringEvent(text) {
-        this.steeringEvents.push({ time: Date.now(), text });
-        if (this.steeringEvents.length > MAX_STEERING_EVENTS)
-            this.steeringEvents.shift();
-    }
-    /** Backwards-compat alias — treats input as the current status line. */
-    updateText(text) { this.updateSteeringStatus(text); }
-    pause() {
-        if (this.interval) {
-            clearInterval(this.interval);
-            this.interval = undefined;
-        }
-    }
-    resume() {
-        if (!this.started || this.interval)
-            return;
-        if (this.isTTY)
-            try {
-                process.stdout.write("\x1B[?25l");
-            }
-            catch { }
-        this.resumeInterval();
-    }
-    stop() {
-        this.pause();
-        if (this.keyHandler) {
-            process.stdin.removeListener("data", this.keyHandler);
-            this.keyHandler = undefined;
-            try {
-                process.stdout.write("\x1B[?2004l");
-            }
-            catch { }
-            try {
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-            }
-            catch { }
-        }
-        try {
-            process.stdout.write("\x1B[?25h");
-        }
-        catch { }
-        this.clearAskTempFile();
-        this.started = false;
-    }
-    resumeInterval() {
-        if (this.interval)
-            return;
-        if (!this.isTTY) {
-            this.interval = setInterval(() => this.plainTick(), 500);
+        if (!text) {
+            this.store.patch({ debrief: undefined });
             return;
         }
-        try {
-            process.stdout.write("\x1B[?25l\x1B[H\x1B[J");
+        const entry = { label: label ?? "Debrief", text, time: Date.now() };
+        const history = this.store.get().debriefHistory.slice();
+        if (label && !text.startsWith("Summarizing")) {
+            history.push(entry);
+            while (history.length > MAX_DEBRIEF_HISTORY)
+                history.shift();
         }
-        catch {
-            return;
-        }
-        this.interval = setInterval(() => this.flush(), 250);
+        this.store.patch({ debrief: { text, label }, debriefHistory: history });
     }
-    // ── Render ──
-    /** Write the full frame to stdout, clamped to terminal height.
-     *  Layout: header + content (elastic) + footer + input/ask (fixed).
-     *  The content area shrinks so input prompts are never clipped. */
-    flush() {
-        try {
-            const maxRows = (process.stdout.rows || 40) - 1;
-            const frame = this.render(maxRows);
-            if (frame === this.lastFrame)
-                return; // nothing changed
-            this.lastFrame = frame;
-            process.stdout.write("\x1B[H\x1B[J" + frame);
-        }
-        catch {
-            this.pause();
-        }
+    // ── Internal ──
+    /** Force a re-render by bumping the tick — used after we mutate a swarm /
+     *  liveConfig in-place and want the UI to reflect it immediately. */
+    nudge() {
+        this.store.patch({ tick: this.store.get().tick + 1 });
     }
-    render(maxRows) {
-        const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
-        // Fullscreen panel takes over the entire terminal when expanded — all of
-        // the normal UI (header, agent list, footer, input prompt) is hidden
-        // behind it until the user presses Esc or Ctrl-O to collapse.
-        if (this.panel.visible && this.panel.state.expanded) {
-            const h = maxRows ?? ((process.stdout.rows || 40) - 1);
-            return this.panel.renderFullscreen(w, h);
-        }
-        const inputPrompt = renderInputPrompt(this, this.inputState);
-        const panelCollapsed = this.panel.visible ? this.panel.renderCollapsed(w) : "";
-        const bottom = inputPrompt + (panelCollapsed ? "\n" + panelCollapsed : "");
-        // `bottom` always starts with "\n" (renderInputPrompt prefixes, and the panel
-        // branch prepends "\n"). Each newline consumes exactly one visual row, so
-        // bottomRows == count of newlines — no +1.
-        const bottomRows = bottom ? (bottom.match(/\n/g) || []).length : 0;
-        const frameBudget = maxRows != null ? maxRows - bottomRows : undefined;
-        let frame = "";
-        if (this._swarm) {
-            frame = renderFrame(this._swarm, this.hasHotkeys(), this.runInfo, this._selectedAgentId, frameBudget, this.panel);
-        }
-        else if (this.steeringActive) {
-            frame = renderSteeringFrame(this.runInfo, {
-                statusLine: this.steeringStatusLine,
-                events: this.steeringEvents,
-                context: this.steeringContext,
-                startedAt: this.steeringStartedAt,
-            }, this.hasHotkeys(), this.rlGetter, frameBudget, this.panel);
-        }
-        else {
-            return "";
-        }
-        return frame + bottom;
-    }
-    hasHotkeys() {
-        return !!this._liveConfig && !!process.stdin.isTTY;
-    }
-    setupHotkeys() {
-        if (!this._liveConfig || !process.stdin.isTTY)
-            return;
-        try {
-            process.stdin.setRawMode(true);
-            process.stdin.resume();
-        }
-        catch {
-            return;
-        }
-        try {
-            process.stdout.write("\x1B[?2004h");
-        }
-        catch { }
-        this.keyHandler = bindKeyboard(this, this.inputState, () => this.flush());
-    }
-    // ── Plain-mode (non-TTY) progress ──
     plainTick() {
-        if (!this._swarm)
+        const swarm = this.store.get().swarm;
+        if (!swarm)
             return;
-        const swarm = this._swarm;
         const write = (line) => { try {
             process.stdout.write(line + "\n");
         }

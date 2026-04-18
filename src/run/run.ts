@@ -11,7 +11,7 @@ import { buildEnvResolver, isCursorProxyProvider } from "../providers/index.js";
 import { RunDisplay } from "../ui/ui.js";
 import type { LiveConfig, RunInfo, SteeringContext } from "../ui/ui.js";
 import type { PlannerLog } from "../planner/query.js";
-import { renderSummary } from "../ui/render/render.js";
+import { renderSummary } from "../ui/summary.js";
 import {
   readRunMemory, writeStatus, writeGoalUpdate, saveRunState,
   saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone,

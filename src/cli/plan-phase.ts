@@ -5,7 +5,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "../swarm/swarm.js";
 import { identifyThemes, buildThinkingTasks, orchestrate, planTasks, refinePlan } from "../planner/planner.js";
 import { RunDisplay } from "../ui/ui.js";
-import { renderSummary } from "../ui/render/render.js";
+import { renderSummary } from "../ui/summary.js";
 import { isCursorProxyProvider } from "../providers/index.js";
 import type { ProviderConfig, EnvResolver } from "../providers/index.js";
 import { readMdDir, saveRunState } from "../state/state.js";

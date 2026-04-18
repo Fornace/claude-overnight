@@ -3,7 +3,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
 import { runPlannerQuery, attemptJsonParse, type PlannerLog } from "../query.js";
-import { renderWaitingIndicator } from "../../ui/render/render.js";
+import { renderWaitingIndicator } from "../../ui/primitives.js";
 import { createTurn, beginTurn, endTurn } from "../../core/turns.js";
 import { selectKey, ask } from "../../cli/cli.js";
 import type { ProviderConfig } from "../../providers/index.js";

@@ -6,7 +6,7 @@ import { steerWave, STEER_SCHEMA } from "../planner/steering.js";
 import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver, attemptJsonParse } from "../planner/query.js";
 import { buildEnvResolver, isCursorProxyProvider } from "../providers/index.js";
 import { RunDisplay } from "../ui/ui.js";
-import { renderSummary } from "../ui/render/render.js";
+import { renderSummary } from "../ui/summary.js";
 import { readRunMemory, writeStatus, writeGoalUpdate, saveRunState, saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone, writeSteerInbox, consumeSteerInbox, countSteerInbox, appendOvernightLogStart, updateOvernightLogEnd, } from "../state/state.js";
 import { runPostRunReview } from "./review.js";
 import { printFinalSummary } from "./summary.js";

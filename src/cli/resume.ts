@@ -8,7 +8,7 @@ import {
 } from "../state/state.js";
 import { orchestrate, salvageFromFile } from "../planner/planner.js";
 import { setTranscriptRunDir } from "../core/transcripts.js";
-import { wrap } from "../ui/render/render.js";
+import { wrap } from "../ui/primitives.js";
 import { makeProgressLog, selectKey } from "./cli.js";
 import { editRunSettings } from "./settings.js";
 import type { PermMode, RunState, MutableRunSettings, Task } from "../core/types.js";

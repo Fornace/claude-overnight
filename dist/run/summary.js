@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import chalk from "chalk";
 import { getPeakPlannerContext, runPlannerQuery } from "../planner/query.js";
-import { fmtTokens } from "../ui/render/render.js";
+import { fmtTokens } from "../ui/primitives.js";
 import { getModelCapability } from "../core/models.js";
 import { readRunMemory } from "../state/state.js";
 /** Generate a longer narrative summary at run end. Awaited (not fire-and-forget)
