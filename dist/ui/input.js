@@ -9,11 +9,34 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 // Text-entry overlays (steer, ask, settings) are *not* separate phases — they
 // capture typed chars, show a minimal hint in the footer (handled by
 // footer.tsx), and dispatch on Enter/Esc.
+//
+// Text-entry input hygiene: terminals send a zoo of escape/control sequences
+// for navigation keys (arrows, cmd+arrow → ctrl+a/e on macOS, option+letter,
+// pageup/pgdn, home/end, lone ESC flushes). We explicitly swallow all of them
+// instead of letting them fall through to the "typed char" branch, which used
+// to corrupt the buffer or dismiss the overlay and discard unfinished text.
 import { useState, useSyncExternalStore } from "react";
 import { Text, Box, useInput } from "ink";
 import chalk from "chalk";
+import { visibleLen, wrap } from "./primitives.js";
 import { SETTINGS_FIELDS, SETTINGS_LABELS, NUMERIC_SETTINGS_FIELDS, applySettingEdit, readSettingValue, } from "./settings.js";
 export const MAX_INPUT_LEN = 600;
+// Any printable char is kept verbatim; everything else is filtered out before
+// touching the buffer. Matches: ASCII C0 controls (0x00-0x1F), DEL (0x7F), C1
+// controls (0x80-0x9F), and lone ESC (already handled by `key.escape`).
+export const CONTROL_CHAR_RE = /[\x00-\x1f\x7f-\x9f]/g;
+/** Strip control characters from typed raw input so escape flushes, newlines,
+ *  and C1 bytes never end up in the user's buffer. Exported for tests. */
+export function sanitizeTyped(raw) {
+    return raw.replace(CONTROL_CHAR_RE, "");
+}
+/** Delete the previous word including any trailing whitespace, readline-style.
+ *  Bound to Ctrl+W and Opt/Cmd+Backspace. Exported for tests. */
+export function deleteWordBackward(s) {
+    const trimmed = s.replace(/\s+$/, "");
+    const idx = trimmed.search(/\S+$/);
+    return idx < 0 ? "" : trimmed.slice(0, idx);
+}
 export function InputLayer({ store, callbacks, onToast }) {
     const [buffer, setBuffer] = useState("");
     const [settingsField, setSettingsField] = useState(0);
@@ -24,7 +47,14 @@ export function InputLayer({ store, callbacks, onToast }) {
         const lc = state.liveConfig;
         // ── Text-entry modes ──
         if (mode !== "none") {
-            // Esc bails
+            // Navigation keys must NEVER touch the buffer or dismiss the overlay.
+            // (Bug: cmd+arrow on macOS Terminal sends ctrl+a/ctrl+e which used to
+            // leak through and append "a"/"e"; arrows on some terminals flushed
+            // partial ESC sequences that dropped the user's unfinished text.)
+            if (key.upArrow || key.downArrow || key.leftArrow || key.rightArrow ||
+                key.pageUp || key.pageDown || key.home || key.end)
+                return;
+            // Esc bails (loses the buffer — always intentional).
             if (key.escape) {
                 setBuffer("");
                 setSettingsField(0);
@@ -59,25 +89,53 @@ export function InputLayer({ store, callbacks, onToast }) {
                 store.patch({ input: { mode: "none", buffer: "", settingsField: 0 } });
                 return;
             }
-            if (key.tab && mode === "settings") {
-                const field = SETTINGS_FIELDS[settingsField % SETTINGS_FIELDS.length];
-                if (field === "pause" && swarm && lc) {
-                    const next = !swarm.paused;
-                    swarm.setPaused(next);
-                    lc.paused = next;
-                    lc.dirty = true;
-                    callbacks.settingsTick();
+            // Word-delete: option/alt + backspace — expected on macOS.
+            if ((key.meta || key.ctrl) && (key.backspace || key.delete)) {
+                const next = deleteWordBackward(buffer);
+                setBuffer(next);
+                store.patch({ input: { ...state.input, buffer: next } });
+                return;
+            }
+            // Swallow modifier combos so they can't leak as stray letters.
+            // (cmd+→ on macOS Terminal = \x05 = ctrl+e → input handler sees raw='e';
+            // without this guard we used to append 'e'.)
+            if (key.ctrl || key.meta) {
+                if (mode !== "settings" && key.ctrl && raw === "u") {
+                    // ctrl+U: clear the whole line — standard readline behavior.
+                    setBuffer("");
+                    store.patch({ input: { ...state.input, buffer: "" } });
+                    return;
                 }
-                const next = settingsField + 1;
-                setBuffer("");
-                if (next >= SETTINGS_FIELDS.length) {
-                    setSettingsField(0);
-                    store.patch({ input: { mode: "none", buffer: "", settingsField: 0 } });
+                if (key.ctrl && raw === "w") {
+                    const next = deleteWordBackward(buffer);
+                    setBuffer(next);
+                    store.patch({ input: { ...state.input, buffer: next } });
+                    return;
                 }
-                else {
-                    setSettingsField(next);
-                    store.patch({ input: { mode: "settings", buffer: "", settingsField: next } });
+                return;
+            }
+            if (key.tab) {
+                if (mode === "settings") {
+                    const field = SETTINGS_FIELDS[settingsField % SETTINGS_FIELDS.length];
+                    if (field === "pause" && swarm && lc) {
+                        const next = !swarm.paused;
+                        swarm.setPaused(next);
+                        lc.paused = next;
+                        lc.dirty = true;
+                        callbacks.settingsTick();
+                    }
+                    const next = settingsField + 1;
+                    setBuffer("");
+                    if (next >= SETTINGS_FIELDS.length) {
+                        setSettingsField(0);
+                        store.patch({ input: { mode: "none", buffer: "", settingsField: 0 } });
+                    }
+                    else {
+                        setSettingsField(next);
+                        store.patch({ input: { mode: "settings", buffer: "", settingsField: next } });
+                    }
                 }
+                // Tab in steer/ask modes is a no-op, not a submit or a "tab character".
                 return;
             }
             if (key.backspace || key.delete) {
@@ -86,9 +144,11 @@ export function InputLayer({ store, callbacks, onToast }) {
                 store.patch({ input: { ...state.input, buffer: next } });
                 return;
             }
-            // Typed char(s) — raw is the string for this event
+            // Typed printable char(s) — raw is the string for this event. Strip any
+            // control chars (lone ESC flushes, \n linefeeds parseKeypress labels as
+            // 'enter', partial ESC [ sequences) before touching the buffer.
             if (raw && raw.length > 0) {
-                let text = raw;
+                let text = sanitizeTyped(raw);
                 if (mode === "settings") {
                     const field = SETTINGS_FIELDS[settingsField % SETTINGS_FIELDS.length];
                     if (NUMERIC_SETTINGS_FIELDS.has(field))
@@ -148,6 +208,10 @@ export function InputLayer({ store, callbacks, onToast }) {
             return;
         const code = raw.charCodeAt(0);
         if (code < 0x20 || code > 0x7E)
+            return;
+        // Any ctrl/meta combo (that isn't one of the specific hotkeys above) is
+        // nav-adjacent on most terminals; ignore instead of matching "c"/"i" etc.
+        if (key.ctrl || key.meta)
             return;
         const toast = (msg) => onToast(msg);
         switch (raw.toLowerCase()) {
@@ -225,22 +289,58 @@ export function InputLayer({ store, callbacks, onToast }) {
     const state = useSyncExternalStore(store.subscribe, store.get, store.get);
     if (state.input.mode === "none")
         return null;
-    // Caret pulses with the 1 Hz tick — visible on even ticks, hidden on odd.
-    const caret = state.tick % 2 === 0 ? chalk.cyan("\u2588") : " ";
-    return _jsx(InputPrompt, { mode: state.input.mode, buffer: buffer, settingsField: settingsField, state: state, caret: caret });
+    const caretOn = state.tick % 2 === 0;
+    return (_jsx(InputPrompt, { mode: state.input.mode, buffer: buffer, settingsField: settingsField, state: state, caretOn: caretOn }));
 }
-function InputPrompt({ mode, buffer, settingsField, state, caret, }) {
+function terminalWidth() { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
+function InputPrompt({ mode, buffer, settingsField, state, caretOn }) {
+    const termW = terminalWidth();
+    const boxW = Math.min(Math.max(44, termW - 6), 120);
+    const innerW = boxW - 6;
+    const accent = mode === "settings" ? chalk.yellow : mode === "steer" ? chalk.cyan : chalk.magenta;
+    const borderColor = mode === "settings" ? "yellow" : mode === "steer" ? "cyan" : "magenta";
+    const title = mode === "steer" ? "Steer next wave"
+        : mode === "ask" ? "Ask the planner"
+            : "Settings";
+    let subtitle;
+    let hint;
+    let currentLine = null;
+    let filteredBuffer = buffer;
     if (mode === "settings") {
         const total = SETTINGS_FIELDS.length;
         const field = SETTINGS_FIELDS[settingsField % total];
-        const label = SETTINGS_LABELS[field];
+        subtitle = SETTINGS_LABELS[field];
         const current = readSettingValue(field, state.liveConfig, state.swarm);
-        const hint = field === "pause"
-            ? chalk.dim(` (Enter toggle, Tab skip, Esc exit)`)
-            : chalk.dim(` [${settingsField + 1}/${total}]  Tab next \u00b7 Esc exit \u00b7 current: ${chalk.white(current)}`);
-        return (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsxs(Text, { children: ["  ", chalk.cyan("\u25C6"), " ", chalk.bold(label), hint] }), _jsxs(Text, { children: ["  ", buffer, caret] })] }));
+        currentLine = chalk.dim(`current: ${chalk.white(current)}`);
+        hint = field === "pause"
+            ? chalk.dim(`Enter toggle \u00b7 Tab skip \u00b7 Esc exit`)
+            : chalk.dim(`[${settingsField + 1}/${total}]  Enter save \u00b7 Tab skip \u00b7 Esc exit`);
     }
-    const title = mode === "steer" ? "Inject next wave" : "Ask the planner";
-    const action = mode === "steer" ? "queue" : "send";
-    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsxs(Text, { children: ["  ", chalk.cyan(">"), " ", chalk.bold(title), " ", chalk.dim(`(Enter to ${action}, Esc to cancel)`)] }), _jsxs(Text, { children: ["  ", buffer, caret] })] }));
+    else {
+        subtitle = mode === "steer"
+            ? "queued as the next wave's seed"
+            : "planner answers inline — you keep working";
+        const action = mode === "steer" ? "queue" : "send";
+        hint = chalk.dim(`Enter ${action} \u00b7 Esc cancel \u00b7 Ctrl+U clear \u00b7 Ctrl+W del word`);
+    }
+    // Word-wrap the buffer so long entries don't blow past the box edge.
+    const bufferLines = filteredBuffer.length === 0
+        ? [""]
+        : wrap(filteredBuffer, Math.max(20, innerW));
+    const caret = caretOn ? accent("\u2588") : " ";
+    const lastIdx = bufferLines.length - 1;
+    // Char counter — dims normally, warns at 80%, red at 95%.
+    const pct = buffer.length / MAX_INPUT_LEN;
+    const counter = buffer.length === 0 ? "" :
+        pct >= 0.95 ? chalk.red(`${buffer.length}/${MAX_INPUT_LEN}`)
+            : pct >= 0.8 ? chalk.yellow(`${buffer.length}/${MAX_INPUT_LEN}`)
+                : chalk.dim(`${buffer.length}/${MAX_INPUT_LEN}`);
+    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, marginLeft: 2, borderStyle: "round", borderColor: borderColor, width: boxW, children: [_jsxs(Text, { children: [" ", accent("\u25C6"), " ", chalk.bold.white(title), "  ", chalk.dim(subtitle)] }), currentLine ? _jsxs(Text, { children: [" ", currentLine] }) : null, bufferLines.map((ln, i) => {
+                const showCaret = i === lastIdx;
+                const pad = Math.max(0, innerW - visibleLen(ln));
+                const counterSuffix = showCaret && counter
+                    ? "  " + counter
+                    : "";
+                return (_jsxs(Text, { children: [" ", accent("\u203A "), ln, showCaret ? caret : " ", " ".repeat(pad), counterSuffix] }, i));
+            }), _jsxs(Text, { children: [" ", hint] })] }));
 }

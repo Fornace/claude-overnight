@@ -27,8 +27,10 @@ function layoutActions(rendered, pendingChip, termW) {
 }
 export function Footer({ state, toast }) {
     const inOverlay = state.input.mode;
+    // When an input overlay is active the InputPrompt box renders its own hint
+    // line, so the footer stays quiet — just a spacer to keep the layout stable.
     if (inOverlay !== "none") {
-        return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Text, { children: " " }), _jsx(Text, { children: chalk.dim("  Enter submit \u00b7 Esc cancel") })] }));
+        return _jsx(Text, { children: " " });
     }
     const actions = deriveFooter(state);
     const pending = state.runInfo.pendingSteer ?? 0;

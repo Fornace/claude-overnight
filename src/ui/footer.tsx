@@ -45,13 +45,10 @@ interface Props {
 export function Footer({ state, toast }: Props): React.ReactElement {
   const inOverlay: InputMode = state.input.mode;
 
+  // When an input overlay is active the InputPrompt box renders its own hint
+  // line, so the footer stays quiet — just a spacer to keep the layout stable.
   if (inOverlay !== "none") {
-    return (
-      <Box flexDirection="column">
-        <Text> </Text>
-        <Text>{chalk.dim("  Enter submit \u00b7 Esc cancel")}</Text>
-      </Box>
-    );
+    return <Text> </Text>;
   }
 
   const actions = deriveFooter(state);
