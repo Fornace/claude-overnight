@@ -3,7 +3,7 @@ import { NudgeError, extractToolTarget, sumUsageTokens } from "../core/types.js"
 import { writeTranscriptEvent } from "../core/transcripts.js";
 import { getTurn, updateTurn } from "../core/turns.js";
 import { isRateLimitError, throttlePlanner, addPlannerCost, recordPeakContext, resetPlannerRateLimit, setContextTokens, applyRateLimitEvent, getPlannerRateLimitInfo, } from "./throttle.js";
-import { cursorProxyRateLimiter, sdkQueryRateLimiter, apiEndpointLimiter } from "../core/rate-limiter.js";
+import { cursorProxyRateLimiter, sdkQueryRateLimiter, apiEndpointLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 export { getTotalPlannerCost, getPeakPlannerContext, getPlannerRateLimitInfo, } from "./throttle.js";
 export { attemptJsonParse, extractTaskJson } from "./json.js";
 export { postProcess } from "./postprocess.js";
@@ -126,7 +126,7 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
             promptBytes: prompt.length,
         });
     }
-    await rl.waitIfNeeded();
+    await acquireSdkQueryRateLimit();
     const pq = query({
         prompt,
         options: {

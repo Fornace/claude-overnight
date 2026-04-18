@@ -18,9 +18,9 @@ import { gitExec, autoCommit } from "./merge.js";
 import type { ErroredBranchEvaluator } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, type SwarmConfig } from "./config.js";
-import { AgentTimeoutError, StreamStalledError, isRateLimitError, isTransientError, sleep } from "./errors.js";
-import { handleMsg, type MessageHandlerHost, NO_CONTENT_TIMEOUT_MS, checkStreamHealth } from "./message-handler.js";
-import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
+import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
+import { handleMsg, type MessageHandlerHost } from "./message-handler.js";
+import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 
 /** Narrow surface `runAgent` / `buildErroredBranchEvaluator` need from the
  *  Swarm instance. Inherits the message-handler host because the message loop
@@ -138,7 +138,7 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
           agentCwd,
         );
 
-        await rl.waitIfNeeded();
+        await acquireSdkQueryRateLimit();
         const agentQuery = query({
           prompt: agentPrompt,
           options: {
@@ -402,7 +402,7 @@ Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
     const rl = sdkQueryRateLimiter;
     let eq: ReturnType<typeof query> | undefined;
     try {
-      await rl.waitIfNeeded();
+      await acquireSdkQueryRateLimit();
       eq = query({
         prompt,
         options: {

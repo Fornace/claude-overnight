@@ -1,6 +1,6 @@
-import { describe, it } from "node:test";
+import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { RateLimiter, RateLimitError, sdkQueryRateLimiter, cursorProxyRateLimiter, apiEndpointLimiter, resetAllRateLimiters } from "../core/rate-limiter.js";
+import { RateLimiter, RateLimitError, sdkQueryRateLimiter, cursorProxyRateLimiter, apiEndpointLimiter, resetAllRateLimiters, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 
 describe("RateLimiter", () => {
   it("allows requests when under limit", () => {
@@ -147,3 +147,68 @@ describe("assertCanRequest", () => {
     assert.doesNotThrow(() => rl.assertCanRequest());
   });
 });
+
+describe("RateLimiter.acquire", () => {
+  it("bypasses throttle when skipWhen returns true", async () => {
+    const rl = new RateLimiter({ maxRequests: 2, windowMs: 150, minIntervalMs: 1 });
+    rl.record();
+    rl.record();
+    const t0 = Date.now();
+    await rl.acquire({ skipWhen: () => true });
+    assert.ok(Date.now() - t0 < 40);
+  });
+
+  it("enforces window when skipWhen absent", async () => {
+    const rl = new RateLimiter({ maxRequests: 2, windowMs: 150, minIntervalMs: 1 });
+    await rl.acquire();
+    rl.record();
+    await rl.acquire();
+    rl.record();
+    const t0 = Date.now();
+    await rl.acquire();
+    assert.ok(Date.now() - t0 >= 80, "expected sliding-window wait");
+  });
+});
+
+describe("acquireSdkQueryRateLimit", () => {
+  const prevProxy = process.env.CURSOR_PROXY_URL;
+
+  afterEach(() => {
+    resetAllRateLimiters();
+    if (prevProxy === undefined) delete process.env.CURSOR_PROXY_URL;
+    else process.env.CURSOR_PROXY_URL = prevProxy;
+  });
+
+  it("bypasses SDK limiter when CURSOR_PROXY_URL is set", async () => {
+    process.env.CURSOR_PROXY_URL = "http://127.0.0.1:9999";
+    resetAllRateLimiters();
+    sdkQueryRateLimiter.record();
+    sdkQueryRateLimiter.record();
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+      orig.apply(console, args as never[]);
+    };
+    try {
+      const t0 = Date.now();
+      await acquireSdkQueryRateLimit();
+      assert.ok(Date.now() - t0 < 50);
+      assert.ok(logs.some((l) => l.includes("[rate-limiter] Skipping SDK rate limit")));
+    } finally {
+      console.log = orig;
+    }
+  });
+
+  it("enforces SDK limiter when CURSOR_PROXY_URL is unset", async () => {
+    delete process.env.CURSOR_PROXY_URL;
+    resetAllRateLimiters();
+    await acquireSdkQueryRateLimit();
+    sdkQueryRateLimiter.record();
+    const t0 = Date.now();
+    await acquireSdkQueryRateLimit();
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed >= 2400, `expected min-interval wait ~2500ms, got ${elapsed}ms`);
+  });
+});
+

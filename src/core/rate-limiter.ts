@@ -20,6 +20,13 @@ export interface RateLimiterConfig {
   minIntervalMs?: number;
 }
 
+export interface AcquireOptions {
+  /** When true, skip sliding-window / min-interval waits (caller still records after the request). */
+  skipWhen?: () => boolean;
+  /** Invoked once when `skipWhen()` returned true and the throttle was bypassed. */
+  onBypass?: () => void;
+}
+
 export class RateLimiter {
   private readonly maxRequests: number;
   private readonly windowMs: number;
@@ -51,10 +58,19 @@ export class RateLimiter {
       && (Date.now() - this.lastRequestAt) >= this.minIntervalMs;
   }
 
-  async waitIfNeeded(): Promise<number> {
+  /** Wait until a request slot is available. Optional `skipWhen` bypasses the throttle entirely. */
+  async acquire(options?: AcquireOptions): Promise<number> {
+    if (options?.skipWhen?.()) {
+      options.onBypass?.();
+      return 0;
+    }
     const waited = this.waitMs();
     if (waited > 0) await new Promise(r => setTimeout(r, waited));
     return waited;
+  }
+
+  async waitIfNeeded(): Promise<number> {
+    return this.acquire();
   }
 
   waitMs(): number {
@@ -103,6 +119,16 @@ const _apiEndpointLimiter = new RateLimiter({ maxRequests: 6, windowMs: 15_000, 
 
 /** Shared rate limiter for SDK query calls — enforced globally across all workers. */
 export const sdkQueryRateLimiter: RateLimiter = _sdkQueryLimiter;
+
+/** Acquire SDK query slot. Skips the SDK sliding-window limiter when `CURSOR_PROXY_URL` is set (proxy has its own limiters). */
+export async function acquireSdkQueryRateLimit(): Promise<number> {
+  return _sdkQueryLimiter.acquire({
+    skipWhen: () => !!process.env.CURSOR_PROXY_URL,
+    onBypass: () => {
+      console.log("[rate-limiter] Skipping SDK rate limit (Cursor proxy has its own limiter)");
+    },
+  });
+}
 
 /** Shared rate limiter for Cursor proxy direct fetches — enforced globally. */
 export const cursorProxyRateLimiter: RateLimiter = _cursorProxyLimiter;

@@ -8,6 +8,12 @@ export interface RateLimiterConfig {
     windowMs: number;
     minIntervalMs?: number;
 }
+export interface AcquireOptions {
+    /** When true, skip sliding-window / min-interval waits (caller still records after the request). */
+    skipWhen?: () => boolean;
+    /** Invoked once when `skipWhen()` returned true and the throttle was bypassed. */
+    onBypass?: () => void;
+}
 export declare class RateLimiter {
     private readonly maxRequests;
     private readonly windowMs;
@@ -18,6 +24,8 @@ export declare class RateLimiter {
     record(): void;
     get currentCount(): number;
     canRequest(): boolean;
+    /** Wait until a request slot is available. Optional `skipWhen` bypasses the throttle entirely. */
+    acquire(options?: AcquireOptions): Promise<number>;
     waitIfNeeded(): Promise<number>;
     waitMs(): number;
     reset(): void;
@@ -29,6 +37,8 @@ export declare class RateLimiter {
 }
 /** Shared rate limiter for SDK query calls — enforced globally across all workers. */
 export declare const sdkQueryRateLimiter: RateLimiter;
+/** Acquire SDK query slot. Skips the SDK sliding-window limiter when `CURSOR_PROXY_URL` is set (proxy has its own limiters). */
+export declare function acquireSdkQueryRateLimit(): Promise<number>;
 /** Shared rate limiter for Cursor proxy direct fetches — enforced globally. */
 export declare const cursorProxyRateLimiter: RateLimiter;
 /** Shared rate limiter for direct API endpoint calls — guards against rapid
