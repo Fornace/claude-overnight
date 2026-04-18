@@ -1,5 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import {
+  StreamStalledError,
+  isStreamStalledError,
+  isTransientError as isTransientErrorProd,
+} from "../swarm/errors.js";
 
 // Copied from src/swarm.ts (not exported)
 class AgentTimeoutError extends Error {
@@ -106,5 +111,29 @@ describe("isTransientError", () => {
     const err: any = new Error("loop");
     err.cause = err;
     assert.equal(isTransientError(err), false);
+  });
+});
+
+describe("StreamStalledError", () => {
+  it("carries elapsed and timeoutMs", () => {
+    const err = new StreamStalledError(20_123, 15_000);
+    assert.equal(err.elapsed, 20_123);
+    assert.equal(err.timeoutMs, 15_000);
+    assert.ok(err.message.includes("15000"));
+  });
+});
+
+describe("isStreamStalledError", () => {
+  it("returns true for StreamStalledError instances", () => {
+    assert.equal(isStreamStalledError(new StreamStalledError(1, 2)), true);
+  });
+
+  it("returns false for other errors", () => {
+    assert.equal(isStreamStalledError(new Error("x")), false);
+    assert.equal(isStreamStalledError(null), false);
+  });
+
+  it("treats StreamStalledError as non-transient in production classifier", () => {
+    assert.equal(isTransientErrorProd(new StreamStalledError(20_000, 15_000)), false);
   });
 });

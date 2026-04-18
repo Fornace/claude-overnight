@@ -87,6 +87,8 @@ export interface AgentState {
   peakContextTokens?: number;
   /** Resolved model this agent is running (task override or swarm default). */
   model?: string;
+  /** Unix timestamp (ms) of the last assistant stream content (text, tool deltas, etc.). Used to detect SDK streams that yield no content. */
+  lastContentTimestamp?: number;
 }
 
 /** A timestamped log line from an agent's execution. */

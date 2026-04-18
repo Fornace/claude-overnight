@@ -55,20 +55,29 @@ export function verifyToken(token, providerId) {
  */
 export function verifyTokenWithResult(token, options = {}) {
     const { providerId, model, baseURL } = options;
-    const key = providerId ? deriveKey(providerId) : null;
-    // If no provider context, we can't derive a key — reject
-    if (!key)
-        return { valid: false, reason: "claim_mismatch" };
+    const header = jwt.decode(token, { complete: true });
+    if (!header || typeof header === "string") {
+        return { valid: false, reason: "invalid_signature" };
+    }
+    const loose = header.payload;
+    const subForKey = loose.sub;
+    if (!subForKey || typeof subForKey !== "string") {
+        return { valid: false, reason: "invalid_signature" };
+    }
+    let key;
+    try {
+        key = deriveKey(subForKey);
+    }
+    catch {
+        return { valid: false, reason: "invalid_signature" };
+    }
     try {
         const decoded = jwt.verify(token, key, {
             algorithms: ["HS256"],
-            // Let jwt.verify check expiration for us
         });
-        // Reject tokens from older versions
         if (decoded.ver !== TOKEN_VERSION) {
             return { valid: false, reason: "wrong_version" };
         }
-        // Validate claims if expected values are provided
         if (providerId && decoded.sub !== providerId) {
             return { valid: false, reason: "claim_mismatch" };
         }

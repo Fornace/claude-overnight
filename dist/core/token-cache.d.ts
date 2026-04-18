@@ -54,3 +54,5 @@ export declare function revokeSession(sessionId: string): void;
 export declare function clearRevocations(): void;
 /** Get the number of revoked sessions (for diagnostics). */
 export declare function getRevocationCount(): number;
+/** Check if a session ID has been revoked, pruning expired entries first. */
+export declare function isSessionRevoked(sessionId: string): boolean;

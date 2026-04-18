@@ -13,6 +13,7 @@ import {
   getCachedToken, peekCachedToken, cacheToken,
   revokeSession, clearTokenCache,
   tryRefreshCachedToken,
+  isSessionRevoked,
   type TokenRecord,
   type JWTPayload,
 } from "./token-cache.js";
@@ -81,11 +82,9 @@ export function refreshToken(oldToken: string, providerId: string): TokenRecord 
  */
 export function verifyBearerToken(token: string, providerId: string): VerifyResult {
   const result = verifyTokenWithResult(token, { providerId });
-  if (!result.valid) return result;
+  if (!result.valid || !result.payload) return result;
 
-  // Reject if the session was explicitly revoked
-  const cached = getCachedToken(providerId);
-  if (cached && result.payload && cached.sessionId !== result.payload.jti) {
+  if (isSessionRevoked(result.payload.jti)) {
     return { valid: false, reason: "revoked" };
   }
 
@@ -119,8 +118,16 @@ function tryPeekAndRevoke(providerId: string): boolean {
  * reducing false positives from unrelated 401/403 responses.
  */
 export function isJWTAuthError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = err instanceof Error
+    ? err.message
+    : err && typeof err === "object" && "message" in err && typeof (err as { message?: unknown }).message === "string"
+      ? (err as { message: string }).message
+      : String(err);
   const lower = msg.toLowerCase();
+
+  if (lower.includes("bearer") && lower.includes("token") && lower.includes("invalid")) {
+    return true;
+  }
 
   // JWT-specific indicators (high confidence)
   const jwtIndicators = [

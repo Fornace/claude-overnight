@@ -17,8 +17,8 @@ import { gitExec, autoCommit } from "./merge.js";
 import type { ErroredBranchEvaluator } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, type SwarmConfig } from "./config.js";
-import { AgentTimeoutError, isRateLimitError, isTransientError, sleep } from "./errors.js";
-import { handleMsg, type MessageHandlerHost } from "./message-handler.js";
+import { AgentTimeoutError, StreamStalledError, isRateLimitError, isTransientError, sleep } from "./errors.js";
+import { handleMsg, type MessageHandlerHost, NO_CONTENT_TIMEOUT_MS, checkStreamHealth } from "./message-handler.js";
 import { sdkQueryRateLimiter } from "../core/rate-limiter.js";
 
 /** Narrow surface `runAgent` / `buildErroredBranchEvaluator` need from the
@@ -142,18 +142,32 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
         const timeoutMs = isResume ? inactivityMs * 2 : inactivityMs;
         let sessionId: string | undefined;
         let lastActivity = Date.now();
+        agent.lastContentTimestamp = Date.now();
         let timer: NodeJS.Timeout;
         const watchdog = new Promise<never>((_, reject) => {
           const check = () => {
+            const lastContent = agent.lastContentTimestamp;
+            if (lastContent != null && !checkStreamHealth(lastContent, NO_CONTENT_TIMEOUT_MS)) {
+              const elapsed = Date.now() - lastContent;
+              agentQuery.interrupt().catch(() => agentQuery.close());
+              reject(new StreamStalledError(elapsed, NO_CONTENT_TIMEOUT_MS));
+              return;
+            }
             const silent = Date.now() - lastActivity;
             if (silent >= timeoutMs) {
               agentQuery.interrupt().catch(() => agentQuery.close());
               reject(isResume ? new AgentTimeoutError(silent) : new NudgeError(sessionId, silent));
             } else {
-              timer = setTimeout(check, Math.min(30_000, timeoutMs - silent + 1000));
+              const gap = lastContent != null ? Date.now() - lastContent : 0;
+              const untilNoContent =
+                lastContent != null ? Math.max(250, NO_CONTENT_TIMEOUT_MS - gap + 50) : Number.POSITIVE_INFINITY;
+              timer = setTimeout(
+                check,
+                Math.min(30_000, timeoutMs - silent + 1000, 5_000, untilNoContent),
+              );
             }
           };
-          timer = setTimeout(check, timeoutMs);
+          timer = setTimeout(check, Math.min(5_000, timeoutMs));
         });
         host.activeQueries.add(agentQuery);
         // Guard: if pause was triggered between runAgent check and here, close the query

@@ -1,5 +1,9 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentState, AITurn, RateLimitWindow } from "../core/types.js";
+/** Default: no assistant content for this long means the SDK stream is stuck. */
+export declare const NO_CONTENT_TIMEOUT_MS = 15000;
+/** @returns false if no stream content has arrived within {@link timeoutMs} of {@link lastContentTimestamp}. */
+export declare function checkStreamHealth(lastContentTimestamp: number, timeoutMs: number): boolean;
 /** Per-agent pending tool_use block while we wait for the delta stream to
  *  finish materializing the real `input`. */
 export interface PendingTool {

@@ -45,7 +45,7 @@ const REVOCATION_TTL_SEC = 3600;
 export function getCachedToken(providerId: string): TokenRecord | null {
   const entry = tokenCache.get(providerId);
   if (!entry) return null;
-  if (isRevoked(entry.sessionId)) {
+  if (isSessionRevoked(entry.sessionId)) {
     tokenCache.delete(providerId);
     return null;
   }
@@ -79,7 +79,7 @@ export function tryRefreshCachedToken(
 ): TokenRecord | null {
   const entry = tokenCache.get(providerId);
   if (!entry) return null;
-  if (isRevoked(entry.sessionId)) {
+  if (isSessionRevoked(entry.sessionId)) {
     tokenCache.delete(providerId);
     return null;
   }
@@ -125,7 +125,7 @@ export function getRevocationCount(): number {
 }
 
 /** Check if a session ID has been revoked, pruning expired entries first. */
-function isRevoked(sessionId: string): boolean {
+export function isSessionRevoked(sessionId: string): boolean {
   pruneRevocations();
   return revokedSessions.has(sessionId);
 }

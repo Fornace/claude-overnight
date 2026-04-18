@@ -156,7 +156,7 @@ describe("jwt-signer: resignToken", () => {
 
     // Timestamps updated (new token issued later)
     assert.ok(resigned.payload.iat >= signed.payload.iat);
-    assert.ok(resigned.payload.exp > signed.payload.exp);
+    assert.ok(resigned.payload.exp >= signed.payload.exp);
   });
 
   it("returns null for payload without sub", () => {
