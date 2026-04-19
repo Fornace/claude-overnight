@@ -40,5 +40,6 @@ export function makeInitialState(runInfo, liveConfig, flags) {
         hasOnAsk: flags.hasOnAsk,
         hasOnSteer: flags.hasOnSteer,
         tick: 0,
+        viewMode: "events",
     };
 }

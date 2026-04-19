@@ -3,6 +3,7 @@ import { Text, Box } from "ink";
 import chalk from "chalk";
 import { getModelCapability, modelDisplayName } from "../core/models.js";
 import { contextFillInfo, colorEvent, fmtDur, fmtTokens, padVisible, renderWaitingIndicator, spinnerFrame, truncate } from "./primitives.js";
+import { StreamPane } from "./widgets/stream-pane.js";
 const COL_ID_W = 3;
 const COL_MODEL_W = 18;
 const COL_STATUS_W = 12;
@@ -153,17 +154,19 @@ function eventRows(swarm) {
     }
     return rows;
 }
-export function RunBody({ swarm, selectedAgentId }) {
+export function RunBody({ swarm, selectedAgentId, viewMode, onViewModeChange, }) {
+    const isStream = viewMode != null && viewMode !== "events";
+    const streamId = isStream ? viewMode.replace(/^stream:/, "") : undefined;
     const lines = [
         ...agentTable(swarm, selectedAgentId),
         ...(selectedAgentId != null ? detailRows(swarm, selectedAgentId) : []),
         ...mergeRows(swarm),
-        ...eventRows(swarm),
     ];
-    // Rate-limited-all-workers warning, inlined above the footer area.
     const warnings = [];
     if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
         warnings.push(chalk.yellow(`  all workers rate-limited \u2014 press [r] to skip`));
     }
-    return (_jsxs(Box, { flexDirection: "column", children: [lines.map((r, i) => _jsx(Text, { children: r }, i)), warnings.map((r, i) => _jsx(Text, { children: r }, `w${i}`))] }));
+    return (_jsxs(Box, { flexDirection: "column", children: [lines.map((r, i) => _jsx(Text, { children: r }, i)), isStream
+                ? _jsx(StreamPane, { streamId: streamId, viewMode: viewMode, onViewModeChange: onViewModeChange })
+                : eventRows(swarm).map((r, i) => _jsx(Text, { children: r }, `e${i}`)), warnings.map((r, i) => _jsx(Text, { children: r }, `w${i}`))] }));
 }

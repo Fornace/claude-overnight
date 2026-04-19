@@ -3,6 +3,7 @@ import type { RLGetter } from "../core/types.js";
 import type { AskState, LiveConfig, RunInfo, SteeringContext, SteeringEvent } from "./types.js";
 export type Phase = "run" | "steering";
 export type InputMode = "none" | "steer" | "ask" | "settings";
+export type StreamViewMode = "events" | `stream:${string}`;
 export interface DebriefEntry {
     label: string;
     text: string;
@@ -35,6 +36,7 @@ export interface UiState {
     hasOnAsk: boolean;
     hasOnSteer: boolean;
     tick: number;
+    viewMode: StreamViewMode;
 }
 type Listener = () => void;
 export declare class UiStore {

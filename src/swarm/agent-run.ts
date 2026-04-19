@@ -1,30 +1,19 @@
-// Agent execution — the per-task lifecycle used to live on `Swarm` as
-// `runAgent` and `buildErroredBranchEvaluator`. Both still run inside the same
-// class instance via the friend-class pattern: they take an `AgentRunHost`
-// (which `Swarm` satisfies) and never reach outside the surface declared here.
-//
-// Keeping this in its own file lets `swarm.ts` stay a thin worker-loop +
-// lifecycle shell, and makes the retry/resume state machine easy to read
-// end-to-end without the class scaffolding around it.
-
-import { rmSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError } from "../core/types.js";
 import type { Task, AgentState } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
-import type { ErroredBranchEvaluator } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
 import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, getAgentTimeout, type SwarmConfig } from "./config.js";
-import { AgentTimeoutError, StreamStalledError, isRateLimitError, isTransientError, sleep } from "./errors.js";
+import { AgentTimeoutError, StreamStalledError, isRateLimitError, isStreamStalledError, isTransientError, sleep } from "./errors.js";
 import { handleMsg, checkStreamHealth, NO_CONTENT_TIMEOUT_MS, type MessageHandlerHost } from "./message-handler.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
+import { StreamSink } from "../core/transcripts.js";
+import { StallGuard, StallMonitor, runWithStallRotation } from "../core/stall-guard.js";
+export { buildErroredBranchEvaluator } from "./branch-evaluator.js";
 
-/** Narrow surface `runAgent` / `buildErroredBranchEvaluator` need from the
- *  Swarm instance. Inherits the message-handler host because the message loop
- *  calls `handleMsg(host, …)`. */
 export interface AgentRunHost extends MessageHandlerHost {
   readonly agents: AgentState[];
   readonly queue: Task[];
@@ -120,40 +109,32 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
 
     try {
       let resumePrompt = "Continue. Complete the task.";
+      const effectiveModel = task.model || host.model;
+      const resolveFallback = () =>
+        withCursorWorkspaceHeader(StallMonitor.instance.getFallbackEnv(effectiveModel), agentCwd);
 
-      const runOnce = async (isResume: boolean): Promise<void> => {
-        const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
-        const postBlock = task.postcondition
-          ? `\n\nEXIT CRITERION — after you finish, the framework will run this shell check in cwd and reject a no-op if it fails:\n  $ ${task.postcondition}\nYour work is not done until that command exits 0. Don't claim no-op unless you can prove the check already passes.`
-          : "";
-        const agentPrompt = isResume ? resumePrompt
-          : host.config.useWorktrees && !task.noWorktree
-            ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}${postBlock}`
-            : `${preamble}${task.prompt}${postBlock}`;
-
-        // Read host.model (live — setModel updates it between waves), not host.config.model (frozen at construction).
-        const effectiveModel = task.model || host.model;
-        const envOverride = withCursorWorkspaceHeader(
-          host.config.envForModel?.(effectiveModel),
-          agentCwd,
-        );
+      const runOneStream = async (
+        isResume: boolean,
+        promptText: string,
+        env: Record<string, string> | undefined,
+      ): Promise<void> => {
+        let sessionId: string | undefined;
+        let lastActivity = Date.now();
+        agent.lastContentTimestamp = Date.now();
 
         await acquireSdkQueryRateLimit();
         const agentQuery = query({
-          prompt: agentPrompt,
+          prompt: promptText,
           options: {
             cwd: agentCwd, model: effectiveModel,
             permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
             allowedTools: host.config.allowedTools, includePartialMessages: true, persistSession: true,
             ...(isResume && resumeSessionId && { resume: resumeSessionId }),
-            ...(envOverride && { env: envOverride }),
+            ...(env && { env }),
           },
         });
 
         const timeoutMs = isResume ? inactivityMs * 2 : inactivityMs;
-        let sessionId: string | undefined;
-        let lastActivity = Date.now();
-        agent.lastContentTimestamp = Date.now();
         let timer: NodeJS.Timeout;
         const watchdog = new Promise<never>((_, reject) => {
           const check = () => {
@@ -180,26 +161,36 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
           };
           timer = setTimeout(check, Math.min(5_000, timeoutMs));
         });
+
         host.activeQueries.add(agentQuery);
-        // Guard: if pause was triggered between runAgent check and here, close the query
-        // immediately so requeueIfPaused can catch it without running a turn.
         if (host.paused) {
           host.activeQueries.delete(agentQuery);
           try { agentQuery.close(); } catch {}
           return;
         }
+
+        const sink = new StreamSink(`agent-${agent.id}`, agent.id);
+        const sg = new StallGuard(sink, new AbortController());
+        const stallPromise = new Promise<never>((_, reject) => {
+          sg.on("stall", (err) => reject(err));
+        });
+
         try {
           await Promise.race([
             (async () => {
               for await (const msg of agentQuery) {
                 lastActivity = Date.now();
                 if (!sessionId && "session_id" in (msg as any)) sessionId = (msg as any).session_id;
+                sink.append(msg as { type: string } & Record<string, unknown>);
                 handleMsg(host, agent, msg);
               }
+              sink.markFinished();
             })(),
             watchdog,
+            stallPromise,
           ]);
         } finally {
+          sg.stop();
           clearTimeout(timer!);
           host.activeQueries.delete(agentQuery);
           if (sessionId) resumeSessionId = sessionId;
@@ -208,10 +199,18 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
         }
       };
 
-      // Helper: re-queue this task with resume info when paused mid-turn.
-      // If we already captured a session ID, resume the existing SDK session on unpause;
-      // otherwise re-queue the original task so the worker re-runs it from scratch
-      // (losing a task here would silently shrink the wave).
+      const runTurn = (isResume: boolean, promptText: string) =>
+        runWithStallRotation({
+          initialPrompt: promptText,
+          initialIsResume: isResume,
+          initialEnv: withCursorWorkspaceHeader(host.config.envForModel?.(effectiveModel), agentCwd),
+          resolveFallbackEnv: resolveFallback,
+          log: (text) => host.log(id, text),
+          isAborted: () => host.aborted,
+          defaultResumePrompt: resumePrompt,
+          run: runOneStream,
+        });
+
       const requeueIfPaused = (): boolean => {
         if (!host.paused || agent.status !== "running") return false;
         agent.status = "paused";
@@ -224,29 +223,27 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
         return true;
       };
 
-      if (isResumed && resumeSessionId) {
-        // Resumed task: continue the existing SDK session
-        try { await runOnce(true); }
-        catch (nudgeErr) {
-          if (nudgeErr instanceof NudgeError && resumeSessionId) {
-            host.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
-            await runOnce(true);
-          } else throw nudgeErr;
-        }
-      } else {
-        // Fresh task: start with the task prompt
-        try { await runOnce(false); }
-        catch (nudgeErr) {
-          if (nudgeErr instanceof NudgeError && resumeSessionId) {
-            host.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
-            await runOnce(true);
-          } else throw nudgeErr;
-        }
+      const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
+      const postBlock = task.postcondition
+        ? `\n\nEXIT CRITERION — after you finish, the framework will run this shell check in cwd and reject a no-op if it fails:\n  $ ${task.postcondition}\nYour work is not done until that command exits 0. Don't claim no-op unless you can prove the check already passes.`
+        : "";
+      const freshPrompt = host.config.useWorktrees && !task.noWorktree
+        ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}${postBlock}`
+        : `${preamble}${task.prompt}${postBlock}`;
+
+      const initialIsResume = !!resumeSessionId;
+      const initialPrompt = initialIsResume ? resumePrompt : freshPrompt;
+      try { await runTurn(initialIsResume, initialPrompt); }
+      catch (nudgeErr) {
+        if (nudgeErr instanceof NudgeError && resumeSessionId) {
+          host.log(id, `Silent ${Math.round(inactivityMs / 60000)}m  -- resuming with continue`);
+          await runTurn(true, resumePrompt);
+        } else throw nudgeErr;
       }
       if (requeueIfPaused()) return;
 
       if (resumeSessionId && agent.status === "running") {
-        try { host.log(id, "Simplify pass"); resumePrompt = SIMPLIFY_PROMPT; await runOnce(true); }
+        try { host.log(id, "Simplify pass"); resumePrompt = SIMPLIFY_PROMPT; await runTurn(true, SIMPLIFY_PROMPT); }
         catch { host.log(id, "Simplify pass skipped"); }
       }
       if (requeueIfPaused()) return;
@@ -275,6 +272,15 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
         const reuseSession = (typeof resumeSessionId === "string") && resumeSessionId.length > 0;
         host.queue.unshift(reuseSession ? { ...task, resumeSessionId, agentCwd } : { ...task });
         return;
+      }
+      // Stream stall: the server went silent mid-response. If we captured a
+      // sessionId, resume it instead of restarting  -- the model keeps the work
+      // it already did. Freebie: doesn't count against maxRetries the first time.
+      if (!host.aborted && isStreamStalledError(err) && resumeSessionId) {
+        const elapsedS = Math.round((err as StreamStalledError).elapsed / 1000);
+        host.log(id, `Stream stalled (${elapsedS}s silent)  -- resuming session`);
+        if (attempt === 0) attempt--;
+        continue;
       }
       // Rate-limit errors: wait and retry WITHOUT burning the retry budget
       if (!host.aborted && isRateLimitError(err)) {
@@ -346,7 +352,7 @@ function hasLspMcp(): boolean {
   for (const p of candidates) {
     try {
       if (!existsSync(p)) continue;
-      const text = require("fs").readFileSync(p, "utf-8") as string;
+      const text = readFileSync(p, "utf-8");
       if (/\b(cclsp|serena)\b/.test(text)) { _lspMcpPresent = true; return true; }
     } catch {}
   }
@@ -371,87 +377,4 @@ function installLspFirstHookInto(worktreeDir: string): void {
   mkdirSync(dir, { recursive: true });
   // settings.local.json is gitignored by Claude Code convention — won't pollute the agent's commit.
   writeFileSync(join(dir, "settings.local.json"), JSON.stringify(settings, null, 2), "utf-8");
-}
-
-/**
- * Build an evaluator that calls the fast model (or worker fallback) to judge
- * whether an errored agent's partial work is coherent enough to merge.
- */
-export function buildErroredBranchEvaluator(host: AgentRunHost): ErroredBranchEvaluator | undefined {
-  const evalModel = host.model;
-  if (!evalModel) return undefined;
-  const envFor = host.config.envForModel;
-
-  return async (agentId: number, task: string, diff: string): Promise<{ keep: boolean; reason: string }> => {
-    const prompt = `You are evaluating whether partial work from an agent that errored mid-task should be kept or discarded.
-
-Task: "${task}"
-
-Diff of changes:
-\`\`\`
-${diff}
-\`\`\`
-
-Is this partial work coherent enough to land? Consider:
-- Does it implement a meaningful portion of the task?
-- Are the changes self-consistent (no half-written functions, broken imports)?
-- Would merging this improve or degrade the codebase?
-
-Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
-
-    const rl = sdkQueryRateLimiter;
-    let eq: ReturnType<typeof query> | undefined;
-    try {
-      await acquireSdkQueryRateLimit();
-      eq = query({
-        prompt,
-        options: {
-          cwd: host.config.cwd,
-          model: evalModel,
-          permissionMode: "bypassPermissions",
-          allowDangerouslySkipPermissions: true,
-          maxTurns: 1,
-          persistSession: false,
-          ...(envFor?.(evalModel) && {
-            env: withCursorWorkspaceHeader(envFor!(evalModel), host.config.cwd)!,
-          }),
-        },
-      });
-      host.activeQueries.add(eq);
-      let output = "";
-      for await (const msg of eq) {
-        if (msg.type === "assistant") {
-          const am = msg as SDKAssistantMessage;
-          if (am.message?.content) {
-            for (const block of am.message.content) {
-              if (block.type === "text" && block.text) output += block.text;
-            }
-          }
-        }
-        if (msg.type === "result") break;
-      }
-
-      // Parse JSON from the response
-      const jsonMatch = output.match(/\{[\s\S]*"keep"\s*:\s*(true|false)[\s\S]*"reason"\s*:\s*"[^"]*"[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]) as { keep: boolean; reason: string };
-          if (typeof parsed.keep === "boolean" && typeof parsed.reason === "string") return parsed;
-        } catch {}
-      }
-
-      // Fallback: couldn't parse structured output — keep by default
-      host.log(agentId, "Branch eval: could not parse model response, keeping by default");
-      return { keep: true, reason: "model response unparseable, keeping by default" };
-    } catch (err: any) {
-      host.log(agentId, `Branch eval API error: ${String(err?.message || err).slice(0, 120)}`);
-      return { keep: true, reason: "eval API error, keeping by default" };
-    } finally {
-      rl.record();
-      if (eq) {
-        host.activeQueries.delete(eq);
-        try { eq.close(); } catch {}
-      }
-    }
-  };
 }

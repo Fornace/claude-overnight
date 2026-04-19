@@ -27,7 +27,7 @@ export function App({ store, callbacks }) {
     }, [toast]);
     const showToast = (msg) => setToast(msg);
     return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { phase: state.phase, runInfo: state.runInfo, swarm: state.swarm, rlGetter: state.rlGetter, selectedAgentId: state.selectedAgentId }), state.phase === "run" && state.swarm
-                ? _jsx(RunBody, { swarm: state.swarm, selectedAgentId: state.selectedAgentId })
+                ? _jsx(RunBody, { swarm: state.swarm, selectedAgentId: state.selectedAgentId, viewMode: state.viewMode, onViewModeChange: (mode) => store.patch({ viewMode: mode }) })
                 : null, state.phase === "steering"
                 ? _jsx(SteeringBody, { runInfo: state.runInfo, context: state.steeringContext, events: state.steeringEvents, startedAt: state.steeringStartedAt, statusLine: state.steeringStatusLine, rlGetter: state.rlGetter })
                 : null, _jsx(Overlay, { ask: state.ask, debrief: state.debrief }), _jsx(InputLayer, { store: store, callbacks: callbacks, onToast: showToast }), _jsx(Footer, { state: state, toast: toast })] }));

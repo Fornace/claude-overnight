@@ -134,7 +134,8 @@ export function UsageBars({ swarm, selectedAgentId }: { swarm: Swarm; selectedAg
     const safe = getModelCapability(mdl).safeContext;
     const tok = ctxTurn.contextTokens ?? 0;
     const { pct, color } = contextFillInfo(tok, safe);
-    const bar = color("\u2588".repeat(Math.round((pct / 100) * BAR_W))) + chalk.gray("\u2591".repeat(BAR_W - Math.round((pct / 100) * BAR_W)));
+    const filled = Math.min(BAR_W, Math.round((pct / 100) * BAR_W));
+    const bar = color("\u2588".repeat(filled)) + chalk.gray("\u2591".repeat(BAR_W - filled));
     let row = `  ${chalk.dim("Ctx   ")}${bar}  ${fmtTokens(tok)}/${fmtTokens(safe)} safe  ${chalk.dim(`${ctxTurn.label} \u00b7 ${modelDisplayName(mdl)}`)}`;
     if (turns.length > 1) {
       const dots = turns.map((t, i) => {
@@ -146,7 +147,8 @@ export function UsageBars({ swarm, selectedAgentId }: { swarm: Swarm; selectedAg
     rows.push(row);
   } else if (ctxAgent) {
     const { pct, color } = contextFillInfo(ctxAgent.tokens, ctxAgent.safe);
-    const bar = color("\u2588".repeat(Math.round((pct / 100) * BAR_W))) + chalk.gray("\u2591".repeat(BAR_W - Math.round((pct / 100) * BAR_W)));
+    const filled = Math.min(BAR_W, Math.round((pct / 100) * BAR_W));
+    const bar = color("\u2588".repeat(filled)) + chalk.gray("\u2591".repeat(BAR_W - filled));
     const who = selectedAgentId != null && ctxAgent.agentId === selectedAgentId ? `agent ${ctxAgent.agentId}` : `peak a${ctxAgent.agentId}`;
     rows.push(`  ${chalk.dim("Ctx   ")}${bar}  ${fmtTokens(ctxAgent.tokens)}/${fmtTokens(ctxAgent.safe)} safe  ${chalk.dim(`${who} \u00b7 ${modelDisplayName(ctxAgent.model)}`)}`);
   }
@@ -188,7 +190,7 @@ export function SteeringBars({ rl }: { rl: ReturnType<RLGetter> }): React.ReactE
     const safe = getModelCapability(rl.model).safeContext;
     const tok = rl.contextTokens ?? 0;
     const { pct, color } = contextFillInfo(tok, safe);
-    const filled = Math.round((pct / 100) * BAR_W);
+    const filled = Math.min(BAR_W, Math.round((pct / 100) * BAR_W));
     const bar = color("\u2588".repeat(filled)) + chalk.gray("\u2591".repeat(BAR_W - filled));
     rows.push(`  ${chalk.dim("Ctx   ")}${bar}  ${fmtTokens(tok)}/${fmtTokens(safe)} safe  ${chalk.dim(`planner \u00b7 ${modelDisplayName(rl.model)}`)}`);
   }

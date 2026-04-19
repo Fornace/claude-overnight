@@ -16,10 +16,7 @@ export interface PlannerOpts {
     maxTurns?: number;
     /** Tools the planner agent may use. Defaults to the full Claude tool suite. */
     tools?: string[];
-    /**
-     * Explicit env overrides for this query. Takes precedence over the shared env resolver.
-     * Useful for one-off queries (e.g. coach) before the main resolver is built.
-     */
+    /** Env overrides for this query (takes precedence over shared env resolver). */
     env?: Record<string, string>;
     /** AITurn ID to update with token/cost info during streaming. */
     turnId?: string;

@@ -7,6 +7,7 @@ import type { Swarm } from "../swarm/swarm.js";
 import type { AgentState } from "../core/types.js";
 import { getModelCapability, modelDisplayName } from "../core/models.js";
 import { contextFillInfo, colorEvent, fmtDur, fmtTokens, padVisible, renderWaitingIndicator, spinnerFrame, truncate } from "./primitives.js";
+import { StreamPane, type StreamViewMode } from "./widgets/stream-pane.js";
 
 const COL_ID_W = 3;
 const COL_MODEL_W = 18;
@@ -151,15 +152,26 @@ function eventRows(swarm: Swarm): string[] {
   return rows;
 }
 
-export function RunBody({ swarm, selectedAgentId }: { swarm: Swarm; selectedAgentId?: number }): React.ReactElement {
+export function RunBody({
+  swarm,
+  selectedAgentId,
+  viewMode,
+  onViewModeChange,
+}: {
+  swarm: Swarm;
+  selectedAgentId?: number;
+  viewMode?: StreamViewMode;
+  onViewModeChange?: (mode: StreamViewMode) => void;
+}): React.ReactElement {
+  const isStream = viewMode != null && viewMode !== "events";
+  const streamId = isStream ? viewMode!.replace(/^stream:/, "") : undefined;
+
   const lines = [
     ...agentTable(swarm, selectedAgentId),
     ...(selectedAgentId != null ? detailRows(swarm, selectedAgentId) : []),
     ...mergeRows(swarm),
-    ...eventRows(swarm),
   ];
 
-  // Rate-limited-all-workers warning, inlined above the footer area.
   const warnings: string[] = [];
   if (swarm.blocked > 0 && swarm.blocked === swarm.active) {
     warnings.push(chalk.yellow(`  all workers rate-limited \u2014 press [r] to skip`));
@@ -168,6 +180,9 @@ export function RunBody({ swarm, selectedAgentId }: { swarm: Swarm; selectedAgen
   return (
     <Box flexDirection="column">
       {lines.map((r, i) => <Text key={i}>{r}</Text>)}
+      {isStream
+        ? <StreamPane streamId={streamId} viewMode={viewMode} onViewModeChange={onViewModeChange} />
+        : eventRows(swarm).map((r, i) => <Text key={`e${i}`}>{r}</Text>)}
       {warnings.map((r, i) => <Text key={`w${i}`}>{r}</Text>)}
     </Box>
   );

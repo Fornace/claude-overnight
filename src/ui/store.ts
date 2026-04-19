@@ -16,6 +16,7 @@ import type {
 
 export type Phase = "run" | "steering";
 export type InputMode = "none" | "steer" | "ask" | "settings";
+export type StreamViewMode = "events" | `stream:${string}`;
 
 export interface DebriefEntry { label: string; text: string; time: number }
 
@@ -51,6 +52,9 @@ export interface UiState {
 
   // 1Hz tick so elapsed counters never look frozen.
   tick: number;
+
+  // Stream pane view mode
+  viewMode: StreamViewMode;
 }
 
 type Listener = () => void;
@@ -110,5 +114,6 @@ export function makeInitialState(runInfo: RunInfo, liveConfig: LiveConfig | unde
     hasOnAsk: flags.hasOnAsk,
     hasOnSteer: flags.hasOnSteer,
     tick: 0,
+    viewMode: "events",
   };
 }

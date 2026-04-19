@@ -14,6 +14,8 @@ import {
   getPlannerRateLimitInfo,
 } from "./throttle.js";
 import { cursorProxyRateLimiter, sdkQueryRateLimiter, apiEndpointLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
+import { sleep } from "../swarm/errors.js";
+import { StallGuard, runWithStallRotation, StallMonitor, type StallGuardSink } from "../core/stall-guard.js";
 
 export {
   type PlannerLog,
@@ -38,10 +40,7 @@ export interface PlannerOpts {
   maxTurns?: number;
   /** Tools the planner agent may use. Defaults to the full Claude tool suite. */
   tools?: string[];
-  /**
-   * Explicit env overrides for this query. Takes precedence over the shared env resolver.
-   * Useful for one-off queries (e.g. coach) before the main resolver is built.
-   */
+  /** Env overrides for this query (takes precedence over shared env resolver). */
   env?: Record<string, string>;
   /** AITurn ID to update with token/cost info during streaming. */
   turnId?: string;
@@ -52,27 +51,14 @@ const NUDGE_MS = 15 * 60 * 1000;
 const HARD_TIMEOUT_MS = 30 * 60 * 1000;
 const WALL_CLOCK_LIMIT_MS = 45 * 60 * 1000;
 
-// ── Shared env resolver (set once at run start, used by every planner query) ──
-//
-// Swarm and planner calls share a model→env map so a custom provider configured
-// as planner or worker routes its traffic without threading extra params
-// through every planner.ts / steering.ts function.
+// Shared env resolver — set once at run start, used by every planner query.
 let _envResolver: ((model?: string) => Record<string, string> | undefined) | undefined;
 export function setPlannerEnvResolver(fn: ((model?: string) => Record<string, string> | undefined) | undefined): void {
   _envResolver = fn;
 }
 
 // ── Cursor proxy: direct HTTP bypass ──
-//
-// When the env routes to a cursor proxy (CURSOR_API_KEY present, no ANTHROPIC_API_KEY),
-// the claude-agent-sdk wrapper is harmful, not helpful:
-//   - The SDK spawns a `claude` subprocess that makes 4+ sequential HTTP calls to the proxy.
-//   - Each call spawns a fresh cursor-agent subprocess (~15s overhead each).
-//   - Total: 4 × 15s = 60s for what should be a single 10-15s completion.
-// The SDK features (local tool loop, session resume, rate-limit headers) do not apply:
-//   - cursor-agent runs its own internal tool loop; local tool_use never fires.
-//   - cursor proxy doesn't expose session IDs or rate-limit headers.
-// One direct POST is always correct and 4-10× faster.
+// SDK spawns 4+ subprocesses (~15s each) for the proxy; one direct POST is 4-10x faster.
 function isCursorProxyEnv(env: Record<string, string> | undefined): boolean {
   return !!env?.CURSOR_API_KEY && !env?.ANTHROPIC_API_KEY;
 }
@@ -98,7 +84,7 @@ async function runViaDirectFetch(prompt: string, opts: PlannerOpts, onLog: Plann
     if (res.status === 429 && attempt < MAX_RETRIES) {
       const waitMs = BACKOFF[attempt];
       onLog(`Cursor proxy rate limited — waiting ${Math.round(waitMs / 1000)}s`, "event");
-      await new Promise(r => setTimeout(r, waitMs));
+      await sleep(waitMs);
       continue;
     }
     if (!res.ok) throw new Error(`Cursor proxy ${res.status}: ${(await res.text().catch(() => ""))}`);
@@ -142,7 +128,7 @@ export async function runPlannerQuery(
       if (attempt < MAX_RETRIES && isRateLimitError(err)) {
         const waitMs = BACKOFF[attempt];
         onLog(`Rate limited  -- waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`, "event");
-        await new Promise((r) => setTimeout(r, waitMs));
+        await sleep(waitMs);
         continue;
       }
       throw err;
@@ -159,11 +145,8 @@ async function runPlannerQueryOnce(
 ): Promise<string> {
   resetPlannerRateLimit(opts.model);
   const rl = sdkQueryRateLimiter;
-  let resultText = "";
-  let structuredOutput: unknown;
   const startedAt = Date.now();
   const isResume = !!opts.resumeSessionId;
-  const envOverride = opts.env ?? _envResolver?.(opts.model);
   const tname = opts.transcriptName;
   if (tname) {
     writeTranscriptEvent(tname, {
@@ -175,6 +158,33 @@ async function runPlannerQueryOnce(
       promptBytes: prompt.length,
     });
   }
+
+  let resultText = "";
+  await runWithStallRotation({
+    initialPrompt: prompt,
+    initialIsResume: isResume,
+    initialEnv: opts.env ?? _envResolver?.(opts.model),
+    resolveFallbackEnv: () => StallMonitor.instance.getFallbackEnv(opts.model),
+    log: (text) => onLog(text, "event"),
+    run: async (isResume, promptText, env) => {
+      resultText = await runPlannerStream(promptText, opts, onLog, env, isResume, startedAt, tname, rl);
+    },
+  });
+  return resultText;
+}
+
+async function runPlannerStream(
+  prompt: string,
+  opts: PlannerOpts,
+  onLog: PlannerLog,
+  envOverride: Record<string, string> | undefined,
+  isResume: boolean,
+  startedAt: number,
+  tname: string | undefined,
+  rl: typeof sdkQueryRateLimiter,
+): Promise<string> {
+  let resultText = "";
+  let structuredOutput: unknown;
 
   await acquireSdkQueryRateLimit();
   const pq = query({
@@ -189,26 +199,21 @@ async function runPlannerQueryOnce(
       persistSession: true,
       includePartialMessages: true,
       maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
-      ...(isResume && { resume: opts.resumeSessionId }),
+      ...(isResume && opts.resumeSessionId && { resume: opts.resumeSessionId }),
       ...(opts.outputFormat && { outputFormat: opts.outputFormat }),
       ...(envOverride && { env: envOverride }),
     },
   });
 
-  // Default to "thinking…" so the ticker conveys meaning during the pre-output
-  // reasoning phase. Thinking-variant models (e.g. claude-opus-4-7-thinking-*)
-  // can sit silent for 60-90s before emitting any tokens, and cursor-agent
-  // doesn't forward thinking deltas — without this, the ticker reads "4m 5s"
-  // with nothing else for a minute plus.
+  // "thinking…" default so ticker shows meaning during pre-output reasoning.
+  // Thinking models can sit silent 60-90s; cursor-agent doesn't forward thinking deltas.
   let lastLogText = "thinking…";
   let toolCount = 0;
   let costUsd = 0;
   let msgCount = 0;
   const jsonOutput = opts.outputFormat?.type === "json_schema";
   let jsonCharCount = 0;
-  // Dedup identical text snippets: cursor-agent with json_schema-ignoring
-  // proxies causes the SDK to loop multiple turns, each re-emitting the same
-  // final JSON.
+  // Dedup identical text: cursor-agent with json_schema-ignoring proxies loops same JSON.
   let lastTextSeen = "";
   const ticker = setInterval(() => {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
@@ -219,9 +224,7 @@ async function runPlannerQueryOnce(
     const costStr = costUsd > 0 ? ` · $${costUsd.toFixed(3)}` : "";
     const rlPct = getPlannerRateLimitInfo().utilization;
     const rlStr = rlPct > 0 ? ` · ${Math.round(rlPct * 100)}%` : "";
-    // msg counter distinguishes "model thinking silently" (msgs arriving, no
-    // text yet) from "proxy/network stuck" (zero msgs after 30s+). Surfacing
-    // this makes silent waits legible instead of feeling frozen.
+    // msg count distinguishes "model thinking silently" from "proxy/network stuck".
     const msgStr = ` · ${msgCount} msg${msgCount === 1 ? "" : "s"}`;
     const extra = lastLogText ? ` · ${lastLogText}` : "";
     onLog(`${timeStr}${toolStr}${costStr}${rlStr}${msgStr}${extra}`, "status");
@@ -251,15 +254,18 @@ async function runPlannerQueryOnce(
     timer = setTimeout(check, timeoutMs);
   });
 
-  // Tool-use blocks can arrive in two shapes:
-  //  (a) content_block_start carries the full `input` (native Anthropic non-partial)
-  //  (b) content_block_start carries `input: {}` and the JSON is streamed via
-  //      input_json_delta frames (Anthropic streaming spec, cursor-composer-in-claude v0.9+).
-  let pendingTool: { index: number; name: string; id: string; input: Record<string, unknown>; buf: string; logged: boolean } | null = null;
+  const stallSink: StallGuardSink = {
+    lastByteAt: Date.now(),
+    streamId: "",
+    finished: false,
+  };
+  const stallGuard = new StallGuard(stallSink, new AbortController());
+  const stallPromise = new Promise<never>((_, reject) => {
+    stallGuard.on("stall", (err) => reject(err));
+  });
 
-  // Dedup tool_use logging between stream_event path and full-assistant-message path.
-  // The Cursor proxy doesn't always relay content_block_* frames through the Claude CLI's
-  // stream-json, so we also mine complete SDKAssistantMessage content — without double-counting.
+  let pendingTool: { index: number; name: string; id: string; input: Record<string, unknown>; buf: string; logged: boolean } | null = null;
+  // Dedup tool_use between stream_event and full-assistant-message paths.
   const seenToolIds = new Set<string>();
 
   const logTool = (name: string, input: Record<string, unknown> | undefined): void => {
@@ -271,6 +277,7 @@ async function runPlannerQueryOnce(
   const consume = async () => {
     for await (const msg of pq) {
       lastActivity = Date.now();
+      stallSink.lastByteAt = Date.now();
       msgCount++;
       if (!sessionId && "session_id" in (msg as any)) sessionId = (msg as any).session_id;
       if (msg.type === "stream_event") {
@@ -429,7 +436,7 @@ async function runPlannerQueryOnce(
     }
   };
 
-  try { await Promise.race([consume(), watchdog]); }
+  try { await Promise.race([consume(), watchdog, stallPromise]); }
   catch (err) {
     if (tname) writeTranscriptEvent(tname, {
       kind: "error",
@@ -439,7 +446,7 @@ async function runPlannerQueryOnce(
     });
     throw err;
   }
-  finally { clearTimeout(timer!); clearInterval(ticker); rl.record(); }
+  finally { stallSink.finished = true; stallGuard.stop(); clearTimeout(timer!); clearInterval(ticker); rl.record(); }
 
   if (structuredOutput != null && typeof structuredOutput === "object") return JSON.stringify(structuredOutput);
   return resultText;

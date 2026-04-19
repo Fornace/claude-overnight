@@ -46,7 +46,7 @@ export function App({ store, callbacks }: Props): React.ReactElement {
         selectedAgentId={state.selectedAgentId}
       />
       {state.phase === "run" && state.swarm
-        ? <RunBody swarm={state.swarm} selectedAgentId={state.selectedAgentId} />
+        ? <RunBody swarm={state.swarm} selectedAgentId={state.selectedAgentId} viewMode={state.viewMode} onViewModeChange={(mode) => store.patch({ viewMode: mode })} />
         : null}
       {state.phase === "steering"
         ? <SteeringBody

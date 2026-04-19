@@ -1,11 +1,8 @@
 import { type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { Task, AgentState } from "../core/types.js";
-import type { ErroredBranchEvaluator } from "./merge.js";
 import { type SwarmConfig } from "./config.js";
 import { type MessageHandlerHost } from "./message-handler.js";
-/** Narrow surface `runAgent` / `buildErroredBranchEvaluator` need from the
- *  Swarm instance. Inherits the message-handler host because the message loop
- *  calls `handleMsg(host, …)`. */
+export { buildErroredBranchEvaluator } from "./branch-evaluator.js";
 export interface AgentRunHost extends MessageHandlerHost {
     readonly agents: AgentState[];
     readonly queue: Task[];
@@ -27,8 +24,3 @@ export interface AgentRunHost extends MessageHandlerHost {
     agentSummary(agent: AgentState): string;
 }
 export declare function runAgent(host: AgentRunHost, task: Task): Promise<void>;
-/**
- * Build an evaluator that calls the fast model (or worker fallback) to judge
- * whether an errored agent's partial work is coherent enough to merge.
- */
-export declare function buildErroredBranchEvaluator(host: AgentRunHost): ErroredBranchEvaluator | undefined;

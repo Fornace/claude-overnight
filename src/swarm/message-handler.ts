@@ -18,8 +18,11 @@ import { RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "../c
 import { getModelCapability } from "../core/models.js";
 import { updateTurn } from "../core/turns.js";
 
-/** Default: no assistant content for this long means the SDK stream is stuck. */
-export const NO_CONTENT_TIMEOUT_MS = 15_000;
+/** Default: no assistant content for this long means the SDK stream is stuck.
+ *  Measured from the last server-streamed delta OR the last tool_result (which
+ *  marks the end of a local tool run), to the next server-streamed byte. Local
+ *  tool execution time is therefore excluded. */
+export const NO_CONTENT_TIMEOUT_MS = 60_000;
 
 /** @returns false if no stream content has arrived within {@link timeoutMs} of {@link lastContentTimestamp}. */
 export function checkStreamHealth(lastContentTimestamp: number, timeoutMs: number): boolean {
@@ -200,6 +203,14 @@ export function handleMsg(host: MessageHandlerHost, agent: AgentState, msg: SDKM
         agent.error = parts.join("  -- ").slice(0, 180);
         host.failed++; host.log(agent.id, agent.error);
       }
+      break;
+    }
+    case "user": {
+      // tool_result from local tool execution: the client just handed control
+      // back to the server. Reset the stream watchdog so the 60s "server went
+      // silent" window starts from here, not from the tool_use that kicked off
+      // a 30s Bash. Without this, any long-running local tool trips the stall.
+      markStreamContent(agent);
       break;
     }
     case "rate_limit_event": {
