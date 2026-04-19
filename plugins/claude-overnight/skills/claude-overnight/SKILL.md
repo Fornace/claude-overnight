@@ -1,12 +1,13 @@
 ---
 name: claude-overnight
 description: >
-  Understand, install, and inspect claude-overnight runs  -- a CLI that
+  Understand, author, install, and inspect claude-overnight runs  -- a CLI that
   launches parallel Claude agents in git worktrees with thinking waves,
-  multi-wave steering, three-layer review, and crash-safe resume. Use when the user mentions
-  claude-overnight, a `.claude-overnight/` folder, an "overnight" or
-  "swarm" run, or asks to check status / resume / continue a
-  multi-phase plan. Not for Vercel Workflow DevKit.
+  multi-wave steering, three-layer review, and crash-safe resume. Use when the user
+  mentions claude-overnight, a `.claude-overnight/` folder, an "overnight" or
+  "swarm" run, asks to check status / resume / continue a multi-phase plan,
+  or asks to plan / design / write a `tasks.json` / objective / overnight workflow.
+  Not for Vercel Workflow DevKit.
 ---
 
 # What it is
@@ -48,6 +49,15 @@ Task file supports lifecycle hooks — shell commands run in `cwd` at key points
 Live keys while running: `b` change budget · `t` change usage cap · `q` graceful stop (twice = force).
 
 Exit codes: `0` all ok · `1` some failed · `2` all/none.
+
+# Authoring a run (tasks.json / objective)
+
+When the user asks you to *plan*, *design*, or *write* an overnight run (not inspect one), load the authoring knowledge **on demand** — don't carry it by default:
+
+- `recipes.md` (next to this file) — scenario → recipe matrix: objective shape, `flexiblePlan`, initial tasks, `concurrency`, budget range, planner/worker pairing, phases to skip. Read this when picking a run shape for a known scenario (refactor, feature batch, migration, test/docs sprint, bug hunt, research).
+- `authoring.md` (next to this file) — decision tree (fixed vs flex vs inline; when to `--no-flex`; when thinking wave is wasted), pre-flight critic checklist (no "do anything" prompts, language-agnostic phrasing, verify-before-done, budget ≥ per-wave cost × expected waves, decomposition sanity), and anti-patterns. Read this before finalizing any tasks.json or before pressing Run.
+
+Rule of thumb: if the user has a concrete list of tasks and a clear endpoint, prefer fixed-plan (`--no-flex`) and skip the thinking wave. If the user has a fuzzy objective ("modernize X", "audit Y"), prefer `objective + flexiblePlan: true` with a small seed task list and let steering drive. Never send a single "do anything" prompt to one agent — decompose first (see authoring.md).
 
 # On-disk layout (this is how you inspect status)
 

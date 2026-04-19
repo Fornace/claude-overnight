@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.25.49
+
+### Authoring guidance for the `claude-overnight` Claude Code skill
+
+The plugin skill previously only taught Claude how to *inspect* and *resume* runs. It didn't teach Claude how to *author* a run — picking shape, writing `tasks.json`, critiquing budget and decomposition. That knowledge was tribal.
+
+- **`SKILL.md`** — frontmatter now triggers on authoring intents ("plan", "design", "write tasks.json", "overnight workflow") in addition to inspect/resume. Added a compact "Authoring a run" section with a rule-of-thumb and pointers to two sibling files loaded on demand.
+- **`recipes.md`** (new, on-demand) — scenario → recipe matrix covering fixed refactor, feature batch, framework migration, test sprint, docs sprint, bug hunt, codebase audit, framework-wide cleanup, long research run. Each row: objective shape, `flexiblePlan`, budget range, concurrency, planner/worker pairing, phases to skip. Plus budget heuristics, model pairing defaults, phase-skip cheatsheet, and anti-recipes.
+- **`authoring.md`** (new, on-demand) — 5-step decision tree (fixed vs flex vs mechanical), pre-flight critic checklist (task shape · budget · environment · circuit-breaker), common anti-patterns with fixes, objective+seed task templates, coach-vs-skill delimitation.
+
+Pattern matches the Vercel plugin approach: thin topic-sized chunks loaded only when the matching intent fires, so the default context stays small.
+
 ## 1.25.42
 
 ### Fast-worker reframe — steering now routes well-scoped tasks to the fast model
