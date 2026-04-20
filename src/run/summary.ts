@@ -43,6 +43,14 @@ export async function generateFinalNarrative(deps: FinalNarrativeDeps, phase: st
   }
 }
 
+export type ExitReason =
+  | "done"
+  | "budget-exhausted"
+  | "user-interrupted"
+  | "planner-gave-up"
+  | "circuit-breaker"
+  | "stalled";
+
 export interface SummaryArgs {
   runDir: string;
   runBranch?: string;
@@ -62,6 +70,7 @@ export interface SummaryArgs {
   lastAborted: boolean;
   stopping: boolean;
   trulyDone: boolean;
+  exitReason: ExitReason;
   peakWorkerCtxTokens: number;
   peakWorkerCtxPct: number;
   currentSwarmLogFile?: string;
@@ -72,7 +81,7 @@ export async function printFinalSummary(args: SummaryArgs): Promise<void> {
   const {
     runDir, runBranch, objective, waveNum, runStartedAt, branches, waveHistory,
     accCost, accCompleted, accFailed, accTools, accIn, accOut,
-    remaining, lastCapped, lastAborted, stopping, trulyDone,
+    remaining, lastCapped, exitReason,
     peakWorkerCtxTokens, peakWorkerCtxPct, currentSwarmLogFile, narrativeDeps,
   } = args;
 
@@ -84,23 +93,35 @@ export async function printFinalSummary(args: SummaryArgs): Promise<void> {
   const termW = Math.max((process.stdout.columns ?? 80) || 80, 50);
   const rule = (c = "─") => chalk.dim(`  ${c.repeat(Math.min(termW - 4, 60))}`);
 
-  const phaseWord = trulyDone ? "complete"
-    : remaining <= 0 || lastCapped ? "budget exhausted"
-    : stopping || lastAborted ? "interrupted"
+  const bannerChar = accFailed === 0 ? "━" : "─";
+
+  // Banner: title + subtitle explaining why the run ended
+  const banner = {
+    done: { icon: "✓", title: "CLAUDE OVERNIGHT  -- COMPLETE", color: chalk.green, explain: "The planner determined the objective was achieved." },
+    "budget-exhausted": { icon: "⚠", title: "CLAUDE OVERNIGHT  -- BUDGET EXHAUSTED", color: chalk.yellow, explain: "All allocated sessions were consumed." },
+    "user-interrupted": { icon: "⚠", title: "CLAUDE OVERNIGHT  -- INTERRUPTED", color: chalk.yellow, explain: "You quit mid-run with [q] or a signal." },
+    "planner-gave-up": { icon: "⚠", title: "CLAUDE OVERNIGHT  -- PLANNER GAVE UP", color: chalk.magenta, explain: "The planner could not decompose the remaining work into actionable tasks." },
+    "circuit-breaker": { icon: "⚠", title: "CLAUDE OVERNIGHT  -- HALTED", color: chalk.red, explain: "2+ consecutive waves produced no merged changes." },
+    stalled: { icon: "⚠", title: "CLAUDE OVERNIGHT  -- STALLED", color: chalk.magenta, explain: "No progress detected; the run was halted to preserve budget." },
+  }[exitReason] ?? { icon: "⚠", title: "CLAUDE OVERNIGHT  -- STOPPED", color: chalk.magenta, explain: "The run ended without a clear reason." };
+
+  const narrativePhase = exitReason === "done" ? "complete"
+    : exitReason === "budget-exhausted" ? "budget exhausted"
+    : exitReason === "user-interrupted" ? "interrupted"
+    : exitReason === "planner-gave-up" ? "planner gave up"
+    : exitReason === "circuit-breaker" ? "circuit breaker"
+    : exitReason === "stalled" ? "stalled"
     : "stopped";
+
   process.stdout.write(chalk.dim(`\n  Writing final summary…`));
-  const narrative = await generateFinalNarrative(narrativeDeps, phaseWord);
+  const narrative = await generateFinalNarrative(narrativeDeps, narrativePhase);
   process.stdout.write("\r" + " ".repeat(40) + "\r");
 
   console.log("");
-  const bannerChar = accFailed === 0 ? "━" : "─";
-  const bannerColor = trulyDone ? chalk.green : (stopping || lastAborted) ? chalk.yellow : chalk.magenta;
-  console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
-  if (trulyDone) console.log(chalk.bold.green(`  ✓ CLAUDE OVERNIGHT  -- COMPLETE`));
-  else if (remaining <= 0 || lastCapped) console.log(chalk.bold.yellow(`  ⚠ CLAUDE OVERNIGHT  -- BUDGET EXHAUSTED`));
-  else if (stopping || lastAborted) console.log(chalk.bold.yellow(`  ⚠ CLAUDE OVERNIGHT  -- INTERRUPTED`));
-  else console.log(chalk.bold.yellow(`  ⚠ CLAUDE OVERNIGHT  -- STOPPED`));
-  console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+  console.log(banner.color(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+  console.log(chalk.bold(banner.color(`  ${banner.icon} ${banner.title}`)));
+  console.log(chalk.dim(`  ${banner.explain}`));
+  console.log(banner.color(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
   console.log("");
 
   if (objective) {
@@ -195,11 +216,33 @@ export async function printFinalSummary(args: SummaryArgs): Promise<void> {
   console.log(chalk.dim(`  Run: ${runDir}`));
   if (currentSwarmLogFile) console.log(chalk.dim(`  Log: ${currentSwarmLogFile}`));
   console.log("");
-  console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
-  if (trulyDone) console.log(chalk.bold.green(`  Done. Review the diff, then ship it.`));
-  else if (remaining <= 0 || lastCapped) console.log(chalk.bold.yellow(`  Paused on budget. Re-run with --resume to continue.`));
-  else if (stopping || lastAborted) console.log(chalk.bold.yellow(`  Interrupted. --resume to pick up where this left off.`));
-  else console.log(chalk.bold.yellow(`  Stopped. --resume to continue.`));
-  console.log(bannerColor(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+  console.log(banner.color(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
+  // Actionable next-steps based on exit reason
+  const endMsg = (() => {
+    switch (exitReason) {
+      case "done":
+        return "Review the diff, then ship it.";
+      case "budget-exhausted":
+        return remaining > 0
+          ? "Budget sessions remaining but usage cap hit. Raise the cap or re-run with --resume."
+          : "All sessions spent. Re-run with --resume to continue, or raise the budget.";
+      case "user-interrupted":
+        return "Run preserved. Use --resume to pick up where this left off.";
+      case "planner-gave-up": {
+        const lines: string[] = ["Planner could not decompose remaining work."];
+        if (remaining > 0) lines.push(`${remaining} sessions unused — the work may be too vague or out of scope.`);
+        lines.push("Refine the objective or break it down manually, then re-run.");
+        return lines.join(" ");
+      }
+      case "circuit-breaker":
+        return "No changes landed in 2+ waves. Check for merge conflicts or agent errors in the log.";
+      case "stalled":
+        return "Run halted to preserve budget. Inspect status.md for blockers, then --resume.";
+      default:
+        return "Run preserved. --resume to continue.";
+    }
+  })();
+  console.log(chalk.bold(banner.color(`  ${endMsg}`)));
+  console.log(banner.color(`  ${bannerChar.repeat(Math.min(termW - 4, 60))}`));
   console.log("");
 }
