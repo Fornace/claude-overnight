@@ -11,6 +11,7 @@ export interface FinalNarrativeDeps {
 /** Generate a longer narrative summary at run end. Awaited (not fire-and-forget)
  *  because the caller wants the text inline in the final status block. */
 export declare function generateFinalNarrative(deps: FinalNarrativeDeps, phase: string): Promise<string>;
+export type ExitReason = "done" | "budget-exhausted" | "user-interrupted" | "planner-gave-up" | "circuit-breaker" | "stalled";
 export interface SummaryArgs {
     runDir: string;
     runBranch?: string;
@@ -30,6 +31,7 @@ export interface SummaryArgs {
     lastAborted: boolean;
     stopping: boolean;
     trulyDone: boolean;
+    exitReason: ExitReason;
     peakWorkerCtxTokens: number;
     peakWorkerCtxPct: number;
     currentSwarmLogFile?: string;

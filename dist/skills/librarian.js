@@ -1,4 +1,3 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, readdirSync, appendFileSync, } from "node:fs";
 import { join } from "node:path";
 import { openSkillsDb } from "./index-db.js";
@@ -84,44 +83,44 @@ function buildSubagentInput(canon, candidates, abOutcomes) {
     return JSON.stringify({ canon, candidates, ab_outcomes: abOutcomes });
 }
 // ── Subagent call ──
+// Direct POST /v1/messages — no tools needed, so the Agent SDK's CLI subprocess
+// (with its multi-KB built-in system prompt and turn loop) is pure overhead and
+// also pre-flight-rejects non-Anthropic model ids (qwen, composer-2, ...) even
+// when routed through an Anthropic-compatible proxy.
 async function callLibrarianSubagent(input, data) {
     const env = input.envForModel?.(input.model);
     const prompt = renderPrompt("40_skills/40-3_librarian-wrap", { vars: { data } });
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; }, LIBRARIAN_TIMEOUT_MS);
+    const baseUrl = (env?.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
+    const headers = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+    };
+    const bearer = env?.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_AUTH_TOKEN;
+    const apiKey = env?.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+    if (bearer)
+        headers["Authorization"] = `Bearer ${bearer}`;
+    else if (apiKey)
+        headers["x-api-key"] = apiKey;
     try {
-        const pq = query({
-            prompt,
-            options: {
-                cwd: input.cwd,
-                model: input.model,
-                permissionMode: "bypassPermissions",
-                allowDangerouslySkipPermissions: true,
-                maxTurns: 8,
-                ...(env && { env }),
-            },
+        const res = await fetch(`${baseUrl}/v1/messages`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ model: input.model, max_tokens: 8192, messages: [{ role: "user", content: prompt }] }),
+            signal: AbortSignal.timeout(LIBRARIAN_TIMEOUT_MS),
         });
-        let resultText = "";
-        for await (const msg of pq) {
-            if (timedOut) {
-                pq.interrupt().catch(() => { });
-                break;
-            }
-            if (msg.type === "result" && msg.subtype === "success") {
-                resultText = msg.result || "";
-            }
-        }
-        pq.close();
-        if (timedOut) {
-            process.stderr.write("[librarian] subagent timed out\n");
+        if (!res.ok) {
+            process.stderr.write(`[librarian] HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}\n`);
             return null;
         }
-        // Parse JSON — try direct parse first, then strip markdown fences
+        const body = await res.json();
+        const resultText = body.content?.map(c => c.text ?? "").join("") ?? "";
         const cleaned = resultText.replace(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/, "$1").trim();
         return JSON.parse(cleaned);
     }
-    finally {
-        clearTimeout(timer);
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[librarian] ${msg.includes("aborted") ? "timed out" : `error: ${msg}`}\n`);
+        return null;
     }
 }
 // ── Action application ──

@@ -362,12 +362,13 @@ export async function runWaveLoop(host, ctx) {
             const librarianStart = Date.now();
             let librarianPromoted = 0, librarianPatched = 0, librarianQuarantined = 0, librarianRejected = 0;
             try {
+                const librarianModel = host.fastModel ?? host.workerModel;
                 const lr = await runLibrarian({
                     fingerprint: host.repoFingerprint,
                     runId: host.runId,
                     wave: host.waveNum,
                     cwd: ctx.cwd,
-                    model: host.plannerModel,
+                    model: librarianModel,
                     envForModel: ctx.envForModel,
                 });
                 librarianPromoted = lr.promoted;

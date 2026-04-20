@@ -545,10 +545,18 @@ export async function executeRun(cfg) {
     display.stop();
     // ── Finalize ──
     const trulyDone = objectiveComplete || (!flex && remaining <= 0);
-    // User-initiated quit (or abort via 'q' / SIGINT / stall-watchdog) ⇒ save as
-    // "stopped" so resume.ts offers the run and the incomplete work comes back.
     const userQuit = stopping || lastAborted;
     const wasCapped = lastCapped && !userQuit;
+    // Determine specific exit reason for the end brief
+    let exitReason;
+    if (trulyDone)
+        exitReason = "done";
+    else if (userQuit)
+        exitReason = "user-interrupted";
+    else if (wasCapped || remaining <= 0)
+        exitReason = "budget-exhausted";
+    else
+        exitReason = "planner-gave-up"; // steering returned false, planner couldn't produce tasks
     const finalPhase = trulyDone ? "done"
         : userQuit ? "stopped"
             : wasCapped ? "capped"
@@ -632,7 +640,7 @@ export async function executeRun(cfg) {
         runDir, runBranch, objective, waveNum, runStartedAt: cfg.runStartedAt,
         branches, waveHistory,
         accCost, accCompleted, accFailed, accTools, accIn, accOut,
-        remaining, lastCapped, lastAborted, stopping, trulyDone,
+        remaining, lastCapped, lastAborted, stopping, trulyDone, exitReason,
         peakWorkerCtxTokens, peakWorkerCtxPct,
         currentSwarmLogFile: currentSwarm?.logFile,
         narrativeDeps: {
