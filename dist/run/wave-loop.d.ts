@@ -27,6 +27,9 @@ export interface WaveLoopHost {
     usageCap: number | undefined;
     branches: BranchRecord[];
     waveHistory: WaveSummary[];
+    repoFingerprint: string;
+    runId: string;
+    allowSkillProposals: boolean;
 }
 /** Callbacks and read-only config for the wave loop. */
 export interface WaveLoopCtx {
@@ -66,6 +69,7 @@ export interface WaveLoopCtx {
         branch: string;
         ok: boolean;
     }[], currentWave?: number) => void;
+    onLibrarianResult?: (promoted: number, patched: number, quarantined: number, rejected: number) => void;
 }
 export interface WaveLoopResult {
     runAnotherRound: boolean;

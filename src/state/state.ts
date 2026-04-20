@@ -273,6 +273,7 @@ export function backfillOrphanedPlans(rootDir: string, filterCwd: string): numbe
           phase: "planning",
           startedAt,
           cwd: filterCwd,
+          repoFingerprint: "000000000000",
         });
         count++;
       } catch {}

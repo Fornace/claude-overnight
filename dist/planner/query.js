@@ -6,6 +6,8 @@ import { isRateLimitError, throttlePlanner, addPlannerCost, recordPeakContext, r
 import { cursorProxyRateLimiter, sdkQueryRateLimiter, apiEndpointLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 import { sleep } from "../swarm/errors.js";
 import { StallGuard, runWithStallRotation, StallMonitor } from "../core/stall-guard.js";
+import { writeCandidate } from "../skills/scribe.js";
+import { buildL0Stub, buildRecipeStub } from "../skills/injection.js";
 export { getTotalPlannerCost, getPeakPlannerContext, getPlannerRateLimitInfo, } from "./throttle.js";
 export { attemptJsonParse, extractTaskJson } from "./json.js";
 export { postProcess } from "./postprocess.js";
@@ -128,9 +130,19 @@ async function runPlannerQueryOnce(prompt, opts, onLog) {
 async function runPlannerStream(prompt, opts, onLog, envOverride, isResume, startedAt, tname, rl) {
     let resultText = "";
     let structuredOutput;
+    // Prepend L0 skill stub if fingerprint is available
+    let finalPrompt = prompt;
+    if (opts.repoFingerprint) {
+        const stub = buildL0Stub({ fingerprint: opts.repoFingerprint, role: opts.plannerRole, tools: opts.tools });
+        if (stub.text)
+            finalPrompt = stub.text + "\n\n" + prompt;
+        const recipeStub = buildRecipeStub({ fingerprint: opts.repoFingerprint, tools: opts.tools });
+        if (recipeStub)
+            finalPrompt = recipeStub.text + "\n\n" + finalPrompt;
+    }
     await acquireSdkQueryRateLimit();
     const pq = query({
-        prompt,
+        prompt: finalPrompt,
         options: {
             cwd: opts.cwd,
             model: opts.model,
@@ -420,7 +432,40 @@ async function runPlannerStream(prompt, opts, onLog, envOverride, isResume, star
         clearInterval(ticker);
         rl.record();
     }
+    // Skill scribe: planner/steerer/verifier may emit heuristic candidates.
+    if (opts.repoFingerprint && opts.runId && resultText) {
+        const proposal = extractSkillProposal(resultText);
+        if (proposal) {
+            writeCandidate({
+                kind: "skill",
+                proposedBy: opts.plannerRole ?? "planner",
+                wave: 0,
+                runId: opts.runId,
+                fingerprint: opts.repoFingerprint,
+                trigger: proposal.trigger,
+                body: proposal.body,
+            });
+        }
+    }
     if (structuredOutput != null && typeof structuredOutput === "object")
         return JSON.stringify(structuredOutput);
     return resultText;
+}
+/** Extract a ### SKILL CANDIDATE block from planner text. Returns undefined if not found. */
+function extractSkillProposal(text) {
+    const m = text.match(/###\s*SKILL CANDIDATE\s*\n([\s\S]+?)$/);
+    if (!m)
+        return undefined;
+    const block = m[1].trim();
+    const triggerM = block.match(/^trigger:\s*(.+)$/m);
+    if (!triggerM)
+        return undefined;
+    const trigger = triggerM[1].trim().slice(0, 120);
+    const bodyStart = block.indexOf("\nbody:");
+    if (bodyStart < 0)
+        return undefined;
+    const body = block.slice(bodyStart + 6).trim();
+    if (!body)
+        return undefined;
+    return { trigger, body };
 }

@@ -76,6 +76,12 @@ export class Swarm {
   worktreeBase?: string;
   /** @internal -- friend surface for swarm-agent-run. */
   readonly activeQueries = new Set<Query>();
+  /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+  readonly repoFingerprint?: string;
+  /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+  readonly runId?: string;
+  /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+  readonly waveNum?: number;
   private cleanedUp = false;
   // Per-agent open tool_use block: cursor-composer-in-claude v0.9 opens the block
   // with empty `input` and streams the real payload via `input_json_delta`, so we
@@ -112,6 +118,9 @@ export class Swarm {
     this.queue = [...config.tasks];
     this.total = config.tasks.length;
     this.targetConcurrency = config.concurrency;
+    this.repoFingerprint = config.repoFingerprint;
+    this.runId = config.runId;
+    this.waveNum = config.waveNum;
   }
 
   get active() { return this.agents.filter(a => a.status === "running").length; }

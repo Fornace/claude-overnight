@@ -33,6 +33,7 @@ function baseState(phase) {
         branches: [], phase,
         startedAt: new Date().toISOString(), cwd,
         allowExtraUsage: false,
+        repoFingerprint: "test12345678",
     };
 }
 describe("findIncompleteRuns  -- planning phase visibility", () => {

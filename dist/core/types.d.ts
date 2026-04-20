@@ -18,6 +18,12 @@ export interface Task {
     type?: string;
     /** Shell command that must exit 0 for the task to be considered done. Runs in cwd after merge. Failed postconditions trigger the same retry path as filesChanged=0. */
     postcondition?: string;
+    /** Groups sibling tasks for A/B pairing — tasks with the same groupId are considered comparable. */
+    groupId?: string;
+    /** A/B arm assignment: "treatment" includes the test skill, "control" explicitly excludes it. */
+    abArm?: "treatment" | "control";
+    /** Skill name to exclude from L0 stub for control arm agents. */
+    abExcludeSkill?: string;
 }
 /** Schema for a JSON task file that defines a batch of work for the swarm. */
 export interface TaskFile {
@@ -289,6 +295,8 @@ export interface RunState extends RunConfigBase {
     startedAt: string;
     /** Working directory for the run. */
     cwd: string;
+    /** 12-char repo fingerprint for skill storage. */
+    repoFingerprint: string;
     /** Original raw objective the user typed, before the setup coach rewrote it. Optional — only present when the coach ran and was accepted. */
     coachedObjective?: string;
     /** Unix timestamp (ms) when the coach produced the accepted rewrite. */

@@ -1,10 +1,5 @@
 // Inputs and constants the Swarm consumes — kept separate from the class
 // itself so callers can build a config without dragging in the worker loop.
-/** Sent to an agent right after its main task completes, to take one more
- *  pass at trimming churn the agent introduced while exploring. */
-export const SIMPLIFY_PROMPT = `You just finished your task. Review and simplify your changes.
-
-Invoke the \`simplify\` skill to review your changes for reuse, quality, and efficiency, then fix any issues found.`;
 /**
  * Proxied Cursor models ignore SDK `cwd` and use their own workspace
  * resolution. Inject `X-Cursor-Workspace` via ANTHROPIC_CUSTOM_HEADERS so the

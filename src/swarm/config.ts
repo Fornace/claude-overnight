@@ -21,13 +21,15 @@ export interface SwarmConfig {
   envForModel?: (model?: string) => Record<string, string> | undefined;
   /** When true, the run uses cursor-composer-in-claude. The swarm will attempt to restart it if it crashes mid-run. */
   cursorProxy?: boolean;
+  /** 12-char repo fingerprint for skill scribe. */
+  repoFingerprint?: string;
+  /** Run directory basename for skill scribe provenance. */
+  runId?: string;
+  /** Current wave number for skill scribe provenance. */
+  waveNum?: number;
+  /** Whether agents may propose skill candidates. */
+  allowSkillProposals?: boolean;
 }
-
-/** Sent to an agent right after its main task completes, to take one more
- *  pass at trimming churn the agent introduced while exploring. */
-export const SIMPLIFY_PROMPT = `You just finished your task. Review and simplify your changes.
-
-Invoke the \`simplify\` skill to review your changes for reuse, quality, and efficiency, then fix any issues found.`;
 
 /**
  * Proxied Cursor models ignore SDK `cwd` and use their own workspace

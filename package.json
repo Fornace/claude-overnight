@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.92",
+    "better-sqlite3": "^11.10.0",
     "chalk": "^5.4.1",
     "cursor-composer-in-claude": "file:../cursor-composer-in-claude/cursor-composer-in-claude-0.10.2.tgz",
     "ink": "^7.0.1",
@@ -23,6 +24,7 @@
     "react": "^19.2.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
@@ -78,6 +80,7 @@
     "!dist/__tests__",
     "docs",
     "plugins",
+    "prompts",
     "QUICKSHEET_PLAYWRIGHT.md",
     "README.md",
     "LICENSE"

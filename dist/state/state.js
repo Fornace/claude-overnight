@@ -291,6 +291,7 @@ export function backfillOrphanedPlans(rootDir, filterCwd) {
                     phase: "planning",
                     startedAt,
                     cwd: filterCwd,
+                    repoFingerprint: "000000000000",
                 });
                 count++;
             }

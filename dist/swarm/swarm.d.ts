@@ -64,6 +64,12 @@ export declare class Swarm {
     worktreeBase?: string;
     /** @internal -- friend surface for swarm-agent-run. */
     readonly activeQueries: Set<Query>;
+    /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+    readonly repoFingerprint?: string;
+    /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+    readonly runId?: string;
+    /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+    readonly waveNum?: number;
     private cleanedUp;
     /** @internal -- friend surface for swarm-message-handler. */
     readonly pendingTools: WeakMap<AgentState, PendingTool>;

@@ -18,6 +18,10 @@ export interface AgentRunHost extends MessageHandlerHost {
     rateLimitResetsAt?: number;
     isUsingOverage: boolean;
     readonly lastProgressAt: number;
+    /** Skill scribe context — populated when allowSkillProposals is true. */
+    readonly repoFingerprint?: string;
+    readonly runId?: string;
+    readonly waveNum?: number;
     windowTag(): string;
     rateLimitSleep(ms: number): Promise<void>;
     checkStall(): void;

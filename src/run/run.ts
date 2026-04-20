@@ -3,6 +3,7 @@ import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
 import type { Task, MergeStrategy, RunState, RunConfigBase, BranchRecord, WaveSummary } from "../core/types.js";
+import { computeRepoFingerprint } from "../core/fingerprint.js";
 import { Swarm } from "../swarm/swarm.js";
 import { steerWave, STEER_SCHEMA } from "../planner/steering.js";
 import { verifyWave } from "../planner/verifier.js";
@@ -22,6 +23,7 @@ import {
 import { runPostRunReview } from "./review.js";
 import { printFinalSummary } from "./summary.js";
 import { runWaveLoop } from "./wave-loop.js";
+import { renderPrompt } from "../prompts/load.js";
 
 export interface RunConfig extends RunConfigBase {
   /** Tasks to execute. */
@@ -109,6 +111,8 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   let lastCapped = false, lastAborted = false, objectiveComplete = false;
   let lastEstimate: number | undefined;
   const branches: BranchRecord[] = [];
+  // Skills telemetry accumulators
+  let skillsPromoted = 0, skillsPatched = 0, skillsQuarantined = 0, skillsRejected = 0;
 
   if (cfg.resuming && cfg.resumeState) {
     const rs = cfg.resumeState;
@@ -167,7 +171,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       try {
         const memory = readRunMemory(runDir, previousKnowledge || undefined);
         const cap = (s: string, max: number) => s && s.length > max ? s.slice(0, max) + "\n...(truncated)" : (s || "");
-        const memBlob = [
+        const context = [
           objective ? `Objective: ${objective}` : "",
           memory.goal ? `Goal:\n${cap(memory.goal, 1500)}` : "",
           memory.status ? `Current status:\n${cap(memory.status, 2000)}` : "",
@@ -175,7 +179,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
           memory.reflections ? `Latest reflections:\n${cap(memory.reflections, 1500)}` : "",
           waveHistory.length ? `Waves completed: ${waveHistory.length}` : "",
         ].filter(Boolean).join("\n\n");
-        const prompt = `You are answering a user question about an in-progress autonomous agent run. Use the context below; read files in the repo if needed. Answer concisely (a few sentences) and cite files or waves when relevant.\n\n${memBlob}\n\n---\nUser question: ${question}`;
+        const prompt = renderPrompt("60_runtime/60-1_ask", { vars: { context, question } });
         const answer = await runPlannerQuery(
           prompt,
           { cwd, model: plannerModel },
@@ -231,13 +235,13 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     const debriefModel = fastModel || workerModel;
     const memory = readRunMemory(runDir, previousKnowledge || undefined);
     const cap = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
-    const ctx = [
+    const context = [
       objective ? `Objective: ${objective}` : "",
       memory.status ? `Status:\n${cap(memory.status, 800)}` : "",
       waveHistory.length ? `Waves done: ${waveHistory.length}` : "",
       memory.reflections ? `Reflections:\n${cap(memory.reflections, 600)}` : "",
     ].filter(Boolean).join("\n\n");
-    const prompt = `${label}\n\n${ctx}\n\nWrite one short sentence (max 180 chars) summarising progress and what's next. No preamble.`;
+    const prompt = renderPrompt("60_runtime/60-2_debrief", { vars: { label, context } });
     // Show in-flight feedback so the panel isn't empty while the planner thinks.
     display.setDebrief(`Summarizing ${label.toLowerCase().replace(/\.$/, "")}\u2026`);
     void runPlannerQuery(prompt, { cwd, model: debriefModel }, () => {})
@@ -261,6 +265,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
   const waveMerge: MergeStrategy = (flex && runBranch) ? "yolo" : mergeStrategy;
 
   const runId = runDir.split(/[/\\]/).pop() ?? "";
+  const repoFingerprint = computeRepoFingerprint(cwd);
   if (!cfg.resuming) {
     try {
       appendOvernightLogStart(cwd, runId, {
@@ -289,6 +294,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     currentTasks: varying.currentTasks,
     accCost, accCompleted, accFailed, accIn, accOut, accTools,
     branches, phase: varying.phase, startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
+    repoFingerprint,
     coachedObjective: cfg.coachedObjective,
     coachedAt: cfg.coachedAt,
   });
@@ -323,7 +329,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     if (mergeFailedBranches.length >= 2) {
       currentTasks = mergeFailedBranches.map((b, i) => ({
         id: `branch-retry-${i}`,
-        prompt: `Your previous attempt at this task merge-failed against main. Redo it against the current state of main with minimal, focused edits. Original task:\n\n${b.taskPrompt}`,
+        prompt: renderPrompt("30_wave/30-3_branch-retry", { vars: { originalTask: b.taskPrompt } }),
         model: workerModel,
         postcondition: "pnpm run build",
       }));
@@ -370,7 +376,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
             display.appendSteeringEvent("Done blocked  -- auto-composing verification wave");
             currentTasks = [{
               id: "verify-0",
-              prompt: `## Verification: Build, run, and test the application end-to-end\n\nYou are the final gatekeeper before this run is marked complete. The steerer believes the objective is done. Your job: prove it or disprove it.\n\n1. Run the build (npm run build, or whatever this project uses). Report ALL errors.\n2. Start the dev server. If a port is taken, try another. If a dependency is missing, install it.\n3. Navigate key flows as a real user would. Check that the main features work.\n4. Write your findings to .claude-overnight/latest/verifications/final-verify.md\n\nBe relentless. Do not give up if the first approach fails. Search the codebase for dev login routes, test tokens, seed users, env vars, CLI auth commands, or any bypass.`,
+              prompt: renderPrompt("30_wave/30-5_auto-verify"),
               noWorktree: true, model: plannerModel, type: "verify",
             } as any];
             steered = true;
@@ -401,7 +407,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         if (stillFailed.length >= 1) {
           currentTasks = stillFailed.map((b, i) => ({
             id: `branch-retry-${i}`,
-            prompt: `Your previous attempt at this task merge-failed against main. Redo it against the current state of main with minimal, focused edits. Original task:\n\n${b.taskPrompt}`,
+            prompt: renderPrompt("30_wave/30-3_branch-retry", { vars: { originalTask: b.taskPrompt } }),
             model: workerModel,
             postcondition: "pnpm run build",
           }));
@@ -415,7 +421,9 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         try {
           let statusText = "";
           try { statusText = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
-          const minimalPrompt = `${objective ? `Objective: ${objective}` : ""}\n\nStatus:\n${statusText || "(none)"}\n\nReturn tasks: string[] — 3-6 specific follow-ups. JSON only. {"tasks":[{"prompt":"..."}]}`;
+          const minimalPrompt = renderPrompt("30_wave/30-4_decomposer-minimal", {
+            vars: { objective, status: statusText || "(none)" },
+          });
           const minimalText = await runPlannerQuery(minimalPrompt, { cwd, model: plannerModel, outputFormat: STEER_SCHEMA, transcriptName: "decomposer-minimal", maxTurns: 40 }, () => {});
           const parsed = attemptJsonParse(minimalText);
           if (parsed?.tasks?.length > 0) {
@@ -521,6 +529,9 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       set usageCap(v: number | undefined) { usageCap = v; },
       branches,
       waveHistory,
+      repoFingerprint,
+      runId,
+      allowSkillProposals: true,
     },
     // ctx
     {
@@ -544,6 +555,9 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       runDebrief,
       recordBranches: (agents, mergeResults, currentWave) => {
         recordBranches(agents, mergeResults, branches, currentWave);
+      },
+      onLibrarianResult: (p, pa, q, r) => {
+        skillsPromoted += p; skillsPatched += pa; skillsQuarantined += q; skillsRejected += r;
       },
     },
   );
@@ -628,6 +642,11 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       }
     }
     console.log("");
+  }
+
+  // Skills summary
+  if (skillsPromoted || skillsPatched || skillsQuarantined || skillsRejected) {
+    console.log(chalk.dim(`\n  Skills: promoted=${skillsPromoted} patched=${skillsPatched} quarantined=${skillsQuarantined} rejected=${skillsRejected}`));
   }
 
   await printFinalSummary({

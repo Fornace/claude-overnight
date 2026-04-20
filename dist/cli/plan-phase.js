@@ -8,9 +8,12 @@ import { RunDisplay } from "../ui/ui.js";
 import { renderSummary } from "../ui/summary.js";
 import { isCursorProxyProvider } from "../providers/index.js";
 import { readMdDir, saveRunState } from "../state/state.js";
+import { computeRepoFingerprint } from "../skills/scribe.js";
 import { selectKey, ask, showPlan, makeProgressLog, isJWTAuthError } from "./cli.js";
+import { renderPrompt } from "../prompts/load.js";
 export async function runPlanPhase(input) {
     const { objective, noTTY, flex, budget, concurrency, cwd, plannerModel, workerModel, fastModel, plannerProvider, workerProvider, fastProvider, usageCap, allowExtraUsage, extraUsageBudget, useWorktrees, mergeStrategy, agentTimeoutMs, runDir, designDir, previousKnowledge, envForModel, coachedOriginal, coachedAt, } = input;
+    const repoFingerprint = computeRepoFingerprint(cwd);
     let tasks = [];
     let thinkingHistory;
     let thinkingUsed = 0, thinkingCost = 0, thinkingIn = 0, thinkingOut = 0, thinkingTools = 0;
@@ -36,6 +39,7 @@ export async function runPlanPhase(input) {
                 phase: "planning",
                 startedAt: new Date().toISOString(),
                 cwd,
+                repoFingerprint,
             });
         }
         catch { }
@@ -96,7 +100,14 @@ export async function runPlanPhase(input) {
                         let answer = "";
                         const plannerEnv = envForModel(plannerModel);
                         for await (const msg of query({
-                            prompt: `You're planning work for: "${objective}"\n\nThemes identified:\n${themes.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n\nUser question: ${question}`,
+                            prompt: renderPrompt("60_runtime/60-3_plan-chat", {
+                                variant: "THEMES",
+                                vars: {
+                                    objective,
+                                    themesList: themes.map((t, i) => `${i + 1}. ${t}`).join("\n"),
+                                    question,
+                                },
+                            }),
                             options: { cwd, model: plannerModel, permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
                         })) {
                             if (msg.type === "result" && msg.subtype === "success")
@@ -169,6 +180,7 @@ export async function runPlanPhase(input) {
                             phase: "planning",
                             startedAt: new Date().toISOString(),
                             cwd,
+                            repoFingerprint,
                             coachedObjective: coachedOriginal,
                             coachedAt,
                         });
@@ -204,7 +216,7 @@ export async function runPlanPhase(input) {
             const taskFile = join(runDir, "tasks.json");
             if (designs) {
                 const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
-                const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${(budget ?? 10) - thinkingUsed}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
+                const flexNote = renderPrompt("_shared/flex-note", { vars: { remainingBudget: (budget ?? 10) - thinkingUsed } });
                 console.log(chalk.cyan(`\n  ◆ Orchestrating plan...\n`));
                 tasks = await orchestrate(objective, designs, cwd, plannerModel, workerModel, orchBudget, concurrency, makeProgressLog(), flexNote, taskFile);
                 process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}\n\n`);
@@ -218,7 +230,7 @@ export async function runPlanPhase(input) {
         }
         else {
             const waveBudget = flex ? Math.min(50, Math.max(concurrency, Math.ceil((budget ?? 10) * 0.5))) : budget;
-            const flexNote = flex ? `This is wave 1 of an adaptive multi-wave run (total budget: ${budget}). Plan the highest-impact foundational work first. Future waves will iterate, polish, and expand based on what's learned.` : undefined;
+            const flexNote = flex ? renderPrompt("_shared/flex-note", { vars: { remainingBudget: budget ?? 10 } }) : undefined;
             console.log(chalk.cyan(`\n  ◆ Planning${flex ? " wave 1" : ""}...\n`));
             tasks = await planTasks(objective, cwd, plannerModel, workerModel, waveBudget, concurrency, makeProgressLog(), flexNote);
             process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${tasks.length} tasks`)}${flex ? chalk.dim(` · wave 1`) : ""}\n\n`);
@@ -256,7 +268,14 @@ export async function runPlanPhase(input) {
                             let answer = "";
                             const plannerEnv = envForModel(plannerModel);
                             for await (const msg of query({
-                                prompt: `You planned these tasks for the objective "${objective}":\n${tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n")}\n\nUser question: ${question}`,
+                                prompt: renderPrompt("60_runtime/60-3_plan-chat", {
+                                    variant: "TASKS",
+                                    vars: {
+                                        objective,
+                                        tasksList: tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n"),
+                                        question,
+                                    },
+                                }),
                                 options: { cwd, model: plannerModel, permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, persistSession: false, ...(plannerEnv && { env: plannerEnv }) },
                             })) {
                                 if (msg.type === "result" && msg.subtype === "success")

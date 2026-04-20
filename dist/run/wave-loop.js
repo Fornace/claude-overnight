@@ -13,19 +13,27 @@ import { Swarm } from "../swarm/swarm.js";
 import { contextFillInfo } from "../ui/primitives.js";
 import { getModelCapability } from "../core/models.js";
 import { isJWTAuthError } from "../core/auth.js";
+import { renderPrompt } from "../prompts/load.js";
 import { saveRunState, saveWaveSession, } from "../state/state.js";
 import { throttleBeforeWave } from "./throttle.js";
 import { updateCircuitBreakerStreak } from "./circuit-breaker-state.js";
 import { checkProjectHealth } from "./health.js";
 import { runPostWaveReview } from "./review.js";
 import { promptBudgetExtension } from "./budget.js";
+import { writeCandidate } from "../skills/scribe.js";
+import { runLibrarian } from "../skills/librarian.js";
+import { pickAbSkill, recordAbOutcome } from "../skills/ab.js";
 export async function runWaveLoop(host, ctx) {
     let runAnotherRound = true;
     let healFailStreak = 0;
     let zeroFileWaves = 0;
+    let waveScribeWrote = 0;
+    let waveScribeDropped = 0;
     while (runAnotherRound) {
         runAnotherRound = false;
         while (host.remaining > 0 && host.currentTasks.length > 0 && !ctx.isStopping()) {
+            waveScribeWrote = 0;
+            waveScribeDropped = 0;
             // ── Health check ──
             {
                 const healTasks = healFailStreak > 0 ? [] : checkProjectHealth(ctx.cwd);
@@ -72,6 +80,18 @@ export async function runWaveLoop(host, ctx) {
                     }
                 }
             }
+            // ── A/B assignment ──
+            const abAssignment = pickAbSkill({
+                fingerprint: host.repoFingerprint,
+                tasks: host.currentTasks,
+                wave: host.waveNum,
+            });
+            if (abAssignment) {
+                ctx.display.appendSteeringEvent(`ab: skill=${abAssignment.skill} treatment=[${abAssignment.treatmentTaskIds.join(",")}] control=[${abAssignment.controlTaskIds.join(",")}]`);
+            }
+            else {
+                ctx.display.appendSteeringEvent("ab: none");
+            }
             // ── Swarm run ──
             const swarm = new Swarm({
                 tasks: host.currentTasks, concurrency: host.concurrency, cwd: ctx.cwd, model: host.workerModel,
@@ -79,6 +99,10 @@ export async function runWaveLoop(host, ctx) {
                 useWorktrees: ctx.useWorktrees, mergeStrategy: ctx.waveMerge, agentTimeoutMs: ctx.agentTimeoutMs,
                 usageCap: host.usageCap, allowExtraUsage: ctx.allowExtraUsage, extraUsageBudget: ctx.extraUsageBudget,
                 baseCostUsd: host.accCost, envForModel: ctx.envForModel, cursorProxy: ctx.cursorProxy,
+                repoFingerprint: host.repoFingerprint,
+                runId: host.runId,
+                waveNum: host.waveNum,
+                allowSkillProposals: host.allowSkillProposals,
             });
             host.currentSwarm = swarm;
             ctx.display.setWave(swarm);
@@ -105,6 +129,10 @@ export async function runWaveLoop(host, ctx) {
             // ── Zero-work retry ──
             if (!swarm.aborted && !swarm.cappedOut && host.remaining > 0) {
                 handleZeroWorkRetry(swarm, host, ctx);
+            }
+            // ── A/B outcome capture ──
+            if (abAssignment) {
+                captureAbOutcome(swarm, abAssignment, host, ctx);
             }
             // ── Stats rollup ──
             host.accCost += swarm.totalCostUsd;
@@ -181,6 +209,7 @@ export async function runWaveLoop(host, ctx) {
                 totalToolCalls,
                 suspectedInfraFailure,
             });
+            ctx.display.appendSteeringEvent(`scribe: wrote=${waveScribeWrote} dropped=${waveScribeDropped}`);
             // ── Heal fail streak ──
             const lastWave = host.waveHistory[host.waveHistory.length - 1];
             const healTask = lastWave?.tasks.find(t => t.type === "heal");
@@ -310,6 +339,46 @@ export async function runWaveLoop(host, ctx) {
                     ctx.display.appendSteeringEvent(`Post-wave review: ${reviewResult.completed} done${reviewResult.failed > 0 ? ` / ${reviewResult.failed} failed` : ""}`);
                 }
             }
+            // ── Wave-end heuristic candidate (provenance, not a real skill) ──
+            if (host.repoFingerprint && host.runId) {
+                const filesChanged = swarm.agents.reduce((s, a) => s + (a.filesChanged ?? 0), 0);
+                const outcome = swarm.aborted ? "aborted" : swarm.cappedOut ? "capped" : `${swarm.completed}done/${swarm.failed}failed`;
+                const body = `wave ${host.waveNum}: ${outcome}, ${filesChanged} files changed`;
+                const r = writeCandidate({
+                    kind: "heuristic",
+                    proposedBy: `thinking-wave-${host.waveNum}`,
+                    wave: host.waveNum,
+                    runId: host.runId,
+                    fingerprint: host.repoFingerprint,
+                    trigger: `wave-${host.waveNum} ${outcome}`,
+                    body: body.slice(0, 800),
+                });
+                if (r.wrote)
+                    waveScribeWrote++;
+                if (r.dropped)
+                    waveScribeDropped++;
+            }
+            // ── Librarian: curate candidates into canon at end of wave ──
+            const librarianStart = Date.now();
+            let librarianPromoted = 0, librarianPatched = 0, librarianQuarantined = 0, librarianRejected = 0;
+            try {
+                const lr = await runLibrarian({
+                    fingerprint: host.repoFingerprint,
+                    runId: host.runId,
+                    wave: host.waveNum,
+                    cwd: ctx.cwd,
+                    model: host.plannerModel,
+                    envForModel: ctx.envForModel,
+                });
+                librarianPromoted = lr.promoted;
+                librarianPatched = lr.patched;
+                librarianQuarantined = lr.quarantined;
+                librarianRejected = lr.rejected;
+            }
+            catch { }
+            const librarianMs = Date.now() - librarianStart;
+            ctx.display.appendSteeringEvent(`skills: promoted=${librarianPromoted} patched=${librarianPatched} quarantined=${librarianQuarantined} rejected=${librarianRejected} librarian_ms=${librarianMs}`);
+            ctx.onLibrarianResult?.(librarianPromoted, librarianPatched, librarianQuarantined, librarianRejected);
             if (host.remaining <= 0 || swarm.aborted || swarm.cappedOut)
                 break;
             if (!ctx.flex && !ctx.runVerifier)
@@ -384,12 +453,17 @@ function handleZeroWorkRetry(swarm, host, ctx) {
     ctx.display.appendSteeringEvent(`Retry: ${zeroWork.length} task(s) (${noFiles} with 0 files, ${badPost} failed postcondition)`);
     const retryTasks = zeroWork.map(a => {
         const pr = postResults.get(a.id);
-        const postFailBlock = pr && !pr.ok
-            ? `\n\nThe postcondition \`${a.task.postcondition}\` failed after your last attempt:\n${pr.output || "(no output)"}\n\nFix what makes the check fail and try again.`
-            : `\n\nIMPORTANT: your last attempt made no file edits. If the fix truly needs no changes, say 'no-op:' at the start and explain why. Otherwise, make the actual edits.`;
+        const postFailed = !!(pr && !pr.ok);
         return {
             id: `${a.task.id}-retry`,
-            prompt: `${a.task.prompt}${postFailBlock}`,
+            prompt: renderPrompt("30_wave/30-6_retry-suffix", {
+                variant: postFailed ? "POSTFAILED" : "NOFILES",
+                vars: {
+                    taskPrompt: a.task.prompt,
+                    postcondition: a.task.postcondition,
+                    output: pr?.output || "(no output)",
+                },
+            }),
             type: "execute",
             postcondition: a.task.postcondition,
         };
@@ -456,4 +530,29 @@ function buildRunState(host, phase, currentTasks) {
         accCost: host.accCost, accCompleted: host.accCompleted, accFailed: host.accFailed,
         accIn: host.accIn, accOut: host.accOut, accTools: host.accTools,
     };
+}
+function captureAbOutcome(swarm, assignment, host, ctx) {
+    const treatmentAgents = swarm.agents.filter(a => assignment.treatmentTaskIds.includes(a.task.id));
+    const controlAgents = swarm.agents.filter(a => assignment.controlTaskIds.includes(a.task.id));
+    if (treatmentAgents.length === 0 || controlAgents.length === 0)
+        return;
+    const tScore = treatmentAgents.reduce((s, a) => s + ((a.filesChanged ?? 0) > 0 ? 1 : 0), 0);
+    const cScore = controlAgents.reduce((s, a) => s + ((a.filesChanged ?? 0) > 0 ? 1 : 0), 0);
+    const tFiles = treatmentAgents.reduce((s, a) => s + (a.filesChanged ?? 0), 0);
+    const cFiles = controlAgents.reduce((s, a) => s + (a.filesChanged ?? 0), 0);
+    const tCost = treatmentAgents.reduce((s, a) => s + (a.costUsd ?? 0), 0);
+    const cCost = controlAgents.reduce((s, a) => s + (a.costUsd ?? 0), 0);
+    recordAbOutcome({
+        runId: host.runId,
+        wave: host.waveNum,
+        assignment,
+        treatmentScore: tScore,
+        controlScore: cScore,
+        treatmentFilesChanged: tFiles,
+        controlFilesChanged: cFiles,
+        treatmentCostUsd: tCost,
+        controlCostUsd: cCost,
+    });
+    const outcome = tScore > cScore ? "treatment won" : cScore > tScore ? "control won" : "tie";
+    ctx.display.appendSteeringEvent(`ab: ${assignment.skill} → ${outcome} (t:${tScore}vs${cScore}c, Δ$${(tCost - cCost).toFixed(2)})`);
 }

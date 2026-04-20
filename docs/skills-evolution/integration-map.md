@@ -59,8 +59,15 @@ The scribe must never throw. All writes wrapped in try/catch; failures logged to
 
 | File | Where | What to add |
 |---|---|---|
-| `src/skills/scribe.ts` | candidate validation | Accept `kind: "tool-recipe"` and route to `tool-recipes/` subdir. |
-| `src/skills/injection.ts` | L0 | Tool recipes are injected as a separate, opt-in section ("Helpers you've written before"). |
+| `src/skills/paths.ts` | paths | `recipeDir(fp)` — returns `canon/recipe/` subdir. |
+| `src/skills/scribe.ts` | candidate validation | Already accepts `kind: "tool-recipe"` in `CandidateInput.kind`. No change needed. |
+| `src/skills/index-db.ts` | DB | Added `kind` column (lazy migration). `queryRecipeL0()` queries recipes by kind. Updated `queryCandidateL0` to filter `kind = 'skill'`. |
+| `src/skills/injection.ts` | L0 | `buildRecipeStub()` — emits "Helpers you've written before" section when recipes match agent tools. ≤ 512 tokens. |
+| `src/skills/librarian.ts` | promotion | `validateRecipeBody()` — validates exactly one code block of declared language. Creates route to `canon/recipe/` for recipes. `insertSkillRow` now takes `kind`. |
+| `src/skills/librarian-prompt.ts` | prompt | Extended with recipe-specific fields (`recipe_language`, `tested_with`) and validation rules. |
+| `src/swarm/config.ts` | SKILL_PROPOSAL_PROMPT | Added recipe candidate paragraph. |
+| `src/swarm/agent-run.ts` | prompt assembly | Calls `buildRecipeStub`, injects after skills stub. |
+| `src/planner/query.ts` | prompt assembly | Calls `buildRecipeStub`, prepends before skills stub. |
 
 ---
 

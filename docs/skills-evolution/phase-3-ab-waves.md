@@ -128,9 +128,9 @@ This column is telemetry, not accounting. Never display it in a way that looks a
 - [ ] `ab_eligible` column present; librarian sets it on promotion / demotion-consideration.
 - [ ] `pickAbSkill` returns at most one pair per wave.
 - [ ] Treatment stub contains the skill; control stub does not; nothing else differs.
-- [ ] `recordAbOutcome` writes the expected `skill_events` rows for win / loss / tie.
-- [ ] Librarian subagent input includes a compact A/B summary per eligible skill.
-- [ ] `src/__tests__/ab.test.ts` passes.
+- [x] `recordAbOutcome` writes the expected `skill_events` rows for win / loss / tie.
+- [x] Librarian subagent input includes a compact A/B summary per eligible skill.
+- [x] `src/__tests__/ab.test.ts` passes.
 - [ ] One real overnight run produces a non-tie A/B outcome and the librarian cites it in its next pass.
 - [ ] No file over 500 lines.
 

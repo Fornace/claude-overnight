@@ -20,6 +20,12 @@ export interface PlannerOpts {
     env?: Record<string, string>;
     /** AITurn ID to update with token/cost info during streaming. */
     turnId?: string;
+    /** Skill scribe context. */
+    repoFingerprint?: string;
+    /** Skill scribe context. */
+    runId?: string;
+    /** Planner role name for scribe provenance. */
+    plannerRole?: string;
 }
 export declare function setPlannerEnvResolver(fn: ((model?: string) => Record<string, string> | undefined) | undefined): void;
 export declare function runPlannerQuery(prompt: string, opts: PlannerOpts, onLog: PlannerLog): Promise<string>;

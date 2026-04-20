@@ -36,6 +36,7 @@ function baseState(phase: RunState["phase"]): RunState {
     branches: [], phase,
     startedAt: new Date().toISOString(), cwd,
     allowExtraUsage: false,
+    repoFingerprint: "test12345678",
   };
 }
 

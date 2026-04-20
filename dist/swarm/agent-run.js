@@ -5,12 +5,15 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
 import { createTurn, beginTurn, endTurn, updateTurn } from "../core/turns.js";
-import { SIMPLIFY_PROMPT, withCursorWorkspaceHeader, getAgentTimeout } from "./config.js";
+import { withCursorWorkspaceHeader, getAgentTimeout } from "./config.js";
+import { renderPrompt } from "../prompts/load.js";
 import { AgentTimeoutError, StreamStalledError, isRateLimitError, isStreamStalledError, isTransientError, sleep } from "./errors.js";
 import { handleMsg, checkStreamHealth, NO_CONTENT_TIMEOUT_MS } from "./message-handler.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 import { StreamSink } from "../core/transcripts.js";
 import { StallGuard, StallMonitor, runWithStallRotation } from "../core/stall-guard.js";
+import { writeCandidate } from "../skills/scribe.js";
+import { buildL0Stub, buildRecipeStub } from "../skills/injection.js";
 export { buildErroredBranchEvaluator } from "./branch-evaluator.js";
 export async function runAgent(host, task) {
     // Guard: if pause was triggered between dispatch and here, re-queue immediately.
@@ -98,6 +101,7 @@ export async function runAgent(host, task) {
         }
         try {
             let resumePrompt = "Continue. Complete the task.";
+            let agentFinalText = "";
             const effectiveModel = task.model || host.model;
             const resolveFallback = () => withCursorWorkspaceHeader(StallMonitor.instance.getFallbackEnv(effectiveModel), agentCwd);
             const runOneStream = async (isResume, promptText, env) => {
@@ -162,6 +166,16 @@ export async function runAgent(host, task) {
                                     sessionId = msg.session_id;
                                 sink.append(msg);
                                 handleMsg(host, agent, msg);
+                                // Capture assistant text for skill proposal extraction.
+                                if (msg.type === "assistant") {
+                                    const content = msg.message?.content;
+                                    if (Array.isArray(content)) {
+                                        for (const part of content) {
+                                            if (part?.type === "text" && typeof part.text === "string")
+                                                agentFinalText += part.text;
+                                        }
+                                    }
+                                }
                             }
                             sink.markFinished();
                         })(),
@@ -202,13 +216,21 @@ export async function runAgent(host, task) {
                     : { ...task });
                 return true;
             };
-            const preamble = "Keep files under ~500 lines. If a file would exceed that, split it.\n\n";
-            const postBlock = task.postcondition
-                ? `\n\nEXIT CRITERION — after you finish, the framework will run this shell check in cwd and reject a no-op if it fails:\n  $ ${task.postcondition}\nYour work is not done until that command exits 0. Don't claim no-op unless you can prove the check already passes.`
+            const l0Stub = host.config.repoFingerprint
+                ? buildL0Stub({ fingerprint: host.config.repoFingerprint, role: "worker", excludeSkill: task.abExcludeSkill }).text
                 : "";
-            const freshPrompt = host.config.useWorktrees && !task.noWorktree
-                ? `You are working in an isolated git worktree. Focus only on this task. Do NOT commit your changes  -- the framework handles that.\n\n${preamble}${task.prompt}${postBlock}`
-                : `${preamble}${task.prompt}${postBlock}`;
+            const recipeStub = host.config.repoFingerprint
+                ? buildRecipeStub({ fingerprint: host.config.repoFingerprint, tools: host.config.allowedTools })?.text
+                : "";
+            const freshPrompt = renderPrompt("20_execution/20-3_agent-wrap", {
+                vars: {
+                    useWorktrees: host.config.useWorktrees && !task.noWorktree,
+                    l0Stub, recipeStub,
+                    allowSkillProposals: host.config.allowSkillProposals,
+                    taskPrompt: task.prompt,
+                    postcondition: task.postcondition,
+                },
+            });
             const initialIsResume = !!resumeSessionId;
             const initialPrompt = initialIsResume ? resumePrompt : freshPrompt;
             try {
@@ -227,8 +249,8 @@ export async function runAgent(host, task) {
             if (resumeSessionId && agent.status === "running") {
                 try {
                     host.log(id, "Simplify pass");
-                    resumePrompt = SIMPLIFY_PROMPT;
-                    await runTurn(true, SIMPLIFY_PROMPT);
+                    resumePrompt = renderPrompt("20_execution/20-1_simplify");
+                    await runTurn(true, resumePrompt);
                 }
                 catch {
                     host.log(id, "Simplify pass skipped");
@@ -248,6 +270,21 @@ export async function runAgent(host, task) {
                 else {
                     agent.status = "done";
                     host.completed++;
+                    // Skill scribe: extract ### SKILL CANDIDATE block if present.
+                    if (host.repoFingerprint && host.runId != null) {
+                        const proposal = extractSkillProposal(agentFinalText);
+                        if (proposal) {
+                            writeCandidate({
+                                kind: "skill",
+                                proposedBy: `agent-${id}`,
+                                wave: host.waveNum ?? 0,
+                                runId: host.runId,
+                                fingerprint: host.repoFingerprint,
+                                trigger: proposal.trigger,
+                                body: proposal.body,
+                            });
+                        }
+                    }
                 }
             }
             break;
@@ -385,4 +422,22 @@ function installLspFirstHookInto(worktreeDir) {
     mkdirSync(dir, { recursive: true });
     // settings.local.json is gitignored by Claude Code convention — won't pollute the agent's commit.
     writeFileSync(join(dir, "settings.local.json"), JSON.stringify(settings, null, 2), "utf-8");
+}
+/** Extract a ### SKILL CANDIDATE block from agent text. Returns undefined if not found. */
+function extractSkillProposal(text) {
+    const m = text.match(/###\s*SKILL CANDIDATE\s*\n([\s\S]+?)$/);
+    if (!m)
+        return undefined;
+    const block = m[1].trim();
+    const triggerM = block.match(/^trigger:\s*(.+)$/m);
+    if (!triggerM)
+        return undefined;
+    const trigger = triggerM[1].trim().slice(0, 120);
+    const bodyStart = block.indexOf("\nbody:");
+    if (bodyStart < 0)
+        return undefined;
+    const body = block.slice(bodyStart + 6).trim();
+    if (!body)
+        return undefined;
+    return { trigger, body };
 }
