@@ -12,6 +12,15 @@ export interface Task {
   noWorktree?: boolean;
   /** SDK session ID to resume from (set when task was paused mid-turn). */
   resumeSessionId?: string;
+  /**
+   * Discriminator for the (provider, model, cwd) that produced `resumeSessionId`.
+   * The SDK keys sessions by project path locally and by account/model on the
+   * backend; if any of those differ at resume time the saved id points at a
+   * conversation neither side can find. Compared against the live key on resume;
+   * mismatch drops `resumeSessionId` before the SDK errors with
+   * "No conversation found with session ID".
+   */
+  resumeContextKey?: string;
   /** Working directory preserved from a previous run (worktree dir for paused-and-resumed tasks). */
   agentCwd?: string;
   /** The kind of work: "execute" modifies files, others are read-only/analysis. Defaults to "execute". */

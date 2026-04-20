@@ -10,6 +10,7 @@ import { withCursorWorkspaceHeader, getAgentTimeout, type SwarmConfig } from "./
 import { renderPrompt } from "../prompts/load.js";
 import { AgentTimeoutError, StreamStalledError, isRateLimitError, isStreamStalledError, isTransientError, sleep } from "./errors.js";
 import { handleMsg, checkStreamHealth, NO_CONTENT_TIMEOUT_MS, type MessageHandlerHost } from "./message-handler.js";
+import { getModelCapability } from "../core/models.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 import { StreamSink } from "../core/transcripts.js";
 import { StallGuard, StallMonitor, runWithStallRotation } from "../core/stall-guard.js";
@@ -97,6 +98,17 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
     }
   }
 
+  const effectiveModelInit = task.model || host.model;
+  const contextKey = sessionContextKey(effectiveModelInit, agentCwd, host.config.envForModel?.(effectiveModelInit));
+  // Drop a saved sessionId whose (provider, model, cwd) no longer matches the
+  // live one. Otherwise the first resume call fails with "No conversation found
+  // with session ID" and burns an attempt before any tool use. See
+  // Task.resumeContextKey for the why.
+  if (task.resumeSessionId && task.resumeContextKey && task.resumeContextKey !== contextKey) {
+    host.log(id, `Dropping stale resume id (context changed: ${task.resumeContextKey} → ${contextKey})`);
+    task = { ...task, resumeSessionId: undefined, resumeContextKey: undefined };
+  }
+
   const isResumed = !!task.resumeSessionId;
   host.log(id, isResumed ? `Resuming: ${task.prompt.slice(0, 60)}` : `Starting: ${task.prompt.slice(0, 60)}`);
   const maxRetries = host.config.maxRetries ?? 2;
@@ -106,6 +118,21 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
   // Hoisted so the catch block can read the session captured during the turn
   // when routing a pause-interrupt through the requeue path.
   let resumeSessionId: string | undefined = task.resumeSessionId;
+
+  // Carry the resume session forward only if the prior turn isn't already
+  // close to filling its context window. A saturated session would resume
+  // with little room to do real work and would auto-compact (or hit the
+  // window) almost immediately — cheaper to start the next attempt fresh.
+  const carrySession = (): boolean => {
+    if (!resumeSessionId) return false;
+    const safe = getModelCapability(effectiveModelInit ?? "").safeContext;
+    const used = agent.peakContextTokens ?? agent.contextTokens ?? 0;
+    if (safe > 0 && used >= safe * 0.85) {
+      host.log(id, `Discarding resume id (context ${used}/${safe} tokens, near saturation)`);
+      return false;
+    }
+    return true;
+  };
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
@@ -232,10 +259,11 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
       const requeueIfPaused = (): boolean => {
         if (!host.paused || agent.status !== "running") return false;
         agent.status = "paused";
-        host.log(id, resumeSessionId ? "Paused mid-task (will resume)" : "Paused before first turn (will restart)");
+        const carry = carrySession();
+        host.log(id, carry ? "Paused mid-task (will resume)" : "Paused before first turn (will restart)");
         host.queue.unshift(
-          resumeSessionId
-            ? { ...task, resumeSessionId, agentCwd }
+          carry
+            ? { ...task, resumeSessionId, resumeContextKey: contextKey, agentCwd }
             : { ...task },
         );
         return true;
@@ -309,9 +337,12 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
       if (host.paused) {
         agent.status = "paused";
         host.log(id, "Paused mid-task (interrupt thrown)");
-        // Reuse resume info when we already have a sessionId; otherwise restart fresh.
-        const reuseSession = (typeof resumeSessionId === "string") && resumeSessionId.length > 0;
-        host.queue.unshift(reuseSession ? { ...task, resumeSessionId, agentCwd } : { ...task });
+        // Reuse resume info when we have a sessionId AND the prior context isn't
+        // already saturated; otherwise restart fresh.
+        const reuseSession = carrySession();
+        host.queue.unshift(reuseSession
+          ? { ...task, resumeSessionId, resumeContextKey: contextKey, agentCwd }
+          : { ...task });
         return;
       }
       // Stream stall: the server went silent mid-response. If we captured a
@@ -418,6 +449,20 @@ function installLspFirstHookInto(worktreeDir: string): void {
   mkdirSync(dir, { recursive: true });
   // settings.local.json is gitignored by Claude Code convention — won't pollute the agent's commit.
   writeFileSync(join(dir, "settings.local.json"), JSON.stringify(settings, null, 2), "utf-8");
+}
+
+/**
+ * Stable per-(provider, model, cwd) tag for scoping `resume` session ids.
+ * Provider matters because Cursor proxy and Anthropic direct keep separate
+ * backend session stores; cwd matters because the SDK keys its on-disk session
+ * cache by project path, so a recreated worktree under a new path can't find
+ * the prior conversation. Model is included for completeness.
+ */
+function sessionContextKey(model: string | undefined, cwd: string, env?: Record<string, string>): string {
+  const isCursor = !!(env?.CURSOR_API_KEY || env?.CURSOR_AUTH_TOKEN || env?.CURSOR_BRIDGE_MODE);
+  const baseUrl = env?.ANTHROPIC_BASE_URL?.trim();
+  const provider = isCursor ? "cursor" : baseUrl ? `url:${baseUrl}` : "anthropic";
+  return `${provider}|${model ?? "default"}|${cwd}`;
 }
 
 /** Extract a ### SKILL CANDIDATE block from agent text. Returns undefined if not found. */
