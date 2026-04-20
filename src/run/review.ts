@@ -1,5 +1,6 @@
 import type { MergeStrategy } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
+import { renderPrompt } from "../prompts/load.js";
 
 // ── Review helpers: post-wave and post-run quality gates ──
 
@@ -25,24 +26,18 @@ export interface ReviewResult {
   failed: number;
 }
 
-function reviewPrompt(scope: "wave" | "run", objective?: string): string {
-  const scopeLine = scope === "wave"
-    ? "Review and simplify all changes from the most recent wave."
-    : `You are the final quality gate before this autonomous run completes.\n\nThe objective was: ${objective || "improve the codebase"}`;
-
-  return `${scopeLine}
-
-Invoke the \`simplify\` skill to review changed code for reuse, quality, and efficiency, then fix any issues found.`;
-}
-
 async function runReview(
   opts: ReviewOpts,
   scope: "wave" | "run",
   objective?: string,
   onSwarm?: (swarm: Swarm) => void,
 ): Promise<ReviewResult | null> {
+  const prompt = renderPrompt("50_review/50-1_review", {
+    variant: scope === "wave" ? "WAVE" : "RUN",
+    vars: { objective: objective || "improve the codebase" },
+  });
   const swarm = new Swarm({
-    tasks: [{ id: `${scope}-review`, prompt: reviewPrompt(scope, objective), noWorktree: false, type: "review" }],
+    tasks: [{ id: `${scope}-review`, prompt, noWorktree: false, type: "review" }],
     concurrency: 1, cwd: opts.cwd, model: opts.plannerModel,
     useWorktrees: opts.useWorktrees, mergeStrategy: opts.mergeStrategy, usageCap: opts.usageCap,
     allowExtraUsage: opts.allowExtraUsage, extraUsageBudget: opts.extraUsageBudget,

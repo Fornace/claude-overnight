@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 import { withCursorWorkspaceHeader } from "./config.js";
+import { renderPrompt } from "../prompts/load.js";
 /** Build an evaluator that judges whether partial work is coherent enough to merge. */
 export function buildErroredBranchEvaluator(host) {
     const evalModel = host.model;
@@ -8,21 +9,7 @@ export function buildErroredBranchEvaluator(host) {
         return undefined;
     const envFor = host.config.envForModel;
     return async (agentId, task, diff) => {
-        const prompt = `You are evaluating whether partial work from an agent that errored mid-task should be kept or discarded.
-
-Task: "${task}"
-
-Diff of changes:
-\`\`\`
-${diff}
-\`\`\`
-
-Is this partial work coherent enough to land? Consider:
-- Does it implement a meaningful portion of the task?
-- Are the changes self-consistent (no half-written functions, broken imports)?
-- Would merging this improve or degrade the codebase?
-
-Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
+        const prompt = renderPrompt("40_skills/40-2_branch-evaluator", { vars: { task, diff } });
         const rl = sdkQueryRateLimiter;
         let eq;
         try {

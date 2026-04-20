@@ -6,6 +6,7 @@ import { getPeakPlannerContext, runPlannerQuery } from "../planner/query.js";
 import { fmtTokens } from "../ui/primitives.js";
 import { getModelCapability } from "../core/models.js";
 import { readRunMemory } from "../state/state.js";
+import { renderPrompt } from "../prompts/load.js";
 
 export interface FinalNarrativeDeps {
   cwd: string;
@@ -23,16 +24,17 @@ export async function generateFinalNarrative(deps: FinalNarrativeDeps, phase: st
   const { cwd, runDir, objective, previousKnowledge, workerModel, fastModel, waveHistory } = deps;
   const debriefModel = fastModel || workerModel;
   const memory = readRunMemory(runDir, previousKnowledge || undefined);
-  const cap = (s: string, n: number) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
-  const ctx = [
-    objective ? `Objective: ${objective}` : "",
-    memory.goal ? `Goal:\n${cap(memory.goal, 1200)}` : "",
-    memory.status ? `Status:\n${cap(memory.status, 1200)}` : "",
-    waveHistory.length ? `Waves completed: ${waveHistory.length}` : "",
-    memory.reflections ? `Reflections:\n${cap(memory.reflections, 800)}` : "",
-    memory.verifications ? `Verifications:\n${cap(memory.verifications, 800)}` : "",
-  ].filter(Boolean).join("\n\n");
-  const prompt = `The autonomous run just ended. Final phase: ${phase}.\n\n${ctx}\n\nWrite 3–5 plain sentences for the user: what was accomplished, what's still open, and any follow-ups they should do manually. No bullet points, no preamble, no markdown headers.`;
+  const cap = (s: string | undefined, n: number) => !s ? "" : s.length > n ? s.slice(0, n) + "…" : s;
+  const prompt = renderPrompt("50_review/50-2_summary", {
+    vars: {
+      phase, objective,
+      goal: cap(memory.goal, 1200),
+      status: cap(memory.status, 1200),
+      waveCount: waveHistory.length || "",
+      reflections: cap(memory.reflections, 800),
+      verifications: cap(memory.verifications, 800),
+    },
+  });
   try {
     const text = await runPlannerQuery(prompt, { cwd, model: debriefModel }, () => {});
     return text.trim();

@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+import { renderPrompt } from "../prompts/load.js";
 /** Detect build errors and return one or more heal tasks. If errors span ≥2 files,
  *  emit one task per file so they heal in parallel without merge conflicts. */
 export function checkProjectHealth(cwd) {
@@ -31,13 +32,13 @@ export function checkProjectHealth(cwd) {
             }
             return Array.from(fileErrors.entries()).map(([file, errs], i) => ({
                 id: `heal-${i}`,
-                prompt: `Fix the broken build errors in \`${file}\`. \`${cmd}\` fails:\n\`\`\`\n${errs}\n\`\`\`\nFix every error in this file. Run \`${cmd}\` when done to verify.`,
+                prompt: renderPrompt("60_runtime/60-4_build-fix", { variant: "FILE", vars: { file, cmd, errors: errs } }),
                 type: "heal",
             }));
         }
         return [{
                 id: "heal-0",
-                prompt: `Fix the broken build. \`${cmd}\` fails after merging parallel work:\n\`\`\`\n${trimmed}\n\`\`\`\nFix every error. Run \`${cmd}\` when done to verify.`,
+                prompt: renderPrompt("60_runtime/60-4_build-fix", { variant: "ALL", vars: { cmd, errors: trimmed } }),
                 type: "heal",
             }];
     }

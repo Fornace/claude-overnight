@@ -10,6 +10,7 @@ import { envFor, isCursorProxyProvider, ensureCursorProxyRunning, PROXY_DEFAULT_
 import { COACH_SCHEMA, validateCoachOutput } from "./schema.js";
 import { URL_REGEX, fetchUrlContent, collectRepoFacts, renderRepoFacts } from "./context.js";
 import { loadUserSettings, saveUserSettings } from "./settings.js";
+import { renderPrompt } from "../../prompts/load.js";
 export { loadUserSettings, saveUserSettings } from "./settings.js";
 export { validateCoachOutput, } from "./schema.js";
 export const COACH_MODEL = "claude-haiku-4-5";
@@ -59,7 +60,7 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
         }
     }
     const userMessage = renderRepoFacts(facts, rawObjective, ctx.providers, ctx.cliFlags, planContent);
-    const prompt = `${skill}\n\n---\n\n${userMessage}\n\nRespond with the JSON object defined in "Invocation contract" only.`;
+    const prompt = renderPrompt("00_setup/00-2_coach-wrapper", { variant: "WRAP", vars: { skill, userMessage } });
     // cursor "auto" maps to a slow thinking-class model for large prompts (182s observed).
     // composer-2-fast gives the same quality for structured JSON at ~8s.
     const CURSOR_FAST_MODEL = "composer-2-fast";
@@ -142,7 +143,9 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
         const amend = (await ask(`\n  ${chalk.cyan(">")} what would you change? `)).trim();
         if (!amend)
             return null;
-        const amendedPrompt = `${prompt}\n\n---\n\nUser amendment (apply and return a revised JSON object):\n${amend}`;
+        const amendedPrompt = renderPrompt("00_setup/00-2_coach-wrapper", {
+            variant: "AMEND", vars: { previousPrompt: prompt, amendment: amend },
+        });
         const amendTurn = createTurn("coach", "Coach (amended)", "coach-amend-0", model);
         beginTurn(amendTurn);
         try {

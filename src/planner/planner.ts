@@ -3,6 +3,7 @@ import type { Task } from "../core/types.js";
 import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./query.js";
 import { contextConstraintNote } from "../core/models.js";
 import { createTurn, beginTurn, endTurn } from "../core/turns.js";
+import { renderPrompt } from "../prompts/load.js";
 
 // Resilience: if the planner query throws but the agent already wrote valid
 // tasks to `outFile` (via its Write tool), salvage them instead of discarding
@@ -38,18 +39,6 @@ const THEMES_RECON_TOOLS = [
   "mcp__serena__get_symbols_overview",
 ];
 
-// The core framing for all planning. Not a checklist  -- a way of thinking.
-export const DESIGN_THINKING = `
-HOW TO THINK ABOUT EVERY TASK:
-
-Start from the user's job. What is someone hiring this product to do? "I need to send money abroad cheaply"  -- not "I need a currency conversion API." Every decision  -- what to build, how fast it needs to respond, what happens on error  -- flows from the job.
-
-The experience IS the product. A 200ms server response is not a "performance metric"  -- it's the difference between an app that feels alive and one that feels broken. A loading state is not "polish"  -- it's the user knowing the app heard them. An error message is not "error handling"  -- it's the app being honest. There is no line between backend and UX. The server, the API, the database query, the render  -- they're all one experience the user either trusts or doesn't.
-
-Build the core, verify it works, learn, iterate. Don't plan 20 features and build them all. Build the ONE thing that matters most, run it, see if it actually works from a user's chair. What you learn from seeing it run will change what you build next. Each wave should make what exists better before adding what doesn't exist yet.
-
-Consistency is what makes complex things feel simple. One design system, rigid rules, no exceptions. This is how Revolut ships a super-app with 30+ features that doesn't feel like chaos.
-`;
 
 // ── JSON schemas for structured output ──
 
@@ -76,103 +65,16 @@ const THEMES_SCHEMA = {
 const BUDGET_FOCUSED = 10; // ≤ this → surgical, file-specific tasks
 const BUDGET_SUBSTANTIAL = 30; // ≤ this → mission-level, autonomous agents
 
-// ── Context-aware prompt strategy ──
-
 function plannerPrompt(objective: string, workerModel: string, budget?: number, concurrency?: number, flexNote?: string): string {
   const b = budget ?? BUDGET_FOCUSED;
-  const constraint = contextConstraintNote(workerModel);
-  const concLine = concurrency
-    ? `\n- ${concurrency} agents run in parallel  -- tasks that run concurrently must touch DIFFERENT files to avoid merge conflicts`
-    : "";
-  const flexLine = flexNote ? `\n\n${flexNote}` : "";
-
-  if (b <= BUDGET_FOCUSED) {
-    return `You are a task coordinator for a parallel agent system. Analyze this codebase and break the following objective into independent tasks.
-
-Objective: ${objective}
-
-${constraint}
-
-Requirements:
-- Target exactly ~${b} tasks
-- Each task MUST be independent  -- no task depends on another
-- Each task should target specific files/areas to avoid merge conflicts
-- Be specific: mention exact file paths, function names, what to change
-- Keep tasks focused: one concrete change per task${concLine}${flexLine}
-
-Respond with ONLY a JSON object (no markdown fences):
-{
-  "tasks": [
-    { "prompt": "In src/foo.ts, refactor the bar() function to..." },
-    { "prompt": "Add unit tests for the baz module in test/baz.test.ts..." }
-  ]
-}`;
-  }
-
-  if (b <= BUDGET_SUBSTANTIAL) {
-    return `You are a task coordinator for a parallel agent system with ${b} agent sessions available.
-
-Objective: ${objective}
-
-${constraint}
-
-Do NOT over-specify. Give each agent a MISSION, not step-by-step instructions. Let agents make their own decisions about implementation details.
-
-Requirements:
-- Target exactly ~${b} tasks
-- Each task should be a substantial piece of work
-- Each task MUST be independent  -- no task depends on another
-- Tasks that run concurrently must touch DIFFERENT files/areas to avoid merge conflicts
-- Give agents scope and autonomy: "Design and implement X" not "In file Y, add function Z"
-- Include research/exploration tasks, design tasks, implementation tasks, testing tasks, and polish tasks
-- Think in terms of workstreams: architecture, features, tests, docs, UX, performance, etc.${concLine}${flexLine}
-
-Respond with ONLY a JSON object (no markdown fences):
-{
-  "tasks": [
-    { "prompt": "Design and implement the complete user favorites system: database schema, API routes, client hooks, and error handling. Research existing patterns in the codebase first." },
-    { "prompt": "Audit all existing API routes for consistency, error handling, and input validation. Fix any issues found." }
-  ]
-}`;
-  }
-
-  return `You are a task coordinator for a parallel agent system with ${b} agent sessions available. This is a LARGE budget  -- equivalent to months of professional engineering work.
-
-Objective: ${objective}
-
-${constraint}
-
-With ${b} sessions, you should think BIG:
-- Full feature implementations spanning multiple files
-- Deep refactoring of entire subsystems
-- Comprehensive test suites for each module
-- UX audits and polishing passes
-- Performance optimization investigations
-- Security audits and hardening
-- Documentation and code quality passes
-- Multiple iterations of the same area (implement, then separately review/improve)
-- Edge case handling, error recovery, accessibility
-- Integration testing across features
-
-Requirements:
-- Target exactly ~${b} tasks
-- Each task should be substantial: significant autonomous agent work
-- Each task MUST be independent  -- no task depends on another
-- Tasks that run concurrently must target DIFFERENT files/areas to avoid merge conflicts
-- Give agents missions with full autonomy: "Own the entire X subsystem" not "edit line 42 of Y.ts"
-- Cover ALL aspects: architecture, implementation, testing, UX, performance, security, polish
-- It's OK to have multiple tasks for the same area if they target different concerns (e.g. one implements, another writes tests, another does a UX polish pass)
-- Organize by workstreams: core features, supporting infrastructure, quality, polish
-- Think about what a team of ${b} senior engineers could accomplish in parallel${concLine}${flexLine}
-
-Respond with ONLY a JSON object (no markdown fences):
-{
-  "tasks": [
-    { "prompt": "Own the complete implementation of [feature X]: research the codebase for patterns, design the architecture, implement the database layer, API routes, and client hooks. Make it production-ready." },
-    { "prompt": "Comprehensive test suite for [module Y]: unit tests, integration tests, edge cases, error scenarios. Aim for high coverage and meaningful assertions." },
-    { "prompt": "UX audit and polish pass on [area Z]: review all user-facing flows, improve error messages, loading states, empty states, and micro-interactions." }
-  ]
-}`;
+  const variant = b <= BUDGET_FOCUSED ? "TIGHT" : b <= BUDGET_SUBSTANTIAL ? "STANDARD" : "LARGE";
+  return renderPrompt("10_planning/10-3_plan", {
+    variant,
+    vars: {
+      objective, budget: b, concurrency, flexNote,
+      contextConstraintNote: contextConstraintNote(workerModel),
+    },
+  });
 }
 
 // ── Planning functions ──
@@ -206,7 +108,7 @@ export async function planTasks(
     const parsed = await extractTaskJson(resultText, async () => {
       onLog("Retrying...");
       return runPlannerQuery(
-        `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+        renderPrompt("_shared/retry-json", { vars: { originalPrompt: prompt } }),
         { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15, turnId: turn.id }, onLog,
       );
     }, onLog, outFile);
@@ -230,19 +132,7 @@ export async function identifyThemes(
   beginTurn(turn);
   try {
     const resultText = await runPlannerQuery(
-      `You are picking ${count} research angles for architects who will deeply explore a codebase next.
-
-You are NOT solving the objective. You are NOT reproducing bugs, running builds, running tests, or executing anything. You only have read-only recon tools (Read, Glob, Grep). Do a quick scan (3-6 tool calls): read any manifest/README, glob the top-level tree, peek at one or two config files that reveal the stack. Stop as soon as you can name the pieces.
-
-Then pick ${count} angles that carve up THIS specific codebase orthogonally. Prefer concrete subsystems you saw (e.g. "authentication + session handling", "time-tracking mutation paths") over generic buckets ("data layer", "UX").
-
-The objective below is for CONTEXT ONLY -- do not act on it, do not verify it, do not reproduce it:
-
-<objective>
-${objective}
-</objective>
-
-Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
+      renderPrompt("10_planning/10-1_identify-themes", { vars: { count, objective } }),
       { cwd, model, outputFormat: THEMES_SCHEMA, transcriptName, maxTurns: 12, turnId: turn.id, tools: THEMES_RECON_TOOLS }, onLog,
     );
     const parsed = attemptJsonParse(resultText);
@@ -255,36 +145,11 @@ Return ONLY a JSON object: {"themes": ["angle description", ...]}`,
 export function buildThinkingTasks(
   objective: string, themes: string[], designDir: string, plannerModel: string, previousKnowledge?: string,
 ): Task[] {
-  const prevBlock = previousKnowledge ? `\nKNOWLEDGE FROM PREVIOUS RUNS:\n${previousKnowledge}\n\nBuild on this  -- don't re-discover what's already known.\n` : "";
   return themes.map((theme, i) => ({
     id: `think-${i}`,
-    prompt: `## Research: ${theme}
-
-You are a senior architect exploring a codebase to design a solution.
-
-OVERALL OBJECTIVE: ${objective}
-${prevBlock}
-YOUR FOCUS: ${theme}
-${DESIGN_THINKING}
-Explore the codebase thoroughly using Read, Glob, and Grep. Then write a design document to ${designDir}/focus-${i}.md with these sections:
-
-## Findings
-Key files, patterns, and architecture you discovered. Cite specific file paths and function names.
-
-## The Job
-What is someone hiring this product to do? Not the feature  -- the outcome. Frame everything below through this lens.
-
-## Proposed Work Items
-For each item:
-- **What**: What to build or change
-- **Where**: Specific file paths
-- **Why**: How this serves the job  -- including how fast it needs to respond and what happens when it fails
-- **Risk**: Conflicts or complications
-
-## Key Files
-Relevant files with one-line descriptions.
-
-Be thorough  -- your findings drive the execution plan.`,
+    prompt: renderPrompt("10_planning/10-2_thinking-tasks", {
+      vars: { theme, objective, designDir, index: i, previousKnowledge },
+    }),
     model: plannerModel,
   }));
 }
@@ -295,33 +160,14 @@ export async function orchestrate(
   onLog: (text: string) => void, flexNote?: string, outFile?: string,
   transcriptName: string = "orchestrate",
 ): Promise<Task[]> {
-  const constraint = contextConstraintNote(workerModel);
-  const flexLine = flexNote ? `\n\n${flexNote}` : "";
-  const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
+  const fileInstruction = outFile ? `AFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
 
-  const prompt = `You are a tech lead planning a sprint based on your team's codebase research.
-
-Objective: ${objective}
-
-Your architects explored the codebase and found:
-
-${designDocs}
-
-${constraint}
-${DESIGN_THINKING}
-Create exactly ~${budget} concrete execution tasks based on these findings.
-
-Requirements:
-- Each task is actionable by a single agent session
-- Each task MUST be independent  -- no dependencies between tasks
-- ${concurrency} agents run in parallel  -- tasks must touch DIFFERENT files
-- Trust the research  -- don't tell agents to re-explore what's documented
-- Reference specific files and patterns from the findings
-- Build the core user job first, then expand. Each task should produce something complete and usable  -- not scaffolding for later
-- There is no separate "polish" phase. Loading states, error handling, sub-200ms responses, and edge cases are part of every task${flexLine}
-
-Respond with ONLY a JSON object (no markdown fences):
-{"tasks": [{"prompt": "..."}]}${fileInstruction}`;
+  const prompt = renderPrompt("10_planning/10-4_orchestrate", {
+    vars: {
+      objective, designDocs, budget, concurrency, flexNote, fileInstruction,
+      contextConstraintNote: contextConstraintNote(workerModel),
+    },
+  });
 
   onLog("Synthesizing...");
   const turn = createTurn("orchestrate", "Orchestrate", "orchestrate-0", plannerModel);
@@ -341,7 +187,7 @@ Respond with ONLY a JSON object (no markdown fences):
     const parsed = await extractTaskJson(resultText, async () => {
       onLog("Retrying...");
       return runPlannerQuery(
-        `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+        renderPrompt("_shared/retry-json", { vars: { originalPrompt: prompt } }),
         { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10, turnId: turn.id }, onLog,
       );
     }, onLog, outFile);
@@ -365,27 +211,17 @@ export async function refinePlan(
   onLog("Refining plan...");
   const turn = createTurn("plan-refine", "Refine plan", "refine-0", plannerModel);
   beginTurn(turn);
-  const prev = previousTasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n");
-  const constraint = contextConstraintNote(workerModel);
+  const previousTasksList = previousTasks.map((t, i) => `${i + 1}. ${t.prompt}`).join("\n");
   const b = budget ?? 10;
   const scaleNote = b > 50 ? `This is a LARGE budget (${b} sessions). Think big  -- missions, not micro-tasks.`
     : b > 15 ? `Each of the ${b} sessions is a capable AI agent. Give substantial missions, not trivial edits.`
     : `Target ~${b} tasks.`;
-  const prompt = `You are a task coordinator. You previously planned these tasks for the objective:
-
-Objective: ${objective}
-
-Previous plan:
-${prev}
-
-The user wants changes: ${feedback}
-
-${constraint}
-
-${scaleNote} ${concurrency} agents run in parallel. Update the plan accordingly. Keep tasks independent and targeting different files/areas.
-
-Respond with ONLY a JSON object (no markdown):
-{"tasks":[{"prompt":"..."}]}`;
+  const prompt = renderPrompt("10_planning/10-5_refine", {
+    vars: {
+      objective, previousTasks: previousTasksList, feedback, scaleNote, concurrency,
+      contextConstraintNote: contextConstraintNote(workerModel),
+    },
+  });
 
   let resultText: string;
   try {
@@ -396,7 +232,7 @@ Respond with ONLY a JSON object (no markdown):
     const parsed = await extractTaskJson(resultText, async () => {
       onLog("Retrying...");
       return runPlannerQuery(
-        `Your previous response was not valid JSON. Respond with ONLY a JSON object {"tasks":[{"prompt":"..."}]}.\n\n${prompt}`,
+        renderPrompt("_shared/retry-json", { vars: { originalPrompt: prompt } }),
         { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8, turnId: turn.id }, onLog,
       );
     }, onLog);

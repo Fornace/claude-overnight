@@ -1,5 +1,6 @@
 import { runPlannerQuery, attemptJsonParse, postProcess } from "./query.js";
 import { createTurn, beginTurn, endTurn } from "../core/turns.js";
+import { renderPrompt } from "../prompts/load.js";
 // Verifier schema — same shape as STEER_SCHEMA plus a `verifiedIds` list so
 // the wave-loop can tell which of the prior wave's tasks actually shipped.
 export const VERIFY_SCHEMA = {
@@ -56,29 +57,15 @@ export async function verifyWave(objective, pendingTasks, lastWave, remainingBud
     const pendingList = pendingTasks.length > 0
         ? pendingTasks.map((t, i) => `  ${i + 1}. ${t.prompt.slice(0, 200)}`).join("\n")
         : "(none — every task from the original plan has been attempted)";
-    const prompt = `You are the verifier + fix gate between waves of a fixed-plan execution.
-
-Objective: ${objective}
-
-## What just happened
-${renderLastWave(lastWave)}
-
-## Remaining plan (pending tasks, in order)
-${pendingList}
-
-## Your job
-
-1. Run the project's build and smoke checks. Use the tools you have (Bash, Read, Grep, Edit, Write).
-2. For any regression the last wave introduced, make the fix directly. Don't delegate a fix to the next wave if you can do it in two edits.
-3. Compose the next batch of pending tasks to dispatch — pick tasks with non-overlapping file scopes so ${concurrency} can run in parallel.
-4. If the plan is complete AND the build passes AND one verify task has confirmed the app runs, set done=true.
-
-## Output
-
-Respond with ONLY a JSON object (no markdown fences):
-{"done":boolean,"reasoning":"...","statusUpdate":"REQUIRED","estimatedSessionsRemaining":N,"verifiedCount":N,"retryCount":N,"tasks":[{"prompt":"...","type":"execute","postcondition":"..."}]}
-
-Remaining budget: ${remainingBudget} agent sessions. Include retries inside tasks[] (same format) if a pending step needs a second attempt with corrected context.`;
+    const prompt = renderPrompt("30_wave/30-2_verify", {
+        vars: {
+            objective,
+            lastWave: renderLastWave(lastWave),
+            pendingTasks: pendingList,
+            concurrency,
+            remainingBudget,
+        },
+    });
     onLog("Verifying last wave…", "status");
     const turn = createTurn("steer", `Verify wave`, `verify-${lastWave?.wave ?? 0}`, plannerModel);
     beginTurn(turn);

@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.50.0
+
+### Centralize all model-facing prompts in `prompts/`
+
+Every prompt the runtime sends to a model now lives in a versioned `.md` file under `prompts/`, loaded at runtime by a small Mustache-lite renderer (`src/prompts/load.ts`). The previous setup had ~25 inline prompt strings scattered across 15 source files, with code-shape conditionals (`postFailBlock = … ? … : ""`) doing the work a template engine should do. Editing a prompt meant grepping the codebase; conditional shape was hidden inside string concatenations.
+
+Now: code gathers values, calls `renderPrompt(file, { vars })`, returns. The conditional shape of each prompt — when the worktree intro fires, when the postcondition block appears, when the early-wave archetype menu collapses — lives in the template, in one place a human can read top-to-bottom.
+
+**Loader features**
+- `{{var}}` substitution
+- `{{#if var}}…{{/if}}` conditional blocks
+- `{{> partial}}` includes (used by `_shared/design-thinking`, `_shared/retry-json`, `_shared/flex-note`, `_shared/non-claude-json-wrap`)
+- Variant selection via `<!-- NAME -->` headers separated by `<!-- @@@ -->`
+- Auto-strips frontmatter and HTML comments; collapses runs of blank lines
+
+**Migrations** (Phase 1 → Phase 2, 15 callsites across 12 source files)
+- `steering.ts` → `30-1_steer.md` — the 6 KB-budget trim logic now stages caps progressively across re-renders rather than `string.replace()` swaps.
+- `planner.ts` (3 plan variants + identifyThemes + buildThinkingTasks + orchestrate + refinePlan) → `10-1` … `10-5`. Replaced ~165 LOC of string templates with `renderPrompt` calls.
+- `verifier.ts` → `30-2_verify.md`.
+- `coach.ts` (skill wrap + amendment retry) → `00-2_coach-wrapper.md`.
+- `agent-run.ts` → `20-3_agent-wrap.md`. The centerpiece example: 8 string concatenations and 5 conditionals collapsed into one render call. Includes the worktree intro, file-size preamble, L0/recipe stubs, skill-proposal block (via partial), and EXIT CRITERION postcondition block.
+- `wave-loop.ts` retry composition → `30-6_retry-suffix.md` (POSTFAILED / NOFILES variants).
+- `run.ts` — ask, debrief, branch-retry (×2), auto-verify, decomposer-minimal → `60-1`, `60-2`, `30-3`, `30-5`, `30-4`.
+- `health.ts` build-fix (per-file vs all-files) → `60-4_build-fix.md`.
+- `summary.ts` final narrative → `50-2_summary.md`.
+- `review.ts` (wave / run) → `50-1_review.md`.
+- `plan-phase.ts` themes/tasks Q&A → `60-3_plan-chat.md`.
+- `branch-evaluator.ts` → `40-2_branch-evaluator.md`.
+
+**Consolidations** (the "make sure we're not duplicating" part)
+- 4× JSON-retry strings (3 in planner, 1 in steering) → `_shared/retry-json.md`.
+- 3× flex-note strings (2 in plan-phase, 1 in resume) → `_shared/flex-note.md`. Wording standardized on the longer "iterate, polish, and expand" form.
+- 2× merge-failed branch-retry → `30-3_branch-retry.md`.
+- `librarian-prompt.ts` deleted entirely; `librarian.ts` loads `40-1_librarian.md` directly via the loader.
+- `swarm/config.ts` SIMPLIFY_PROMPT and SKILL_PROPOSAL_PROMPT constants deleted; agent-run loads them from the templates.
+- `steering.ts` non-Claude JSON sandwich → `_shared/non-claude-json-wrap.md`.
+
+**Validation**
+- `scripts/check-prompts.mjs` renders every prompt with realistic vars and asserts no unfilled `{{…}}` placeholders or unstripped comments leak through. 37 cases, all green.
+- 380/380 tests pass.
+
+**Deltas**
+- 30 prompt files (was 15, all "documentation mirrors" — now they're the source of truth).
+- `src/planner/planner.ts` −165 LOC, `src/planner/steering.ts` −56 LOC, `src/planner/verifier.ts` −14 LOC.
+- Net source +79 (the loader) − ~250 (extracted text) = ~−170 LOC, plus a coherent place to edit prompts.
+
+**Audit**: the only remaining backtick-prompt string in `src/` is `Do thing ${i}` in a test fixture (not model-facing).
+
 ## 1.25.49
 
 ### Authoring guidance for the `claude-overnight` Claude Code skill

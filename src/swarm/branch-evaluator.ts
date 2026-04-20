@@ -3,6 +3,7 @@ import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
 import { withCursorWorkspaceHeader, type SwarmConfig } from "./config.js";
 import type { ErroredBranchEvaluator } from "./merge.js";
+import { renderPrompt } from "../prompts/load.js";
 
 export interface BranchEvaluatorHost {
   readonly config: SwarmConfig;
@@ -18,21 +19,7 @@ export function buildErroredBranchEvaluator(host: BranchEvaluatorHost): ErroredB
   const envFor = host.config.envForModel;
 
   return async (agentId: number, task: string, diff: string): Promise<{ keep: boolean; reason: string }> => {
-    const prompt = `You are evaluating whether partial work from an agent that errored mid-task should be kept or discarded.
-
-Task: "${task}"
-
-Diff of changes:
-\`\`\`
-${diff}
-\`\`\`
-
-Is this partial work coherent enough to land? Consider:
-- Does it implement a meaningful portion of the task?
-- Are the changes self-consistent (no half-written functions, broken imports)?
-- Would merging this improve or degrade the codebase?
-
-Respond with JSON: {"keep": true/false, "reason": "brief explanation"}`;
+    const prompt = renderPrompt("40_skills/40-2_branch-evaluator", { vars: { task, diff } });
 
     const rl = sdkQueryRateLimiter;
     let eq: ReturnType<typeof query> | undefined;

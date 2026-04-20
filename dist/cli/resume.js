@@ -8,6 +8,7 @@ import { setTranscriptRunDir } from "../core/transcripts.js";
 import { wrap } from "../ui/primitives.js";
 import { makeProgressLog, selectKey } from "./cli.js";
 import { editRunSettings } from "./settings.js";
+import { renderPrompt } from "../prompts/load.js";
 export function countTasksInFile(path) {
     try {
         const parsed = JSON.parse(readFileSync(path, "utf-8"));
@@ -276,7 +277,7 @@ export async function detectResume(input) {
                     else {
                         const remainingBudget = Math.max(resumeState.concurrency, resumeState.budget - resumeState.accCompleted);
                         const orchBudget = Math.min(50, Math.max(resumeState.concurrency, Math.ceil(remainingBudget * 0.5)));
-                        const flexNote = `This is wave 1 of an adaptive multi-wave run (total budget: ${remainingBudget}). Plan the highest-impact foundational work first. Future waves will iterate based on what's learned.`;
+                        const flexNote = renderPrompt("_shared/flex-note", { vars: { remainingBudget } });
                         console.log(chalk.cyan(`\n  ◆ Re-orchestrating plan from existing designs...\n`));
                         process.stdout.write("\x1B[?25l");
                         // Route transcripts into the resumed run so this call's events
