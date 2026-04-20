@@ -10,6 +10,7 @@ import { buildEnvResolver, isCursorProxyProvider } from "../providers/index.js";
 import { RunDisplay } from "../ui/ui.js";
 import { renderSummary } from "../ui/summary.js";
 import { readRunMemory, writeStatus, writeGoalUpdate, saveRunState, saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone, writeSteerInbox, consumeSteerInbox, countSteerInbox, appendOvernightLogStart, updateOvernightLogEnd, } from "../state/state.js";
+import { composeRunState } from "../state/run-state.js";
 import { runPostRunReview } from "./review.js";
 import { printFinalSummary } from "./summary.js";
 import { runWaveLoop } from "./wave-loop.js";
@@ -237,21 +238,23 @@ export async function executeRun(cfg) {
         }
         catch { }
     }
-    const buildRunState = (varying) => ({
-        id: `run-${new Date().toISOString().slice(0, 19)}`, objective: objective ?? "", budget: cfg.budget,
-        remaining, workerModel, plannerModel, fastModel,
-        workerProviderId: cfg.workerProvider?.id, plannerProviderId: cfg.plannerProvider?.id,
+    const runStateBase = {
+        cwd,
+        id: `run-${new Date(cfg.runStartedAt).toISOString().slice(0, 19)}`,
+        startedAt: new Date(cfg.runStartedAt).toISOString(),
+        objective: objective ?? "",
+        budget: cfg.budget,
+        workerProviderId: cfg.workerProvider?.id,
+        plannerProviderId: cfg.plannerProvider?.id,
         fastProviderId: cfg.fastProvider?.id,
-        concurrency,
-        usageCap, allowExtraUsage: cfg.allowExtraUsage, extraUsageBudget: cfg.extraUsageBudget,
-        flex, useWorktrees, mergeStrategy, waveNum,
-        currentTasks: varying.currentTasks,
-        accCost, accCompleted, accFailed, accIn, accOut, accTools,
-        branches, phase: varying.phase, startedAt: new Date(cfg.runStartedAt).toISOString(), cwd,
+        allowExtraUsage: cfg.allowExtraUsage ?? false,
+        extraUsageBudget: cfg.extraUsageBudget,
+        flex, useWorktrees, mergeStrategy,
         repoFingerprint,
         coachedObjective: cfg.coachedObjective,
         coachedAt: cfg.coachedAt,
-    });
+    };
+    const buildRunState = (varying) => composeRunState({ ...runStateBase, workerModel, plannerModel, fastModel, concurrency, usageCap }, { remaining: varying.remaining, waveNum, accCost, accCompleted, accFailed, accIn, accOut, accTools, branches }, { phase: varying.phase, currentTasks: varying.currentTasks });
     const gracefulStop = () => {
         if (stopping) {
             currentSwarm?.cleanup();
