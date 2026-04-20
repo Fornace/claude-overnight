@@ -509,6 +509,7 @@ export async function executeRun(cfg) {
         rlGetter,
         isStopping: () => stopping,
         syncRunInfo,
+        buildRunState,
         renderSummary,
         runDebrief,
         recordBranches: (agents, mergeResults, currentWave) => {

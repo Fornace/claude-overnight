@@ -10,7 +10,7 @@ import { readFileSync, existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
-import type { Task, MergeStrategy, BranchRecord, WaveSummary, RLGetter } from "../core/types.js";
+import type { Task, MergeStrategy, BranchRecord, WaveSummary, RLGetter, RunState } from "../core/types.js";
 import { Swarm } from "../swarm/swarm.js";
 import { contextFillInfo } from "../ui/primitives.js";
 import { getModelCapability } from "../core/models.js";
@@ -91,6 +91,11 @@ export interface WaveLoopCtx {
   runDebrief: (label: string) => void;
   recordBranches: (agents: { branch?: string; task: { prompt: string }; status: string; filesChanged?: number; costUsd?: number }[], mergeResults: { branch: string; ok: boolean }[], currentWave?: number) => void;
   onLibrarianResult?: (promoted: number, patched: number, quarantined: number, rejected: number) => void;
+  /** Builds a full RunState snapshot. Provided by run.ts so cwd, budget, branches,
+   * provider ids, etc. are preserved — the wave loop used to rebuild a truncated
+   * state that omitted cwd, which made saved runs invisible to `findIncompleteRuns`
+   * (the cwd-equality filter dropped them). */
+  buildRunState: (varying: { remaining: number; phase: RunState["phase"]; currentTasks: Task[] }) => RunState;
 }
 
 export interface WaveLoopResult {
@@ -134,7 +139,7 @@ export async function runWaveLoop(
       if (host.currentTasks.length > host.remaining) host.currentTasks = host.currentTasks.slice(0, host.remaining);
       ctx.syncRunInfo();
 
-      saveRunState(ctx.runDir, buildRunState(host, "steering", host.currentTasks));
+      saveRunState(ctx.runDir, ctx.buildRunState({ remaining: host.remaining, phase: "steering", currentTasks: host.currentTasks }));
 
       // ── Pre-wave rate limit gate ──
       await throttleBeforeWave(
@@ -249,7 +254,7 @@ export async function runWaveLoop(
       // On user-initiated quit mid-wave, "never started" tasks are real leftover
       // work the user expects to see on resume — save them under "stopped".
       const midWavePhase = (ctx.isStopping() || swarm.aborted) ? "stopped" : "steering";
-      saveRunState(ctx.runDir, buildRunState(host, midWavePhase, neverStarted));
+      saveRunState(ctx.runDir, ctx.buildRunState({ remaining: host.remaining, phase: midWavePhase, currentTasks: neverStarted }));
       // Preserve the leftover tasks on the host so resume / verifier see the
       // real pending queue (not the full original batch) after each wave.
       host.currentTasks = neverStarted;
@@ -306,7 +311,7 @@ export async function runWaveLoop(
       if (circuitHalt) {
         ctx.display.appendSteeringEvent(`Circuit breaker: 2 consecutive waves produced no merged changes — halting to prevent budget drain`);
         ctx.display.stop();
-        saveRunState(ctx.runDir, buildRunState(host, "stopped", []));
+        saveRunState(ctx.runDir, ctx.buildRunState({ remaining: host.remaining, phase: "stopped", currentTasks: [] }));
         ctx.display.stop();
         console.log(chalk.red(`\n  Circuit breaker: 2 consecutive waves produced no merged changes.`));
         console.log(chalk.red(`  Halting to prevent budget drain. Run preserved at ${ctx.runDir}.`));
@@ -574,17 +579,6 @@ function handleZeroWorkRetry(swarm: Swarm, host: WaveLoopHost, ctx: WaveLoopCtx)
   swarm.totalInputTokens += retrySwarm.totalInputTokens;
   swarm.totalOutputTokens += retrySwarm.totalOutputTokens;
   host.liveConfig.remaining = host.remaining;
-}
-
-function buildRunState(host: WaveLoopHost, phase: string, currentTasks: Task[]): any {
-  return {
-    remaining: host.remaining, phase, currentTasks,
-    workerModel: host.workerModel, plannerModel: host.plannerModel, fastModel: host.fastModel,
-    concurrency: host.concurrency,
-    usageCap: host.usageCap, flex: true, waveNum: host.waveNum,
-    accCost: host.accCost, accCompleted: host.accCompleted, accFailed: host.accFailed,
-    accIn: host.accIn, accOut: host.accOut, accTools: host.accTools,
-  };
 }
 
 function captureAbOutcome(

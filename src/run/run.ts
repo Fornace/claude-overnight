@@ -551,6 +551,7 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       rlGetter,
       isStopping: () => stopping,
       syncRunInfo,
+      buildRunState,
       renderSummary,
       runDebrief,
       recordBranches: (agents, mergeResults, currentWave) => {

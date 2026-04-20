@@ -180,7 +180,20 @@ export function updateOvernightLogEnd(cwd, runId, meta) {
     }
 }
 // ── Run state persistence ──
+/**
+ * Required fields on every persisted RunState. The type already marks these as
+ * non-optional, but callers that build state dynamically (or upcast through
+ * `any`) can still slip a truncated snapshot past the compiler. A truncated
+ * snapshot is silently excluded by `findIncompleteRuns` (cwd-equality filter),
+ * so the run becomes unresumable without any visible error. Guard at the write
+ * boundary so the bug surfaces where it's introduced, not weeks later.
+ */
+const REQUIRED_RUN_STATE_FIELDS = ["cwd", "id", "phase", "startedAt"];
 export function saveRunState(runDir, state) {
+    const missing = REQUIRED_RUN_STATE_FIELDS.filter(k => !state[k]);
+    if (missing.length) {
+        throw new Error(`saveRunState: refusing to persist truncated state, missing fields: ${missing.join(", ")}`);
+    }
     mkdirSync(runDir, { recursive: true });
     writeFileSync(join(runDir, "run.json"), JSON.stringify(state, null, 2), "utf-8");
 }
