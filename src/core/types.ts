@@ -326,6 +326,10 @@ export interface RunState extends RunConfigBase {
   coachedObjective?: string;
   /** Unix timestamp (ms) when the coach produced the accepted rewrite. */
   coachedAt?: number;
+  /** Run-branch created when mergeStrategy="branch" — must survive resume so subsequent waves accumulate into it instead of orphan branches. */
+  runBranch?: string;
+  /** Branch (or detached HEAD sha) the user was on before the run-branch was created — restored on run completion. */
+  originalRef?: string;
 }
 
 /** Function that returns a rate-limit snapshot with optional context token info. */

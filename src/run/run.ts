@@ -250,10 +250,24 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
       .catch(() => { display.setDebrief(undefined); });
   };
 
-  // For flex + branch strategy: create one target branch
+  // For flex + branch strategy: create one target branch (or restore on resume).
+  // The run-branch + originalRef are persisted in run.json so resumes accumulate
+  // into the original branch instead of spawning orphan swarm/run-* branches.
   let runBranch: string | undefined;
   let originalRef: string | undefined;
-  if (flex && mergeStrategy === "branch" && useWorktrees && !cfg.resuming) {
+  if (cfg.resuming && cfg.resumeState) {
+    runBranch = cfg.resumeState.runBranch;
+    originalRef = cfg.resumeState.originalRef;
+    if (runBranch) {
+      try {
+        execSync(`git checkout "${runBranch}"`, { cwd, encoding: "utf-8", stdio: "pipe" });
+        console.log(chalk.dim(`  Resumed on branch: ${runBranch}\n`));
+      } catch {
+        console.log(chalk.yellow(`  ⚠ Could not check out run branch ${runBranch} — wave merges may diverge\n`));
+      }
+    }
+  }
+  if (flex && mergeStrategy === "branch" && useWorktrees && !runBranch) {
     try {
       originalRef = execSync("git rev-parse --abbrev-ref HEAD", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
       if (originalRef === "HEAD") originalRef = execSync("git rev-parse HEAD", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
@@ -295,6 +309,8 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     repoFingerprint,
     coachedObjective: cfg.coachedObjective,
     coachedAt: cfg.coachedAt,
+    runBranch,
+    originalRef,
   };
   const buildRunState = (varying: { remaining: number; phase: RunState["phase"]; currentTasks: Task[] }): RunState =>
     composeRunState(

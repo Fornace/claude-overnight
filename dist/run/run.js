@@ -207,10 +207,25 @@ export async function executeRun(cfg) {
             .then(text => { display.setDebrief(text.trim().slice(0, 210), label); })
             .catch(() => { display.setDebrief(undefined); });
     };
-    // For flex + branch strategy: create one target branch
+    // For flex + branch strategy: create one target branch (or restore on resume).
+    // The run-branch + originalRef are persisted in run.json so resumes accumulate
+    // into the original branch instead of spawning orphan swarm/run-* branches.
     let runBranch;
     let originalRef;
-    if (flex && mergeStrategy === "branch" && useWorktrees && !cfg.resuming) {
+    if (cfg.resuming && cfg.resumeState) {
+        runBranch = cfg.resumeState.runBranch;
+        originalRef = cfg.resumeState.originalRef;
+        if (runBranch) {
+            try {
+                execSync(`git checkout "${runBranch}"`, { cwd, encoding: "utf-8", stdio: "pipe" });
+                console.log(chalk.dim(`  Resumed on branch: ${runBranch}\n`));
+            }
+            catch {
+                console.log(chalk.yellow(`  ⚠ Could not check out run branch ${runBranch} — wave merges may diverge\n`));
+            }
+        }
+    }
+    if (flex && mergeStrategy === "branch" && useWorktrees && !runBranch) {
         try {
             originalRef = execSync("git rev-parse --abbrev-ref HEAD", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
             if (originalRef === "HEAD")
@@ -253,6 +268,8 @@ export async function executeRun(cfg) {
         repoFingerprint,
         coachedObjective: cfg.coachedObjective,
         coachedAt: cfg.coachedAt,
+        runBranch,
+        originalRef,
     };
     const buildRunState = (varying) => composeRunState({ ...runStateBase, workerModel, plannerModel, fastModel, concurrency, usageCap }, { remaining: varying.remaining, waveNum, accCost, accCompleted, accFailed, accIn, accOut, accTools, branches }, { phase: varying.phase, currentTasks: varying.currentTasks });
     const gracefulStop = () => {

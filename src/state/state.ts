@@ -194,8 +194,12 @@ export function saveRunState(runDir: string, state: RunState): void {
 }
 
 export function loadRunState(runDir: string): RunState | null {
-  try { return JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8")); }
-  catch { return null; }
+  try {
+    const state = JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8"));
+    if (state && !Array.isArray(state.branches)) state.branches = [];
+    if (state && !Array.isArray(state.currentTasks)) state.currentTasks = [];
+    return state;
+  } catch { return null; }
 }
 
 export function findIncompleteRuns(rootDir: string, filterCwd: string): { dir: string; state: RunState }[] {

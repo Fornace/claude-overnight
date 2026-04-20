@@ -30,7 +30,11 @@ export const STEER_SCHEMA = {
   },
 };
 
-const PROMPT_BUDGET = 6000;
+// The base 30-1_steer template alone is ~7 KB, so any budget below that is
+// unreachable no matter how aggressively we trim variables. 20 KB leaves room
+// for the template + moderate run memory while still being a tiny fraction of
+// any planner's context window.
+const PROMPT_BUDGET = 20_000;
 
 interface SteerCaps {
   milestones: number;

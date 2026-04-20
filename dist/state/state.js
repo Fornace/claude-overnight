@@ -199,7 +199,12 @@ export function saveRunState(runDir, state) {
 }
 export function loadRunState(runDir) {
     try {
-        return JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8"));
+        const state = JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8"));
+        if (state && !Array.isArray(state.branches))
+            state.branches = [];
+        if (state && !Array.isArray(state.currentTasks))
+            state.currentTasks = [];
+        return state;
     }
     catch {
         return null;

@@ -26,5 +26,7 @@ export function composeRunState(base, live, varying) {
         repoFingerprint: base.repoFingerprint,
         coachedObjective: base.coachedObjective,
         coachedAt: base.coachedAt,
+        runBranch: base.runBranch,
+        originalRef: base.originalRef,
     };
 }

@@ -22,6 +22,8 @@ export interface RunStateBase {
     repoFingerprint: string;
     coachedObjective?: string;
     coachedAt?: number;
+    runBranch?: string;
+    originalRef?: string;
 }
 /** Live counters captured at snapshot time. */
 export interface RunStateLive {

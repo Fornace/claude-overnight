@@ -27,7 +27,11 @@ export const STEER_SCHEMA = {
         required: ["done", "tasks", "reasoning", "statusUpdate", "estimatedSessionsRemaining"],
     },
 };
-const PROMPT_BUDGET = 6000;
+// The base 30-1_steer template alone is ~7 KB, so any budget below that is
+// unreachable no matter how aggressively we trim variables. 20 KB leaves room
+// for the template + moderate run memory while still being a tiny fraction of
+// any planner's context window.
+const PROMPT_BUDGET = 20_000;
 const DEFAULT_CAPS = {
     milestones: 2000, designs: 1500, reflections: 1000,
     verifications: 1000, previousRuns: 800, userGuidance: 4000,

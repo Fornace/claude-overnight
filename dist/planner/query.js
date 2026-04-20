@@ -21,10 +21,16 @@ let _envResolver;
 export function setPlannerEnvResolver(fn) {
     _envResolver = fn;
 }
-// ── Cursor proxy: direct HTTP bypass ──
-// SDK spawns 4+ subprocesses (~15s each) for the proxy; one direct POST is 4-10x faster.
-function isCursorProxyEnv(env) {
-    return !!env?.CURSOR_API_KEY && !env?.ANTHROPIC_API_KEY;
+// ── Direct HTTP bypass for non-Anthropic endpoints ──
+// The Claude Code CLI subprocess spawned by @anthropic-ai/claude-agent-sdk validates
+// model names against its built-in Anthropic list and rejects custom ids (qwen3.6-plus,
+// composer-2, etc.) pre-flight, even when ANTHROPIC_BASE_URL points at an Anthropic-
+// compatible proxy. Bypass the SDK with a direct POST for any non-anthropic.com base.
+function shouldUseDirectFetch(env) {
+    const base = env?.ANTHROPIC_BASE_URL;
+    if (!base)
+        return false;
+    return !/^https?:\/\/(api\.)?anthropic\.com/i.test(base);
 }
 async function runViaDirectFetch(prompt, opts, onLog) {
     const env = opts.env ?? _envResolver?.(opts.model);
@@ -39,30 +45,34 @@ async function runViaDirectFetch(prompt, opts, onLog) {
         await apiEndpointLimiter.waitIfNeeded();
         const waited = await rl.waitIfNeeded();
         if (waited > 0)
-            onLog(`Cursor proxy rate gate — waited ${Math.round(waited / 1000)}s`, "event");
+            onLog(`Planner proxy rate gate — waited ${Math.round(waited / 1000)}s`, "event");
         const res = await fetch(`${baseUrl}/v1/messages`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authToken}`,
+                "anthropic-version": "2023-06-01",
+            },
             body: JSON.stringify({ model: opts.model, max_tokens: 8192, messages: [{ role: "user", content: prompt }] }),
         });
         if (res.status === 429 && attempt < MAX_RETRIES) {
             const waitMs = BACKOFF[attempt];
-            onLog(`Cursor proxy rate limited — waiting ${Math.round(waitMs / 1000)}s`, "event");
+            onLog(`Planner proxy rate limited — waiting ${Math.round(waitMs / 1000)}s`, "event");
             await sleep(waitMs);
             continue;
         }
         if (!res.ok)
-            throw new Error(`Cursor proxy ${res.status}: ${(await res.text().catch(() => ""))}`);
+            throw new Error(`Planner proxy ${res.status}: ${(await res.text().catch(() => ""))}`);
         rl.record();
         apiEndpointLimiter.record();
         const data = await res.json();
         return data.content?.[0]?.text ?? "";
     }
-    throw new Error("Cursor proxy direct fetch failed after retries");
+    throw new Error("Planner proxy direct fetch failed after retries");
 }
 export async function runPlannerQuery(prompt, opts, onLog) {
     const env = opts.env ?? _envResolver?.(opts.model);
-    if (isCursorProxyEnv(env))
+    if (shouldUseDirectFetch(env))
         return runViaDirectFetch(prompt, opts, onLog);
     const MAX_RETRIES = 3;
     const BACKOFF = [30_000, 60_000, 120_000];
