@@ -14,18 +14,22 @@ export async function mutate(request, opts) {
     const prompt = buildMutatorPrompt(request);
     const baseUrl = (opts.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
     const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
+    const isKimi = /kimi\.com/i.test(baseUrl);
     const body = JSON.stringify({
         model: opts.model,
         max_tokens: opts.maxTokens ?? 4096,
         messages: [{ role: "user", content: prompt }],
     });
+    const headers = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`,
+        "anthropic-version": "2023-06-01",
+    };
+    if (isKimi)
+        headers["User-Agent"] = "Kilo-Code/1.0";
     const res = await fetch(`${baseUrl}/v1/messages`, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${authToken}`,
-            "anthropic-version": "2023-06-01",
-        },
+        headers,
         body,
         signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
     });

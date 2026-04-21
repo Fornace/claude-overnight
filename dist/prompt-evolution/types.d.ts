@@ -24,6 +24,8 @@ export interface BenchmarkCase {
     vars: PromptVars;
     /** Expected scoring criteria */
     criteria: Criteria;
+    /** Optional system prompt override (for non-file prompts like MCP-browser) */
+    systemPrompt?: string;
 }
 export interface Criteria {
     /** Expected task count (for planner prompts). null = don't check */
@@ -108,4 +110,11 @@ export interface CuratorDecision {
     promoted: string[];
     quarantined: string[];
     kept: string[];
+}
+export interface EvolutionResult {
+    bestVariant: VariantRow;
+    allRows: VariantRow[];
+    learningLog: LearningEntry[];
+    runId: string;
+    reportPath?: string;
 }

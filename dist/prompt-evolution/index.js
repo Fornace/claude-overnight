@@ -21,17 +21,40 @@ import { renderPrompt } from "../prompts/load.js";
 import { buildMatrix, renderVariant } from "./evaluator.js";
 import { mutate } from "./mutator.js";
 import { curate, formatMatrix } from "./curator.js";
+import { initRun, appendMatrix, appendLearning, snapshotPrompts, finalizeRun } from "./persistence.js";
+import { generateReport } from "./report.js";
 export async function evolvePrompt(opts) {
     const log = opts.onLog ?? ((t) => process.stdout.write(t + "\n"));
-    const generations = opts.generations ?? 3;
-    const populationCap = opts.populationCap ?? 6;
+    const generations = opts.generations ?? 10;
+    const populationCap = opts.populationCap ?? 8;
+    const plateauGenerations = opts.plateauGenerations ?? 3;
     const mutateModel = opts.mutateModel ?? opts.evalModel;
     const canonGmean = opts.canonGmean ?? 0;
-    // ── 1. Seed population from existing variants ──
-    let population = seedPopulation(opts.promptPath);
+    const target = opts.target ?? "claude-overnight";
+    const runId = opts.runId ?? `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    // ── 0. Initialise persistence ──
+    initRun({
+        runId,
+        promptPath: opts.promptPath,
+        target,
+        evalModel: opts.evalModel,
+        mutateModel,
+        generations,
+        populationCap,
+        startedAt: new Date().toISOString(),
+        status: "running",
+        caseNames: opts.cases.map((c) => c.name),
+    });
+    log(`Run directory: ~/.claude-overnight/prompt-evolution/${runId}/`);
+    // ── 1. Seed population from existing variants or seed text ──
+    let population = opts.seedText
+        ? [{ id: "default", promptPath: opts.promptPath, generation: 0, text: opts.seedText }]
+        : seedPopulation(opts.promptPath);
     log(`Seeded ${population.length} variants from ${opts.promptPath}`);
     const learningLog = [];
     let bestOverall = null;
+    const generationMatrices = [];
+    let generationsWithoutImprovement = 0;
     for (let gen = 0; gen < generations; gen++) {
         log(`\n=== Generation ${gen + 1}/${generations} | Population: ${population.length} ===`);
         // ── 2. Evaluate ──
@@ -45,11 +68,18 @@ export async function evolvePrompt(opts) {
             },
         };
         const matrix = await buildMatrix(population, opts.cases, evalOpts);
+        generationMatrices.push(matrix);
+        snapshotPrompts(runId, matrix);
+        appendMatrix(runId, gen, matrix);
         log(formatMatrix(matrix, opts.cases.map((c) => c.name)));
         // Track best
         const genBest = matrix.reduce((a, b) => (a.gmean > b.gmean ? a : b));
-        if (!bestOverall || genBest.gmean > bestOverall.gmean) {
+        if (!bestOverall || genBest.gmean > bestOverall.gmean + 0.001) {
             bestOverall = genBest;
+            generationsWithoutImprovement = 0;
+        }
+        else {
+            generationsWithoutImprovement++;
         }
         // ── 3. Curate ──
         const curateOpts = {
@@ -69,6 +99,12 @@ export async function evolvePrompt(opts) {
         }));
         // ── 5. Mutate to refill ──
         const targetSize = Math.min(populationCap, keptRows.length + 2);
+        const newEntries = [];
+        // Early stopping check
+        if (generationsWithoutImprovement >= plateauGenerations && gen >= 2) {
+            log(`\n=== Early stop: no improvement for ${generationsWithoutImprovement} generations ===`);
+            break;
+        }
         if (nextPop.length < targetSize && gen < generations - 1) {
             const mutantsNeeded = targetSize - nextPop.length;
             log(`Generating ${mutantsNeeded} mutant(s)...`);
@@ -113,12 +149,14 @@ export async function evolvePrompt(opts) {
                         generation: mutant.generation,
                         text: mutant.text,
                     });
-                    learningLog.push({
+                    const entry = {
                         generation: gen,
                         mutationSummary: mutant.mutationSummary,
                         fitnessDelta: 0, // filled next gen
                         status: "neutral",
-                    });
+                    };
+                    learningLog.push(entry);
+                    newEntries.push(entry);
                     log(`  Mutant ${mutant.variantId} ← ${parent.variantId}: ${mutant.mutationSummary}`);
                 }
                 catch (err) {
@@ -127,6 +165,8 @@ export async function evolvePrompt(opts) {
                 }
             }
         }
+        if (newEntries.length)
+            appendLearning(runId, newEntries);
         population = nextPop;
     }
     // Final evaluation of surviving population
@@ -137,13 +177,36 @@ export async function evolvePrompt(opts) {
         authToken: opts.authToken,
         concurrency: 4,
     });
+    generationMatrices.push(finalMatrix);
+    snapshotPrompts(runId, finalMatrix);
+    appendMatrix(runId, generations, finalMatrix);
     log(formatMatrix(finalMatrix, opts.cases.map((c) => c.name)));
     const best = finalMatrix.reduce((a, b) => (a.gmean > b.gmean ? a : b));
-    if (bestOverall && bestOverall.gmean > best.gmean) {
-        // Return the historical best even if it didn't survive final cull
-        return { bestVariant: bestOverall, allRows: finalMatrix, learningLog };
-    }
-    return { bestVariant: best, allRows: finalMatrix, learningLog };
+    const historicalBest = bestOverall && bestOverall.gmean > best.gmean ? bestOverall : best;
+    const result = {
+        bestVariant: historicalBest,
+        allRows: finalMatrix,
+        learningLog,
+        runId,
+    };
+    // Generate and save report
+    const baselineText = generationMatrices[0]?.find((r) => r.variantId === "default")?.text;
+    const report = generateReport({
+        runId,
+        promptPath: opts.promptPath,
+        target,
+        evalModel: opts.evalModel,
+        generations,
+        baselineText,
+    }, result, generationMatrices);
+    const { writeFileSync } = await import("node:fs");
+    const { runDir } = await import("./persistence.js");
+    const reportPath = `${runDir(runId)}/report.md`;
+    writeFileSync(reportPath, report);
+    result.reportPath = reportPath;
+    finalizeRun(runId, result);
+    log(`\nReport saved: ${reportPath}`);
+    return result;
 }
 // ── Helpers ──
 function seedPopulation(promptPath) {

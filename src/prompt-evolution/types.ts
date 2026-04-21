@@ -26,6 +26,8 @@ export interface BenchmarkCase {
   vars: PromptVars;
   /** Expected scoring criteria */
   criteria: Criteria;
+  /** Optional system prompt override (for non-file prompts like MCP-browser) */
+  systemPrompt?: string;
 }
 
 export interface Criteria {
@@ -119,4 +121,12 @@ export interface CuratorDecision {
   promoted: string[];      // variantIds → become new default / canon
   quarantined: string[];   // variantIds → discard
   kept: string[];          // variantIds → stay in population for next gen
+}
+
+export interface EvolutionResult {
+  bestVariant: VariantRow;
+  allRows: VariantRow[];
+  learningLog: LearningEntry[];
+  runId: string;
+  reportPath?: string;
 }

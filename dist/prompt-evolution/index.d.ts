@@ -17,9 +17,9 @@
  *   4. Mutate worst-performing variants using failure traces
  *   5. Repeat
  */
-import type { BenchmarkCase, VariantRow, LearningEntry } from "./types.js";
+import type { BenchmarkCase, EvolutionResult } from "./types.js";
 export interface EvolveOpts {
-    /** Prompt file path, e.g. "10_planning/10-3_plan" */
+    /** Prompt file path, e.g. "10_planning/10-3_plan" or "mcp-browser/planning" */
     promptPath: string;
     /** Benchmark cases to evaluate against */
     cases: BenchmarkCase[];
@@ -31,6 +31,8 @@ export interface EvolveOpts {
     generations?: number;
     /** Population size cap */
     populationCap?: number;
+    /** Stop early if no improvement for N generations (default: 3) */
+    plateauGenerations?: number;
     /** Current canon gmean (0 if none) */
     canonGmean?: number;
     /** Optional logging callback */
@@ -39,10 +41,11 @@ export interface EvolveOpts {
     baseUrl?: string;
     /** Auth token override */
     authToken?: string;
-}
-export interface EvolutionResult {
-    bestVariant: VariantRow;
-    allRows: VariantRow[];
-    learningLog: LearningEntry[];
+    /** Optional seed prompt text (for non-file prompts like MCP-browser) */
+    seedText?: string;
+    /** Target project label for persistence */
+    target?: string;
+    /** Run ID override (auto-generated if omitted) */
+    runId?: string;
 }
 export declare function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult>;

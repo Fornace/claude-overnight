@@ -33,6 +33,7 @@ interface EvalJob {
   case: BenchmarkCase;
   variantId: string;
   text: string;
+  systemText?: string;
 }
 
 export async function buildMatrix(
@@ -43,7 +44,7 @@ export async function buildMatrix(
   const jobs: EvalJob[] = [];
   for (const v of variants) {
     for (const c of cases) {
-      jobs.push({ case: c, variantId: v.id, text: v.text });
+      jobs.push({ case: c, variantId: v.id, text: v.text, systemText: c.systemPrompt });
     }
   }
 
@@ -110,39 +111,74 @@ async function runSingle(job: EvalJob, opts: EvalOpts): Promise<EvaluationResult
   const started = Date.now();
   const baseUrl = (opts.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
   const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
+  const isAnthropic = /^https?:\/\/(api\.)?anthropic\.com/i.test(baseUrl);
+  const isKimi = /kimi\.com/i.test(baseUrl);
 
-  const body = JSON.stringify({
-    model: opts.model,
-    max_tokens: opts.maxTokens ?? 4096,
-    messages: [{ role: "user", content: job.text }],
-  });
+  let body: string;
+  let endpoint: string;
+  let headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${authToken}`,
+  };
+  if (isKimi) headers["User-Agent"] = "Kilo-Code/1.0";
+
+  if (isAnthropic) {
+    // Anthropic native format
+    endpoint = `${baseUrl}/v1/messages`;
+    headers["anthropic-version"] = "2023-06-01";
+    const messages: Array<{ role: string; content: string }> = [{ role: "user", content: job.text }];
+    const payload: Record<string, unknown> = {
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 4096,
+      messages,
+    };
+    if (job.systemText) payload.system = job.systemText;
+    body = JSON.stringify(payload);
+  } else {
+    // OpenAI-compatible format (OpenRouter, local proxies, etc.)
+    endpoint = `${baseUrl}/v1/chat/completions`;
+    const messages: Array<{ role: string; content: string }> = [];
+    if (job.systemText) {
+      messages.push({ role: "system", content: job.systemText });
+    }
+    messages.push({ role: "user", content: job.text });
+    body = JSON.stringify({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 4096,
+      messages,
+    });
+  }
 
   let raw = "";
   let costUsd = 0;
 
   try {
-    const res = await fetch(`${baseUrl}/v1/messages`, {
+    const res = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${authToken}`,
-        "anthropic-version": "2023-06-01",
-      },
+      headers,
       body,
     });
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      // Return a zero-score result for HTTP errors so the matrix stays complete
       return makeErrorResult(job, errText, 0, Date.now() - started);
     }
 
-    const data = await res.json() as { content?: Array<{ text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } };
-    raw = data.content?.map((c) => c.text ?? "").join("") ?? "";
+    let inp = 0;
+    let out = 0;
+    if (isAnthropic) {
+      const data = await res.json() as { content?: Array<{ text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } };
+      raw = data.content?.map((c) => c.text ?? "").join("") ?? "";
+      inp = data.usage?.input_tokens ?? 0;
+      out = data.usage?.output_tokens ?? 0;
+    } else {
+      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+      raw = data.choices?.[0]?.message?.content ?? "";
+      inp = data.usage?.prompt_tokens ?? 0;
+      out = data.usage?.completion_tokens ?? 0;
+    }
 
-    // Rough cost estimate: $3/M input + $15/M output (claude-3-haiku rates as baseline)
-    const inp = data.usage?.input_tokens ?? 0;
-    const out = data.usage?.output_tokens ?? 0;
+    // Rough cost estimate: varies by model. Using claude-3-haiku as baseline.
     costUsd = inp * 0.000003 + out * 0.000015;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
