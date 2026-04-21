@@ -4,7 +4,50 @@ Parallel Claude agents in isolated git worktrees. Set a usage cap so your intera
 
 Hand it an objective and a session budget, walk away, review the diff when the run ends. Every agent runs in its own worktree on its own branch — a misbehaving agent can't trash your working tree. Unmerged branches are preserved for manual review, never discarded.
 
-Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — every session runs on the SDK's agent harness. Three roles, each picked independently: **planner** (thinks, steers, reviews), **main worker** (runs the tasks), and an optional **fast worker** (a cheaper/faster second worker for well-scoped tasks, verified by the next wave's workers). Pair any planner (Opus, Sonnet) with any worker — Anthropic, Cursor, Qwen, OpenRouter, or any Anthropic-compatible endpoint.
+Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — every planner, worker, reviewer, and verifier session runs on the SDK's agent harness. `claude-overnight` is the orchestrator around that harness: it plans, routes, resumes, reviews, and persists many SDK sessions at once. Because the harness speaks Anthropic Messages, each role can run on Anthropic direct or any compatible endpoint.
+
+## Three execution layers
+
+Every run can mix and match three execution layers:
+
+| Layer | What it does | Typical choice |
+|---|---|---|
+| Planner | Thinking wave, orchestration, steering, review, final gate | your strongest model |
+| Main worker | Bulk implementation | a reliable coding model |
+| Fast worker (optional) | Cheap, well-scoped tasks checked by later waves | a cheaper/faster model |
+
+The layers are configured independently. A common setup is Claude on the planner, Kimi or Qwen on the main worker, and Cursor or Haiku as the fast worker.
+
+## First-class features
+
+- **Harness-first orchestration.** This is not a replacement runtime. It is a multi-session control plane for the Claude Agent SDK harness, so you keep the same tool loop, session resume behavior, streaming model, and transcript format across the whole swarm.
+- **Dynamic repo memory.** Agents can propose reusable memory candidates during execution. A librarian curates them at the end of each wave, updates the skill index, and future waves see only a compact stub plus on-demand hydration instead of a giant static prompt.
+- **Run memory that compounds.** Long runs keep a live status snapshot, archived milestones, and an evolving goal file so steering can pick up exactly where it left off, even after rate limits, crashes, or an overnight stop.
+- **Embedded Cursor flexibility.** Cursor-hosted models are routed through a bundled `cursor-composer-in-claude` proxy, so Cursor becomes just another planner / worker / fast-worker option instead of a separate workflow.
+
+## Run on Kimi 2.6
+
+Want a cheap Anthropic-compatible worker with a simple shell setup? Kimi 2.6 via Kimi's coding endpoint is a drop-in worker that speaks the Anthropic Messages API  -- same client, same flow, just a different base URL.
+
+1. **Configure the provider.** Run `claude-overnight`, choose `Other…` on the worker step, and fill in:
+
+   | Field | Value |
+   |---|---|
+   | Name | `Kimi 2.6` |
+   | Base URL | `https://api.kimi.com/coding/` |
+   | Model id | `kimi-for-coding` |
+   | API key | your Kimi coding key |
+
+2. That's it. Planner runs on Sonnet (or Opus), worker runs on Kimi.
+
+Or set it via env directly:
+
+```bash
+export ANTHROPIC_BASE_URL="https://api.kimi.com/coding/"
+export ANTHROPIC_API_KEY="sk-kimi-..."
+export ANTHROPIC_MODEL="kimi-for-coding"
+claude-overnight
+```
 
 ## Run on Qwen 3.6 Plus
 
@@ -31,9 +74,9 @@ export ANTHROPIC_MODEL="qwen3.6-plus"
 claude-overnight
 ```
 
-## Run via Cursor API Proxy
+## Run via Bundled Cursor Proxy
 
-Use Cursor's model gateway as a worker -- `auto` (delegates to best available), `composer`, or `composer-2` models. Runs locally through a proxy that speaks the Anthropic Messages API, so it's a drop-in replacement for any other provider.
+Use Cursor-hosted models (`auto`, `composer`, `composer-2`, etc.) through the bundled `cursor-composer-in-claude` proxy. `claude-overnight` auto-starts that local Anthropic-compatible proxy, injects the per-worktree workspace header, and treats Cursor as just another provider for the planner, main worker, or fast worker.
 
 ### macOS: Cursor agent shell patch
 
@@ -56,34 +99,28 @@ alias agent="run_cursor_agent"
 
 `claude-overnight` prints a one-time notice when you use the Cursor proxy and this snippet is not detected in `~/.zshrc` or `~/.zprofile`. The bundled proxy also sets `CURSOR_AGENT_NODE` / `CURSOR_AGENT_SCRIPT` when it can find `node` and `cursor-agent`, but your interactive shell still benefits from the alias.
 
-1. **Install the Cursor CLI and proxy:**
+1. **Install the Cursor CLI:**
 
    ```bash
    curl https://cursor.com/install -fsS | bash
-   npm install -g cursor-api-proxy
    ```
 
 2. **Get an API key.** Visit [cursor.com/dashboard/integrations](https://cursor.com/dashboard/integrations) and scroll to the "API Keys" section.
 
-3. **Set up.** Run `claude-overnight` and when prompted to pick a model, choose **Cursor…**. It walks you through a one-time setup: CLI check, API key entry (persisted to `providers.json`), and proxy health check.
+3. **Set up.** Run `claude-overnight` and when prompted to pick a model, choose **Cursor…**. It walks you through a one-time setup: CLI check, API key entry (persisted to `providers.json`), bundled proxy verification, and health check.
 
-4. **Start the proxy** (in a separate terminal):
-
-   ```bash
-   npx cursor-api-proxy
-   ```
-
-5. Pick your model (`auto`, `composer`, `composer-2`, etc.). The provider is saved and reappears in every future run.
+4. Pick your model (`auto`, `composer`, `composer-2`, etc.). The provider is saved and reappears in every future run.
 
 Or configure the key manually:
 
 ```bash
-export CURSOR_BRIDGE_API_KEY="sk-..."
-npx cursor-api-proxy &
+export CURSOR_BRIDGE_API_KEY="crsr_..."
 claude-overnight
 ```
 
-**Tip:** run `claude-overnight` with the `--model=cursor-auto` flag in non-interactive mode to skip the picker. If the proxy isn't running at startup, a warning is shown but Anthropic providers remain available.
+If the bundled proxy cannot auto-start, the setup wizard prints the exact `node ".../cursor-composer-in-claude/dist/cli.js"` command for this install so you can launch the same embedded proxy manually.
+
+**Tip:** once a Cursor provider is saved, run `claude-overnight` with the `--model=cursor-auto` flag in non-interactive mode to skip the picker. If the proxy isn't running at startup, the tool attempts to restart it automatically.
 
 ### macOS: “Keychain Not Found” / `cursor-user`
 
@@ -109,7 +146,7 @@ security unlock-keychain ~/Library/Keychains/login.keychain-db
 npm install -g claude-overnight
 ```
 
-Requires Node.js ≥ 20 and Claude authentication (`claude auth login` or `ANTHROPIC_API_KEY`). No Anthropic plan or key? See **Run on Qwen 3.6 Plus** above  -- a cheap, drop-in alternative.
+Requires Node.js ≥ 20. For Anthropic-direct roles, use `claude auth login` or `ANTHROPIC_API_KEY`. For provider-backed roles, save a Kimi / Qwen / Cursor / OpenRouter-compatible provider instead. No Anthropic plan or key? See **Run on Kimi 2.6** or **Run on Qwen 3.6 Plus** above  -- cheap, drop-in alternatives.
 
 ## Quick start
 
@@ -130,7 +167,7 @@ claude-overnight
   ● Opus  -- Opus 4.6 · Most capable
   ○ Sonnet  -- Sonnet 4.6 · Best for everyday tasks
 
-⑤ Worker model (what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…):
+⑤ Worker model (what runs the tasks  -- Kimi 2.6 / Qwen 3.6 Plus / OpenRouter / etc via Other…):
   ● Sonnet  -- Sonnet 4.6 · Best for everyday tasks
   ○ Opus  -- Opus 4.6 · Most capable
   ○ Other… · custom OpenAI/Anthropic-compatible endpoint
@@ -159,13 +196,58 @@ claude-overnight
 ◆ Assessing... ✓ Done
 ```
 
-You interact once (objective, budget, model, review themes), then the rest runs unattended  -- thinking, planning, executing, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
+You interact once (objective, budget, model, review themes), then the rest runs unattended  -- thinking, planning, executing, curating memory, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
 
 ## Use cases
 
 Overnight refactors, batch feature implementation, codebase-wide cleanups, test generation, documentation sprints, framework migrations, quality audits, long research runs. One objective + a budget + walk away.
 
-## How it works
+## Typical flow
+
+```mermaid
+flowchart TD
+  subgraph Setup["Setup + planning"]
+    A["Start or resume run"] --> B["Optional setup coach<br/>rewrite objective + suggest settings"]
+    B --> C["Pick planner / worker / fast worker<br/>budget + concurrency + worktree mode"]
+    C --> D["Optional provider preflight<br/>real auth / write probes"]
+    D --> E["Theme discovery + user review/edit/chat"]
+    E --> F["Thinking wave<br/>planner explores the codebase"]
+    F --> G["Task orchestration<br/>planner writes concrete tasks"]
+  end
+
+  subgraph Wave["Per-wave loop"]
+    G --> H["beforeWave hook<br/>optional shell commands"]
+    H --> I["Execution wave<br/>main worker + optional fast worker<br/>isolated git worktrees"]
+    I --> J["Per-agent simplify pass<br/>same SDK session resumes"]
+    J --> K["Debrief + afterWave hook"]
+    K --> L["Post-wave review<br/>flex mode"]
+    L --> M["Wave-end librarian pass"]
+    M --> N{"Flex mode?"}
+    N -->|yes| O["Steering<br/>update status / milestones / goal"]
+    N -->|no| P["Verifier<br/>fixed-plan gate between waves"]
+    O -->|execute more| H
+    O -->|reflect deeper| Q["Reflection wave<br/>extra review / audit"]
+    Q --> O
+    O -->|done| R["Final gate<br/>review full diff"]
+    P -->|more work| H
+    P -->|done| R
+  end
+
+  subgraph Memory["Dynamic repo memory"]
+    S["Workers discover reusable patterns"] --> T["Scribe writes memory candidates"]
+    T --> U["Librarian curates candidates"]
+    U --> V["Canon markdown + SQLite index updated"]
+    V --> W["Future waves get L0 stub<br/>hydrate L1/L2 on demand"]
+  end
+
+  J -. emits candidates .-> S
+  M -. curates queue .-> U
+  W -. informs later waves .-> I
+  W -. informs planner decisions .-> O
+  R --> X["afterRun hook<br/>optional shell commands"]
+```
+
+The chart above shows the main user-visible lifecycle. It intentionally omits some engine-internal branches such as health-check heal tasks, A/B skill assignment, zero-work retry, budget-extension prompts, and resume salvage after planning crashes.
 
 ### 1. Thinking phase  -- parallel architect sessions
 
@@ -177,15 +259,17 @@ An orchestrator session reads all design documents and synthesizes concrete exec
 
 ### 3. Parallel execution waves
 
-Tasks run in parallel agent sessions (each in its own git worktree). After completing its task, each session automatically runs a **simplify pass**  -- reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits. This is done via the SDK's **session resume** mechanism: the same agent session continues with a follow-up prompt, so the agent's full context from its task is still available  -- no need to re-instruct or re-fill context.
+Tasks run in parallel agent sessions (each in its own git worktree). After completing its task, each session automatically runs a **simplify pass**  -- reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits. This is done via the SDK's **session resume** mechanism: the same agent session continues with a follow-up prompt, so the agent's full context from its task is still available  -- no need to re-instruct or re-fill context. If a fast worker is configured, steering can route cheaper, well-scoped tasks there while the main worker handles heavier implementation.
 
 ### 4. Post-wave review
 
 After each wave (flex mode, budget remaining), a dedicated **review agent** inspects the consolidated diff for issues the individual agents may have blind-spotted: missed reuse opportunities, copy-paste variations, leaky abstractions, efficiency regressions. Runs as a single-agent wave  -- one session reviews what the swarm just produced.
 
-### 5. Post-run final gate
+### 5. Librarian and dynamic memory
 
-When the run completes (steering declares done), a final **comprehensive review** runs against the full `git diff main`. Checks architecture coherence, consistency with existing patterns, build integrity, and test pass. The last quality gate before the diff lands.
+During execution, workers can emit **memory candidates** when they discover something reusable: a repo-specific quirk, a recovery path, a command sequence that worked, or a tool recipe worth reusing later. The scribe writes those candidates to `~/.claude-overnight/skills/<repo-fingerprint>/candidates/` without blocking the run.
+
+At the end of each wave, a **librarian** pass curates that queue. It can promote a candidate into canon, patch an existing skill, quarantine stale skills, or reject weak / duplicated candidates. Canon lives on disk as markdown; SQLite is only the ranked index. This is what makes the memory system dynamic rather than a fixed prompt blob.
 
 ### 6. Steering
 
@@ -195,13 +279,27 @@ After each wave, steering assesses: "how good is this?"  -- not "what's missing?
 - **Reflect** by spinning up 1-2 review sessions for deep quality/architecture audits
 - **Declare done** when the vision is met at high quality
 
-### Three-layer context memory
+### 7. Post-run final gate
 
-Long runs stay sharp because steering maintains three layers of memory:
+When the run completes (steering declares done), a final **comprehensive review** runs against the full `git diff main`. Checks architecture coherence, consistency with existing patterns, build integrity, and test pass. The last quality gate before the diff lands.
+
+### Run-memory layers
+
+Long runs stay sharp because steering maintains three run-memory layers:
 
 - **Status**  -- a living project snapshot, updated every wave. Compressed, never truncated.
 - **Milestones**  -- strategic snapshots archived every ~5 waves. Long-term memory.
 - **Goal**  -- the evolving north star. What quality means for this codebase.
+
+### Progressive-disclosure repo memory
+
+The repo memory system is separate from the run folder and is designed around three disclosure layers so context stays small:
+
+- **L0**  -- a tiny ranked stub injected into planner and worker prompts. It lists only the names and descriptions of the most relevant project-specific skills and tool recipes.
+- **L1**  -- the full skill body, loaded on demand with `skill_read(name)` when an agent wants the actual recipe or guidance.
+- **L2**  -- attached references for deeper context. The library is structured for them even though most runs only need the L0 stub plus occasional L1 hydration.
+
+That progressive disclosure matters: the planner and workers do not carry the full memory library in every prompt. They get a compact overview, call `skill_search(query)` if they need to narrow it, and hydrate only the bodies that matter for the task in front of them.
 
 ## Run history, resume, and knowledge carryforward
 
@@ -259,7 +357,7 @@ Not every provider delivers the same streaming granularity:
 | --- | --- | --- | --- |
 | Anthropic (direct) | ✓ | ✓ | ✓ |
 | Cursor proxy (`cursor-composer-in-claude`) | — | — | ✓ (final answer only) |
-| Qwen / OpenRouter / custom Anthropic-compatible | depends on upstream | depends | usually ✓ |
+| Kimi / Qwen / OpenRouter / custom Anthropic-compatible | depends on upstream | depends | usually ✓ |
 
 When a provider doesn't stream partials (or the model is a reasoning model on the Cursor proxy — the proxy suppresses the thinking phase and only emits the final answer), the ticker shows elapsed time with no live text, then the completed result lands in one go. The UI, transcripts, and the resume flow all behave identically either way — streaming is used when available, never required.
 
@@ -309,7 +407,7 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 |---|---|---|
 | `--budget=N` | `10` | Total agent sessions |
 | `--concurrency=N` | `5` | Parallel agents |
-| `--model=NAME` | prompted | Worker model  -- interactive picks planner + worker separately; `Other…` adds Qwen / OpenRouter / any Anthropic-compat endpoint. In non-interactive mode, a saved provider's model id is auto-resolved to the provider. |
+| `--model=NAME` | prompted | Worker model  -- interactive picks planner + worker separately; `Other…` adds Kimi / Qwen / OpenRouter / any Anthropic-compat endpoint. In non-interactive mode, a saved provider's model id is auto-resolved to the provider. |
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
 | `--allow-extra-usage` | off | Allow extra/overage usage (billed separately) |
 | `--extra-usage-budget=N` |  -- | Max $ for extra usage (implies --allow-extra-usage) |
@@ -331,25 +429,32 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 | `mergeStrategy` | `"yolo" \| "branch"` | `"yolo"` | Merge into HEAD or new branch |
 | `usageCap` | `number (0-100)` | unlimited | Stop at N% utilization |
 
-## Custom providers (Qwen, OpenRouter, any Anthropic-compatible endpoint)
+## Custom providers (Kimi, Qwen, OpenRouter, any Anthropic-compatible endpoint)
 
 Planner, main worker, and optional fast worker are each picked separately  -- pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of work. The fast worker is a real worker (same tools, same env), just on a cheaper/faster model — steering routes well-scoped tasks to it by default.
 
 From the interactive picker, choose `Other…` on the planner, worker, or fast step:
 
 ```
-⑤ Worker model (what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…):
+⑤ Worker model (what runs the tasks  -- Kimi 2.6 / Qwen 3.6 Plus / OpenRouter / etc via Other…):
   ○ Sonnet
   ○ Opus
   ● Other…
 
-  Name: Qwen 3.6 Plus
-  Base URL: https://dashscope-intl.aliyuncs.com/apps/anthropic
-  Model id: qwen3.6-plus
+  Name: Kimi 2.6
+  Base URL: https://api.kimi.com/coding/
+  Model id: kimi-for-coding
   API key source:
     ● Paste key now        · stored plaintext in ~/.claude/claude-overnight/providers.json (0600)
     ○ Read from env var    · nothing written to disk
 ```
+
+Common examples:
+
+| Name | Base URL | Model id |
+|---|---|---|
+| `Kimi 2.6` | `https://api.kimi.com/coding/` | `kimi-for-coding` |
+| `Qwen 3.6 Plus` | `https://dashscope-intl.aliyuncs.com/apps/anthropic` | `qwen3.6-plus` |
 
 Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (mode 0600) and show up automatically in every repo. No per-project config.
 
@@ -359,7 +464,7 @@ Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (
 
 **Resume.** Provider ids are persisted in `run.json` and rehydrated on resume. If you deleted a provider between runs, resume refuses to start and tells you exactly which id is missing.
 
-**Non-interactive / CI.** `claude-overnight --model=qwen3.6-plus` auto-resolves the model id to a saved provider  -- no separate `--provider` flag.
+**Non-interactive / CI.** `claude-overnight --model=kimi-for-coding` (or `qwen3.6-plus`) auto-resolves the model id to a saved provider  -- no separate `--provider` flag.
 
 ## Parallel Playwright Testing
 

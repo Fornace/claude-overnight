@@ -25,7 +25,7 @@ export function printHelp() {
     --dry-run              Show planned tasks without running them
     --budget=N             Target number of agent runs ${chalk.dim("(default: 10)")}
     --concurrency=N        Max parallel agents ${chalk.dim("(default: 5)")}
-    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + worker separately  -- supports 'Other…' for Qwen / OpenRouter / etc.)")}
+    --model=NAME           Worker model override ${chalk.dim("(interactive mode picks planner + worker separately  -- supports 'Other…' for Kimi / Qwen / OpenRouter / etc.)")}
     --fast-model=NAME      Fast worker model for quick tasks ${chalk.dim("(optional  -- checked by next wave's workers)")}
     --usage-cap=N          Stop at N% utilization ${chalk.dim("(e.g. 90 to save 10% for other work)")}
     --allow-extra-usage    Allow extra/overage usage ${chalk.dim("(default: stop when plan limits hit)")}

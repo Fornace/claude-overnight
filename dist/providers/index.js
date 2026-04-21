@@ -139,7 +139,7 @@ export async function pickModel(label, anthropicModels, currentModelId) {
             items.push({ name: `${p.displayName}${cursorTag}`, value: { kind: "provider", provider: p }, hint: `${p.model} · ${keySrc}` });
         }
         items.push({ name: chalk.green("Cursor…"), value: { kind: "cursor" }, hint: "Cursor API Proxy — composer, composer-2, auto, etc." });
-        items.push({ name: chalk.cyan("Other…"), value: { kind: "other" }, hint: "Qwen 3.6 Plus, OpenRouter, or any Anthropic-compatible endpoint" });
+        items.push({ name: chalk.cyan("Other…"), value: { kind: "other" }, hint: "Kimi 2.6, Qwen 3.6 Plus, OpenRouter, or any Anthropic-compatible endpoint" });
         let defaultIdx = 0;
         if (currentModelId) {
             const i = items.findIndex(it => {
@@ -174,15 +174,15 @@ export async function pickModel(label, anthropicModels, currentModelId) {
 async function promptNewProvider() {
     console.log(chalk.dim("\n  Add a custom provider (Anthropic-compatible endpoint)"));
     console.log(chalk.dim("  Leave blank to cancel.\n"));
-    const displayName = await ask(`  ${chalk.cyan("Name")} ${chalk.dim("(e.g. 'Qwen Coder'):")} `);
+    const displayName = await ask(`  ${chalk.cyan("Name")} ${chalk.dim("(e.g. 'Kimi 2.6' or 'Qwen 3.6 Plus'):")} `);
     if (!displayName)
         return null;
     const id = slugify(displayName);
-    const baseURLRaw = await ask(`\n  ${chalk.cyan("Base URL")} ${chalk.dim("(e.g. https://dashscope-intl.aliyuncs.com/apps/anthropic for Qwen 3.6 Plus):")} `);
+    const baseURLRaw = await ask(`\n  ${chalk.cyan("Base URL")} ${chalk.dim("(e.g. https://api.kimi.com/coding/ or https://dashscope-intl.aliyuncs.com/apps/anthropic):")} `);
     if (!baseURLRaw)
         return null;
     const baseURL = normalizeBaseURL(baseURLRaw);
-    const model = await ask(`\n  ${chalk.cyan("Model id")} ${chalk.dim("(e.g. qwen3.6-plus):")} `);
+    const model = await ask(`\n  ${chalk.cyan("Model id")} ${chalk.dim("(e.g. kimi-for-coding or qwen3.6-plus):")} `);
     if (!model)
         return null;
     const keyMode = await select(`  ${chalk.cyan("API key source")}:`, [

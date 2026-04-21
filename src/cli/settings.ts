@@ -40,16 +40,16 @@ export async function editRunSettings(options: EditSettingsOptions): Promise<Mut
   s.plannerProviderId = plannerPick.providerId;
 
   const workerPick = await pickModel(
-    `${chalk.cyan("②")} Worker model ${chalk.dim("(what runs the tasks  -- Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`,
+    `${chalk.cyan("②")} Worker model ${chalk.dim("(what runs the tasks  -- Kimi 2.6 / Qwen 3.6 Plus / OpenRouter / etc via Other…)")}:`,
     models, options.defaults?.workerModel ?? s.workerModel,
   );
   s.workerModel = workerPick.model;
   s.workerProviderId = workerPick.providerId;
 
   const suggestFast = !!(options.defaults?.fastModel);
-  const fastChoice = await select(`${chalk.cyan("③")} Fast worker model ${chalk.dim("(optional  -- Haiku/Qwen for well-scoped tasks, checked by next wave's workers)")}:`, [
+  const fastChoice = await select(`${chalk.cyan("③")} Fast worker model ${chalk.dim("(optional  -- Haiku/Kimi/Qwen for well-scoped tasks, checked by next wave's workers)")}:`, [
     { name: "Skip", value: "skip" as const, hint: "single-worker mode (main worker handles everything)" },
-    { name: "Pick a fast worker", value: "pick" as const, hint: "Haiku, Qwen, or any provider  -- a cheaper, faster second worker" },
+    { name: "Pick a fast worker", value: "pick" as const, hint: "Haiku, Kimi, Qwen, or any provider  -- a cheaper, faster second worker" },
   ], suggestFast ? 1 : 0);
   if (fastChoice === "pick") {
     const fastPick = await pickModel(
