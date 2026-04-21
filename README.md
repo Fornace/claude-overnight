@@ -1,33 +1,36 @@
 # claude-overnight
 
-Parallel Claude agents in isolated git worktrees. Set a usage cap so your interactive Claude Code keeps its headroom. Rate-limited? It waits. Crash? It resumes with full context.
+Overnight coding swarms in isolated git worktrees that plan, execute, review, and steer themselves until the objective is met. Hand it a goal and a budget, walk away, review the diff in the morning.
 
-Hand it an objective and a session budget, walk away, review the diff when the run ends. Every agent runs in its own worktree on its own branch — a misbehaving agent can't trash your working tree. Unmerged branches are preserved for manual review, never discarded.
+Every agent runs in its own worktree on its own branch, so a misbehaving session cannot trash your working tree. Unmerged branches are preserved for manual review, never discarded. Set a usage cap (say 90%) and your interactive Claude Code still has headroom to answer questions while the swarm runs.
 
-Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — every planner, worker, reviewer, and verifier session runs on the SDK's agent harness. `claude-overnight` is the orchestrator around that harness: it plans, routes, resumes, reviews, and persists many SDK sessions at once. Because the harness speaks Anthropic Messages, each role can run on Anthropic direct or any compatible endpoint.
+Built on the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk): every planner, worker, reviewer, and verifier session runs on the SDK's agent harness with full session resume, streaming, and transcripts. `claude-overnight` is the orchestrator around that harness. It plans, routes, curates, resumes, and persists many SDK sessions at once. Because the harness speaks the Anthropic Messages API, any compatible endpoint plugs in as a role.
 
-## Three execution layers
+## Three execution layers, mix per run
 
-Every run can mix and match three execution layers:
-
-| Layer | What it does | Typical choice |
+| Layer | Runs on | What it does |
 |---|---|---|
-| Planner | Thinking wave, orchestration, steering, review, final gate | your strongest model |
-| Main worker | Bulk implementation | a reliable coding model |
-| Fast worker (optional) | Cheap, well-scoped tasks checked by later waves | a cheaper/faster model |
+| Planner (harness) | Opus 4.6, Sonnet 4.6 | Thinking wave, orchestration, steering, post-wave review, final gate |
+| Main worker | Sonnet, Gemini 2.5, Qwen 3.6 Plus, DeepSeek, any Anthropic-compatible endpoint | Bulk implementation |
+| Fast worker (optional) | Kimi 2.6 Coding, Cursor composer-2, Haiku | Cheap well-scoped tasks, double-checked by later waves |
 
-The layers are configured independently. A common setup is Claude on the planner, Kimi or Qwen on the main worker, and Cursor or Haiku as the fast worker.
+A common recipe: **Opus planner + Sonnet bulk worker + Cursor composer-2 fast worker**. Another: **Opus planner + Kimi 2.6 bulk worker + Haiku fast worker**. Providers are saved once to `~/.claude/claude-overnight/providers.json` and appear in every future run. The bundled `cursor-composer-in-claude` proxy makes Cursor-hosted models (`auto`, `composer`, `composer-2`) look like a normal provider.
 
-## First-class features
+## What this recipe does that others do not
 
-- **Harness-first orchestration.** This is not a replacement runtime. It is a multi-session control plane for the Claude Agent SDK harness, so you keep the same tool loop, session resume behavior, streaming model, and transcript format across the whole swarm.
-- **Dynamic repo memory.** Agents can propose reusable memory candidates during execution. A librarian curates them at the end of each wave, updates the skill index, and future waves see only a compact stub plus on-demand hydration instead of a giant static prompt.
-- **Run memory that compounds.** Long runs keep a live status snapshot, archived milestones, and an evolving goal file so steering can pick up exactly where it left off, even after rate limits, crashes, or an overnight stop.
-- **Embedded Cursor flexibility.** Cursor-hosted models are routed through a bundled `cursor-composer-in-claude` proxy, so Cursor becomes just another planner / worker / fast-worker option instead of a separate workflow.
+**Self-curating skill memory that improves mid-run.** Workers emit memory candidates when they discover something reusable: a repo-specific quirk, a recovery path, a command sequence that worked, a tool recipe worth saving. A scribe appends each candidate to disk without blocking the run. At the end of every wave, a **librarian** pass curates the queue. It promotes candidates into canon, patches existing skills via diff-style edits, or quarantines stale ones. **Wave N+1 of the same run starts with a better skill library than wave N.** Across runs, the library compounds. Inspired by Nous Research's Hermes Agent (Feb 2026), with progressive disclosure (L0 stub in every prompt, L1 body loaded on demand, L2 references on request), SQLite FTS5 retrieval, and per-skill win-rate tracking that auto-quarantines rot.
+
+**Self-fixing, not just self-running.** Every task agent reviews its own `git diff` via SDK session resume (same session, full task context, no re-prompting) and runs a simplify pass before the commit lands. After each wave a dedicated review agent scans the consolidated diff for cross-agent issues the individual sessions could not see: missed reuse, copy-paste variations, leaky abstractions. When steering declares the objective done, a final gate reviews the full `git diff main` for architecture coherence before anything reaches your working tree.
+
+**Multi-wave autonomous loop, not fire-and-forget.** After each wave a steering pass asks "how good is this?" and chooses between executing more tasks, spinning up a deeper reflection wave, or declaring done. The loop keeps going until steering is satisfied, the budget is exhausted, or the usage cap trips. Long runs keep a living status snapshot, archived milestones every five waves, and an evolving goal file, so steering picks up exactly where it left off after a rate limit or an overnight stop.
+
+**Headroom-aware usage cap.** Set the cap to 90% of your 5h window and the swarm stops accepting new work there. Your interactive Claude Code keeps the remaining 10% to answer questions or run its own sessions while the overnight run grinds on.
+
+**Crash-safe by design.** Planner state, the task plan, design docs, per-query NDJSON transcripts, steering decisions, and wave milestones all land on disk as they are produced. If the process dies mid-plan, the next resume salvages `tasks.json` and skips the expensive thinking wave. Planner crashes do not lose the $2 to $4 of orchestration work that already happened.
 
 ## Run on Kimi 2.6
 
-Want a cheap Anthropic-compatible worker with a simple shell setup? Kimi 2.6 via Kimi's coding endpoint is a drop-in worker that speaks the Anthropic Messages API  -- same client, same flow, just a different base URL.
+Want a cheap Anthropic-compatible worker with a simple shell setup? Kimi 2.6 via Kimi's coding endpoint is a drop-in worker that speaks the Anthropic Messages API, same client, same flow, just a different base URL.
 
 1. **Configure the provider.** Run `claude-overnight`, choose `Other…` on the worker step, and fill in:
 
@@ -51,9 +54,9 @@ claude-overnight
 
 ## Run on Qwen 3.6 Plus
 
-Hit your Claude Max plan limits? Running on a tight budget? Qwen 3.6 Plus via Alibaba Cloud's DashScope gateway is a drop-in worker that speaks the Anthropic Messages API  -- same client, same flow, pennies per run.
+Hit your Claude Max plan limits? Running on a tight budget? Qwen 3.6 Plus via Alibaba Cloud's DashScope gateway is a drop-in worker that speaks the Anthropic Messages API, same client, same flow, pennies per run.
 
-1. **Get an API key.** Sign up at [Alibaba Cloud](https://account.alibabacloud.com/login/login.htm?oauth_callback=https%3A%2F%2Fmodelstudio.console.alibabacloud.com%2Fap-southeast-1%3Ftab%3Ddashboard%23%2Fapi-key&clearRedirectCookie=1)  -- the link takes you straight to the API key dashboard.
+1. **Get an API key.** Sign up at [Alibaba Cloud](https://account.alibabacloud.com/login/login.htm?oauth_callback=https%3A%2F%2Fmodelstudio.console.alibabacloud.com%2Fap-southeast-1%3Ftab%3Ddashboard%23%2Fapi-key&clearRedirectCookie=1), the link takes you straight to the API key dashboard.
 2. **Configure the provider.** Run `claude-overnight`, choose `Other…` on the worker step, and fill in:
 
    | Field | Value |
@@ -124,19 +127,19 @@ If the bundled proxy cannot auto-start, the setup wizard prints the exact `node 
 
 ### macOS: “Keychain Not Found” / `cursor-user`
 
-The Cursor **`agent`** binary stores an interactive login as **`cursor-user`** in your **login** keychain. For automation, use a **[User API key](https://cursor.com/docs/cli/headless)** (`export CURSOR_API_KEY=...` from [Integrations](https://cursor.com/dashboard/integrations)) — the bundled proxy then does not need Keychain. `claude-overnight` forces `CURSOR_SKIP_KEYCHAIN=1` and `CI=true`; if System Settings still shows **“A keychain cannot be found to store …”**, the login keychain is often missing or damaged: open **Keychain Access → First Aid** on **login**, or use **Reset To Defaults** in the dialog. Some users fix a stuck keychain with:
+The Cursor **`agent`** binary stores an interactive login as **`cursor-user`** in your **login** keychain. For automation, use a **[User API key](https://cursor.com/docs/cli/headless)** (`export CURSOR_API_KEY=...` from [Integrations](https://cursor.com/dashboard/integrations)): the bundled proxy then does not need Keychain. `claude-overnight` forces `CURSOR_SKIP_KEYCHAIN=1` and `CI=true`; if System Settings still shows **“A keychain cannot be found to store …”**, the login keychain is often missing or damaged: open **Keychain Access → First Aid** on **login**, or use **Reset To Defaults** in the dialog. Some users fix a stuck keychain with:
 
 ```bash
 security unlock-keychain ~/Library/Keychains/login.keychain-db
 ```
 
-**Automation:** Saving a key via **Cursor…** in `claude-overnight` is enough — it is written to `providers.json` and injected into both the Claude SDK env and the bundled proxy (including `CURSOR_API_KEY` for the native `agent`). You do not need to `export` variables unless you want to override for one shell.
+**Automation:** Saving a key via **Cursor…** in `claude-overnight` is enough. It is written to `providers.json` and injected into both the Claude SDK env and the bundled proxy (including `CURSOR_API_KEY` for the native `agent`). You do not need to `export` variables unless you want to override for one shell.
 
 **Advanced:** If something else must share port `8765` and you manage the proxy yourself, set `CURSOR_OVERNIGHT_NO_PROXY_RESTART=1` to skip the automatic “replace listener” step when a Cursor API token is present.
 
 **How headless Cursor + macOS Keychain actually works (discovery):** We documented the full investigation: why ACP was the wrong path for opus/sonnet `*-thinking-*` variants (model-name mismatch → silent `exit 1`), how **chat-only workspace** (default in cursor-composer) fakes `HOME` and triggers **Keychain timeouts** despite a User API key, and how a cloned **account pool** makes parallel cursor-agent spawns race-free. See **[docs/CURSOR_PROXY_MACOS_DISCOVERY.md](docs/CURSOR_PROXY_MACOS_DISCOVERY.md)**.
 
-**Quick reference — bundled proxy env:** `CURSOR_BRIDGE_USE_ACP=0` (CLI streaming path accepts all friendly model names), `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, `CURSOR_CONFIG_DIRS=<5 cloned pool dirs>` (parallel-safe), plus `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` / `CURSOR_BRIDGE_API_KEY` and `CURSOR_SKIP_KEYCHAIN=1` / `CI=true`. Details and tables are in the doc above.
+**Quick reference, bundled proxy env:** `CURSOR_BRIDGE_USE_ACP=0` (CLI streaming path accepts all friendly model names), `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, `CURSOR_CONFIG_DIRS=<5 cloned pool dirs>` (parallel-safe), plus `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` / `CURSOR_BRIDGE_API_KEY` and `CURSOR_SKIP_KEYCHAIN=1` / `CI=true`. Details and tables are in the doc above.
 
 **Regression / stress test:** `npm run matrix:cursor-proxy` (optional `--quick`, `--include-danger`). Use `MATRIX_MODELS=composer-2,claude-opus-4-7-thinking-high` to compare models; override `MATRIX_PORT_BASE`, `MATRIX_MODEL`, `MATRIX_MSG_TIMEOUT_MS` as needed.
 
@@ -146,7 +149,7 @@ security unlock-keychain ~/Library/Keychains/login.keychain-db
 npm install -g claude-overnight
 ```
 
-Requires Node.js ≥ 20. For Anthropic-direct roles, use `claude auth login` or `ANTHROPIC_API_KEY`. For provider-backed roles, save a Kimi / Qwen / Cursor / OpenRouter-compatible provider instead. No Anthropic plan or key? See **Run on Kimi 2.6** or **Run on Qwen 3.6 Plus** above  -- cheap, drop-in alternatives.
+Requires Node.js ≥ 20. For Anthropic-direct roles, use `claude auth login` or `ANTHROPIC_API_KEY`. For provider-backed roles, save a Kimi / Qwen / Cursor / OpenRouter-compatible provider instead. No Anthropic plan or key? See **Run on Kimi 2.6** or **Run on Qwen 3.6 Plus** above for cheap drop-in alternatives.
 
 ## Quick start
 
@@ -163,13 +166,13 @@ claude-overnight
 
 ② Budget [10]: 200
 
-④ Planner model (thinking, steering  -- use your strongest):
-  ● Opus  -- Opus 4.6 · Most capable
-  ○ Sonnet  -- Sonnet 4.6 · Best for everyday tasks
+④ Planner model (thinking, steering; use your strongest):
+  ● Opus · Opus 4.6 · Most capable
+  ○ Sonnet · Sonnet 4.6 · Best for everyday tasks
 
-⑤ Worker model (what runs the tasks  -- Kimi 2.6 / Qwen 3.6 Plus / OpenRouter / etc via Other…):
-  ● Sonnet  -- Sonnet 4.6 · Best for everyday tasks
-  ○ Opus  -- Opus 4.6 · Most capable
+⑤ Worker model (runs the tasks; Kimi 2.6 / Qwen 3.6 Plus / OpenRouter / etc via Other…):
+  ● Sonnet · Sonnet 4.6 · Best for everyday tasks
+  ○ Opus · Opus 4.6 · Most capable
   ○ Other… · custom OpenAI/Anthropic-compatible endpoint
 
 ⑥ Usage cap:
@@ -196,7 +199,7 @@ claude-overnight
 ◆ Assessing... ✓ Done
 ```
 
-You interact once (objective, budget, model, review themes), then the rest runs unattended  -- thinking, planning, executing, curating memory, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
+You interact once (objective, budget, model, review themes), then the rest runs unattended, thinking, planning, executing, curating memory, reflecting, steering. Rate-limited? It waits and retries. Crash? Resume where you left off. Capped at usage limit? Pick up next time with full context preserved.
 
 ## Use cases
 
@@ -204,66 +207,49 @@ Overnight refactors, batch feature implementation, codebase-wide cleanups, test 
 
 ## Typical flow
 
-```mermaid
-flowchart TD
-  subgraph Setup["Setup + planning"]
-    A["Start or resume run"] --> B["Optional setup coach<br/>rewrite objective + suggest settings"]
-    B --> C["Pick planner / worker / fast worker<br/>budget + concurrency + worktree mode"]
-    C --> D["Optional provider preflight<br/>real auth / write probes"]
-    D --> E["Theme discovery + user review/edit/chat"]
-    E --> F["Thinking wave<br/>planner explores the codebase"]
-    F --> G["Task orchestration<br/>planner writes concrete tasks"]
-  end
+```
+┌─ Setup + planning ──────────────────────────────────────────────┐
+│  start/resume  →  coach rewrites objective  →  pick planner,    │
+│  worker, fast worker  →  provider preflight  →  theme review    │
+│  →  thinking wave (parallel architects)  →  task orchestration  │
+└──────────────────────┬──────────────────────────────────────────┘
+                       │
+┌─ Wave loop ──────────▼──────────────────────────────────────────┐
+│  beforeWave hook  →  execution wave (workers in worktrees)      │
+│  →  per-agent simplify pass (session resume on same context)    │
+│  →  debrief + afterWave hook  →  post-wave review agent         │
+│  →  librarian curates skill candidates into canon               │
+│  →  steering decides: execute more │ reflect deeper │ done      │
+│         ↑                                                       │
+│         └── loop until done, budget out, or cap hit             │
+│  →  final gate reviews full `git diff main`                     │
+└─────────────────────────────────────────────────────────────────┘
 
-  subgraph Wave["Per-wave loop"]
-    G --> H["beforeWave hook<br/>optional shell commands"]
-    H --> I["Execution wave<br/>main worker + optional fast worker<br/>isolated git worktrees"]
-    I --> J["Per-agent simplify pass<br/>same SDK session resumes"]
-    J --> K["Debrief + afterWave hook"]
-    K --> L["Post-wave review<br/>flex mode"]
-    L --> M["Wave-end librarian pass"]
-    M --> N{"Flex mode?"}
-    N -->|yes| O["Steering<br/>update status / milestones / goal"]
-    N -->|no| P["Verifier<br/>fixed-plan gate between waves"]
-    O -->|execute more| H
-    O -->|reflect deeper| Q["Reflection wave<br/>extra review / audit"]
-    Q --> O
-    O -->|done| R["Final gate<br/>review full diff"]
-    P -->|more work| H
-    P -->|done| R
-  end
-
-  subgraph Memory["Dynamic repo memory"]
-    S["Workers discover reusable patterns"] --> T["Scribe writes memory candidates"]
-    T --> U["Librarian curates candidates"]
-    U --> V["Canon markdown + SQLite index updated"]
-    V --> W["Future waves get L0 stub<br/>hydrate L1/L2 on demand"]
-  end
-
-  J -. emits candidates .-> S
-  M -. curates queue .-> U
-  W -. informs later waves .-> I
-  W -. informs planner decisions .-> O
-  R --> X["afterRun hook<br/>optional shell commands"]
+┌─ Skill memory (compounds within a run and across runs) ─────────┐
+│  workers emit candidates  →  scribe writes to disk              │
+│  →  librarian curates at wave end  →  canon markdown +          │
+│  SQLite FTS5 index updated  →  next wave gets an L0 stub,       │
+│  hydrates L1 body on demand, L2 references on request           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-The chart above shows the main user-visible lifecycle. It intentionally omits some engine-internal branches such as health-check heal tasks, A/B skill assignment, zero-work retry, budget-extension prompts, and resume salvage after planning crashes.
+This is the main user-visible lifecycle. Engine-internal branches (health-check heal tasks, A/B skill assignment across sibling branches, zero-work retry, budget-extension prompts, resume salvage after planning crashes) are omitted for clarity.
 
-### 1. Thinking phase  -- parallel architect sessions
+### 1. Thinking phase: parallel architect sessions
 
 For budgets > 15, the tool launches **architect agents** that explore your codebase before any code is written. Each one gets a different research angle (architecture, data models, APIs, testing, etc.) and writes a structured design document. The number scales with budget: 5 for budget=50, 10 for budget=2000.
 
 ### 2. Task orchestration
 
-An orchestrator session reads all design documents and synthesizes concrete execution tasks  -- grounded in real files and patterns the architects found. The task plan is also written to a file for resilience  -- if orchestration is interrupted, partial results survive.
+An orchestrator session reads all design documents and synthesizes concrete execution tasks, grounded in real files and patterns the architects found. The task plan is also written to a file for resilience: if orchestration is interrupted, partial results survive.
 
 ### 3. Parallel execution waves
 
-Tasks run in parallel agent sessions (each in its own git worktree). After completing its task, each session automatically runs a **simplify pass**  -- reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits. This is done via the SDK's **session resume** mechanism: the same agent session continues with a follow-up prompt, so the agent's full context from its task is still available  -- no need to re-instruct or re-fill context. If a fast worker is configured, steering can route cheaper, well-scoped tasks there while the main worker handles heavier implementation.
+Tasks run in parallel agent sessions (each in its own git worktree). After completing its task, each session automatically runs a **simplify pass**, reviewing its own `git diff` for code reuse opportunities, quality issues, and inefficiencies, then fixing them before the framework commits. This is done via the SDK's **session resume** mechanism: the same agent session continues with a follow-up prompt, so the agent's full context from its task is still available, no need to re-instruct or re-fill context. If a fast worker is configured, steering can route cheaper, well-scoped tasks there while the main worker handles heavier implementation.
 
 ### 4. Post-wave review
 
-After each wave (flex mode, budget remaining), a dedicated **review agent** inspects the consolidated diff for issues the individual agents may have blind-spotted: missed reuse opportunities, copy-paste variations, leaky abstractions, efficiency regressions. Runs as a single-agent wave  -- one session reviews what the swarm just produced.
+After each wave (flex mode, budget remaining), a dedicated **review agent** inspects the consolidated diff for issues the individual agents may have blind-spotted: missed reuse opportunities, copy-paste variations, leaky abstractions, efficiency regressions. Runs as a single-agent wave, one session reviews what the swarm just produced.
 
 ### 5. Librarian and dynamic memory
 
@@ -273,7 +259,7 @@ At the end of each wave, a **librarian** pass curates that queue. It can promote
 
 ### 6. Steering
 
-After each wave, steering assesses: "how good is this?"  -- not "what's missing?" It can:
+After each wave, steering asks "how good is this?" rather than "what's missing?". It can:
 
 - **Execute** more tasks to build features, fix bugs, polish UX
 - **Reflect** by spinning up 1-2 review sessions for deep quality/architecture audits
@@ -287,17 +273,17 @@ When the run completes (steering declares done), a final **comprehensive review*
 
 Long runs stay sharp because steering maintains three run-memory layers:
 
-- **Status**  -- a living project snapshot, updated every wave. Compressed, never truncated.
-- **Milestones**  -- strategic snapshots archived every ~5 waves. Long-term memory.
-- **Goal**  -- the evolving north star. What quality means for this codebase.
+- **Status**: a living project snapshot, updated every wave. Compressed, never truncated.
+- **Milestones**: strategic snapshots archived every ~5 waves. Long-term memory.
+- **Goal**: the evolving north star. What quality means for this codebase.
 
 ### Progressive-disclosure repo memory
 
 The repo memory system is separate from the run folder and is designed around three disclosure layers so context stays small:
 
-- **L0**  -- a tiny ranked stub injected into planner and worker prompts. It lists only the names and descriptions of the most relevant project-specific skills and tool recipes.
-- **L1**  -- the full skill body, loaded on demand with `skill_read(name)` when an agent wants the actual recipe or guidance.
-- **L2**  -- attached references for deeper context. The library is structured for them even though most runs only need the L0 stub plus occasional L1 hydration.
+- **L0**: a tiny ranked stub injected into planner and worker prompts. It lists only the names and descriptions of the most relevant project-specific skills and tool recipes.
+- **L1**: the full skill body, loaded on demand with `skill_read(name)` when an agent wants the actual recipe or guidance.
+- **L2**: attached references for deeper context. The library is structured for them even though most runs only need the L0 stub plus occasional L1 hydration.
 
 That progressive disclosure matters: the planner and workers do not carry the full memory library in every prompt. They get a compact overview, call `skill_search(query)` if they need to narrow it, and hydrate only the bodies that matter for the task in front of them.
 
@@ -320,7 +306,7 @@ Every run gets its own folder in `.claude-overnight/runs/`. Nothing is ever over
       run.json, transcripts/themes.ndjson   ← see exactly what the planner was doing
 ```
 
-Any run that stops before the steering system declares the objective complete  -- capped at usage limit, Ctrl+C, crash, rate limit timeout, steering failure  -- is automatically resumable:
+Any run that stops before the steering system declares the objective complete, capped at usage limit, Ctrl+C, crash, rate limit timeout, steering failure, is automatically resumable:
 
 ```
   ⚠ Unfinished run
@@ -335,7 +321,7 @@ Any run that stops before the steering system declares the objective complete  -
 
 On resume: unmerged branches auto-merge, the wave loop continues, all context is preserved. Designs and reflections stay on disk until the objective is truly complete.
 
-If the thinking phase succeeds but orchestration crashes, the next run detects the orphaned design docs and reuses them  -- no re-running $9 worth of architect sessions:
+If the thinking phase succeeds but orchestration crashes, the next run detects the orphaned design docs and reuses them, no re-running $9 worth of architect sessions:
 
 ```
   ✓ Reusing 5 design docs (from prior attempt)
@@ -345,25 +331,25 @@ If the thinking phase succeeds but orchestration crashes, the next run detects t
     ...
 ```
 
-**Knowledge carries forward**  -- new runs inherit knowledge from completed previous runs. Thinking sessions and steering see what past runs built. Run 2 knows run 1 already built the auth system.
+**Knowledge carries forward**, new runs inherit knowledge from completed previous runs. Thinking sessions and steering see what past runs built. Run 2 knows run 1 already built the auth system.
 
 ### Transcripts and streaming
 
-Every planner/steering query streams through the Agent SDK with `includePartialMessages: true`, so tool calls, thinking, and text deltas are captured as they happen. Each query also appends an NDJSON transcript under `runs/<ts>/transcripts/<name>.ndjson` — so if the planner crashes mid-think you still have the forensic trail (prompt preview, every tool use, every text/thinking delta, rate-limit events, and the final result or error). `themes.md` is also written as a human-readable summary right after the thinking wave.
+Every planner/steering query streams through the Agent SDK with `includePartialMessages: true`, so tool calls, thinking, and text deltas are captured as they happen. Each query also appends an NDJSON transcript under `runs/<ts>/transcripts/<name>.ndjson`, so if the planner crashes mid-think you still have the forensic trail (prompt preview, every tool use, every text/thinking delta, rate-limit events, and the final result or error). `themes.md` is also written as a human-readable summary right after the thinking wave.
 
 Not every provider delivers the same streaming granularity:
 
 | Provider | Tool-use events | Thinking deltas | Text deltas |
 | --- | --- | --- | --- |
 | Anthropic (direct) | ✓ | ✓ | ✓ |
-| Cursor proxy (`cursor-composer-in-claude`) | — | — | ✓ (final answer only) |
+| Cursor proxy (`cursor-composer-in-claude`) | no | no | ✓ (final answer only) |
 | Kimi / Qwen / OpenRouter / custom Anthropic-compatible | depends on upstream | depends | usually ✓ |
 
-When a provider doesn't stream partials (or the model is a reasoning model on the Cursor proxy — the proxy suppresses the thinking phase and only emits the final answer), the ticker shows elapsed time with no live text, then the completed result lands in one go. The UI, transcripts, and the resume flow all behave identically either way — streaming is used when available, never required.
+When a provider doesn't stream partials (or the model is a reasoning model on the Cursor proxy, where the proxy suppresses the thinking phase and only emits the final answer), the ticker shows elapsed time with no live text, then the completed result lands in one go. The UI, transcripts, and the resume flow all behave identically either way: streaming is used when available, never required.
 
-Add `.claude-overnight/` to your `.gitignore` (with the trailing slash  -- see below).
+Add `.claude-overnight/` to your `.gitignore` (with the trailing slash, see below).
 
-A separate, tiny `claude-overnight.log.md` is also written at the repo root on every run. It's human-readable, append-only, one block per run (objective, start/finish, cost, outcome, branch), and is designed to be **committed**  -- so even after `.claude-overnight/` is cleaned up you can still recover which prompt produced which commits. Use `.claude-overnight/` (with trailing slash) in your gitignore so this file isn't matched by accident.
+A separate, tiny `claude-overnight.log.md` is also written at the repo root on every run. It's human-readable, append-only, one block per run (objective, start/finish, cost, outcome, branch), and is designed to be **committed**, so even after `.claude-overnight/` is cleaned up you can still recover which prompt produced which commits. Use `.claude-overnight/` (with trailing slash) in your gitignore so this file isn't matched by accident.
 
 ## Task file and inline modes
 
@@ -407,20 +393,20 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 |---|---|---|
 | `--budget=N` | `10` | Total agent sessions |
 | `--concurrency=N` | `5` | Parallel agents |
-| `--model=NAME` | prompted | Worker model  -- interactive picks planner + worker separately; `Other…` adds Kimi / Qwen / OpenRouter / any Anthropic-compat endpoint. In non-interactive mode, a saved provider's model id is auto-resolved to the provider. |
+| `--model=NAME` | prompted | Worker model. Interactive picks planner and worker separately; `Other…` adds Kimi / Qwen / OpenRouter / any Anthropic-compat endpoint. In non-interactive mode, a saved provider's model id is auto-resolved to the provider. |
 | `--usage-cap=N` | unlimited | Stop at N% utilization |
 | `--allow-extra-usage` | off | Allow extra/overage usage (billed separately) |
-| `--extra-usage-budget=N` |  -- | Max $ for extra usage (implies --allow-extra-usage) |
+| `--extra-usage-budget=N` |      | Max $ for extra usage (implies --allow-extra-usage) |
 | `--timeout=SECONDS` | `900` | Inactivity timeout per agent (nudges at timeout, kills at 2×) |
-| `--no-flex` |  -- | Disable multi-wave steering |
-| `--dry-run` |  -- | Show planned tasks without running |
+| `--no-flex` |      | Disable multi-wave steering |
+| `--dry-run` |      | Show planned tasks without running |
 
 ## Task file fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `tasks` | `(string \| {prompt, cwd?, model?})[]` | required | Tasks to run |
-| `objective` | `string` |  -- | High-level goal for steering |
+| `objective` | `string` |      | High-level goal for steering |
 | `flexiblePlan` | `boolean` | `false` | Enable multi-wave planning |
 | `model` | `string` | prompted | Worker model |
 | `concurrency` | `number` | `5` | Parallel agents |
@@ -431,12 +417,12 @@ claude-overnight "fix auth bug in src/auth.ts" "add tests for user model"
 
 ## Custom providers (Kimi, Qwen, OpenRouter, any Anthropic-compatible endpoint)
 
-Planner, main worker, and optional fast worker are each picked separately  -- pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of work. The fast worker is a real worker (same tools, same env), just on a cheaper/faster model — steering routes well-scoped tasks to it by default.
+Planner, main worker, and optional fast worker are each picked separately. Pair Opus-on-Anthropic for the planner/thinker with a cheaper model on another provider for the bulk of work. The fast worker is a real worker (same tools, same env), just on a cheaper/faster model, and steering routes well-scoped tasks to it by default.
 
 From the interactive picker, choose `Other…` on the planner, worker, or fast step:
 
 ```
-⑤ Worker model (what runs the tasks  -- Kimi 2.6 / Qwen 3.6 Plus / OpenRouter / etc via Other…):
+⑤ Worker model (runs the tasks; Kimi 2.6 / Qwen 3.6 Plus / OpenRouter / etc via Other…):
   ○ Sonnet
   ○ Opus
   ● Other…
@@ -458,13 +444,13 @@ Common examples:
 
 Saved providers live user-level at `~/.claude/claude-overnight/providers.json` (mode 0600) and show up automatically in every repo. No per-project config.
 
-**How routing works.** Each `query()` gets its own env override (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`)  -- planner queries use the planner provider, main-worker queries use the worker provider, fast-worker queries use the fast provider. No global shell env, no proxy daemon, no `process.env` pollution between calls.
+**How routing works.** Each `query()` gets its own env override (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`), planner queries use the planner provider, main-worker queries use the worker provider, fast-worker queries use the fast provider. No global shell env, no proxy daemon, no `process.env` pollution between calls.
 
 **Pre-flight.** Before the swarm starts, each custom provider is pinged with a 1-turn auth check. Bad keys fail fast with `✗ worker preflight failed: ...` instead of N scattered mid-run errors.
 
 **Resume.** Provider ids are persisted in `run.json` and rehydrated on resume. If you deleted a provider between runs, resume refuses to start and tells you exactly which id is missing.
 
-**Non-interactive / CI.** `claude-overnight --model=kimi-for-coding` (or `qwen3.6-plus`) auto-resolves the model id to a saved provider  -- no separate `--provider` flag.
+**Non-interactive / CI.** `claude-overnight --model=kimi-for-coding` (or `qwen3.6-plus`) auto-resolves the model id to a saved provider, no separate `--provider` flag.
 
 ## Parallel Playwright Testing
 
@@ -502,8 +488,8 @@ See `QUICKSHEET_PLAYWRIGHT.md` for full config examples.
 
 By default, extra/overage usage is **blocked**. When your plan's rate limits are exhausted, the run stops cleanly and is resumable. You control this in the interactive prompt (step ⑤) or via CLI flags:
 
-- `--allow-extra-usage`  -- opt in to extra usage (billed separately)
-- `--extra-usage-budget=20`  -- allow up to $20 of extra usage, then stop
+- `--allow-extra-usage`, opt in to extra usage (billed separately)
+- `--extra-usage-budget=20`, allow up to $20 of extra usage, then stop
 
 ### Live controls during execution
 
@@ -515,11 +501,11 @@ Press these keys while agents are running:
 | `t` | Change usage cap threshold (0-100%) |
 | `q` | Graceful stop (press twice to force quit) |
 
-Changes take effect between waves  -- active agents finish their current task.
+Changes take effect between waves; active agents finish their current task.
 
 ### Multi-window usage display
 
-The usage bar cycles through all rate limit windows (5h, 7d, etc.) every 3 seconds, showing utilization per window. Usage info is shown during all phases  -- thinking, orchestration, steering, and execution.
+The usage bar cycles through all rate limit windows (5h, 7d, etc.) every 3 seconds, showing utilization per window. Usage info is shown during all phases: thinking, orchestration, steering, and execution.
 
 When using extra usage with a budget, a dedicated progress bar shows spend vs limit with color-coded fill (magenta → yellow → red).
 
@@ -527,14 +513,14 @@ When using extra usage with a budget, a dedicated progress bar shows spend vs li
 
 Built for unattended runs lasting hours or days.
 
-- **Smooth overage transition**: when extra usage is allowed, plan limit rejection is seamless  -- no dispatch blocking, agents continue into overage
-- **Interrupt + resume**: agents and planner queries that go silent are interrupted and resumed with full conversation context via SDK session resume  -- not killed and restarted from scratch
+- **Smooth overage transition**: when extra usage is allowed, plan limit rejection is seamless, no dispatch blocking, agents continue into overage
+- **Interrupt + resume**: agents and planner queries that go silent are interrupted and resumed with full conversation context via SDK session resume, not killed and restarted from scratch
 - **Hard block**: pauses until the rate limit window resets, then resumes
 - **Soft throttle**: slows dispatch at >75% utilization
 - **Extra usage guard**: detects overage billing and stops unless explicitly allowed
 - **Cooldown between phases**: waits for rate limit reset after thinking before starting orchestration
 - **Retry with backoff**: transient errors (429, overloaded) retry automatically
-- **Usage cap**: set a ceiling, active agents finish, no new ones start  -- run is resumable
+- **Usage cap**: set a ceiling, active agents finish, no new ones start, run is resumable
 - **Planner retries**: steering and orchestration retry on rate limits (30s/60s/120s backoff) with full context
 
 ## Git worktrees and branch merging

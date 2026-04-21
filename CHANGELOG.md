@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.51.3
+
+### Rewrite npm description, README, and plugin skill around the actual recipe
+
+npm listing was generic and didn't capture what this tool actually does differently. The description now leads with the real recipe: overnight parallel coding agents in git worktrees with a self-curating skill memory that improves mid-run, plus concrete model pairings (Opus planner + Kimi 2.6 / Cursor composer-2 fast worker + Gemini or Qwen bulk worker). README intro rewritten around five differentiators (self-curating skill memory, self-fixing via session-resume simplify pass + cross-agent review agent, multi-wave autonomous loop, headroom-aware usage cap, crash-safe persistence). Mermaid flowchart replaced with an npm-renderable ASCII diagram. Every em dash and pseudo-em-dash swept from README, plugin description, SKILL.md, recipes.md, authoring.md, and coach SKILL.md.
+
 ## 1.50.0
 
 ### Centralize all model-facing prompts in `prompts/`

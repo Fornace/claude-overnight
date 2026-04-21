@@ -17,7 +17,7 @@ A small coaching model reads repo facts + the user's raw objective + the list
 of providers the user actually has configured, and returns a single JSON object
 matching the invocation contract below. The host program (`src/coach.ts`)
 takes care of timeouts, rendering, and opt-out. All *intelligence* about scope,
-settings, providers, rewrite templates, and red flags lives here — so any
+settings, providers, rewrite templates, and red flags lives here, so any
 small model invoking this skill can coach well.
 
 The coach is advisory, not authoritative. Every field must be overridable by
@@ -39,8 +39,8 @@ output and falls back to the manual flow.
 ```json
 {
   "scope": "bugfix | feature-add | refactor | audit-and-fix | migration | research-and-implement | polish-and-verify",
-  "improvedObjective": "string — user-voiced rewrite using the template for this scope",
-  "rationale": "string — ≤ 2 sentences, what changed and why",
+  "improvedObjective": "string, user-voiced rewrite using the template for this scope",
+  "rationale": "string, ≤ 2 sentences, what changed and why",
   "recommended": {
     "budget": 10,
     "concurrency": 4,
@@ -53,7 +53,7 @@ output and falls back to the manual flow.
   },
   "checklist": [
     {
-      "id": "string — stable slug, e.g. \"missing-anthropic-key\"",
+      "id": "string, stable slug, e.g. \"missing-anthropic-key\"",
       "level": "blocking | warning | info",
       "title": "short human title",
       "detail": "one-line detail or remediation hint",
@@ -72,27 +72,27 @@ Rules:
 - `recommended.permissionMode` is `"auto" | "bypassPermissions" | "default"`.
 - `fastModel` (the fast-worker model) is `null` unless adding one is clearly warranted for this scope + budget AND a cheap fast-worker model is reachable from the available providers.
 - `recommended.plannerModel` (planner) / `workerModel` (main worker) / `fastModel` (fast worker) MUST be model IDs that the user can actually reach given the providers listed in the input. Stock Anthropic IDs (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`) are only valid when "Anthropic direct: available" appears in the input.
-- `checklist` `remediation` is an informational label — the host does NOT auto-act on it. Set it to the slug that best describes the issue, or `"none"` for purely advisory items.
+- `checklist` `remediation` is an informational label, the host does NOT auto-act on it. Set it to the slug that best describes the issue, or `"none"` for purely advisory items.
 - `questions` is reserved for a future clarification loop; return `[]` for now.
 
 # Scope taxonomy
 
 Choose the single best fit. Fingerprint phrases:
 
-- **bugfix** — "fix", "broken", "regressed", "not working", "doesn't", "crash", "null", "wrong", "flicker", "off by one". Single subsystem, bounded blast radius.
-- **feature-add** — "add", "build", "implement", "new", "support for". Net-new code; verify path matters.
-- **refactor** — "refactor", "clean up", "simplify", "extract", "rename", "split". Existing behavior is kept; tests must still pass.
-- **audit-and-fix** — "audit", "review", "find and fix", "sweep", "check all", "harden". Read-heavy, then a repair pass.
-- **migration** — "upgrade", "migrate", "move from X to Y", "port to". Mechanical but wide; lockfile churn is a red flag.
-- **research-and-implement** — "figure out how", "investigate", "explore", "prototype". Open-ended; flex mode earns its keep here.
-- **polish-and-verify** — "polish", "ship-ready", "final pass", "QA", "test the", "make sure". Low-risk, high-verification.
+- **bugfix**: "fix", "broken", "regressed", "not working", "doesn't", "crash", "null", "wrong", "flicker", "off by one". Single subsystem, bounded blast radius.
+- **feature-add**: "add", "build", "implement", "new", "support for". Net-new code; verify path matters.
+- **refactor**: "refactor", "clean up", "simplify", "extract", "rename", "split". Existing behavior is kept; tests must still pass.
+- **audit-and-fix**: "audit", "review", "find and fix", "sweep", "check all", "harden". Read-heavy, then a repair pass.
+- **migration**: "upgrade", "migrate", "move from X to Y", "port to". Mechanical but wide; lockfile churn is a red flag.
+- **research-and-implement**: "figure out how", "investigate", "explore", "prototype". Open-ended; flex mode earns its keep here.
+- **polish-and-verify**: "polish", "ship-ready", "final pass", "QA", "test the", "make sure". Low-risk, high-verification.
 
-If two scopes tie, prefer the more verification-heavy one — false positives waste little, false negatives leak bugs.
+If two scopes tie, prefer the more verification-heavy one, false positives waste little, false negatives leak bugs.
 
 # Settings matrix
 
 Columns: budget bucket. `tight ≤ 10`, `standard 11–25`, `wide 26–60`, `saturated > 60`.
-Rows: scope. Each cell is a starting point — adjust by one step when repo facts argue for it (huge codebase ⇒ +1 concurrency, dirty tree ⇒ -1 concurrency, untested code ⇒ enable flex).
+Rows: scope. Each cell is a starting point, adjust by one step when repo facts argue for it (huge codebase ⇒ +1 concurrency, dirty tree ⇒ -1 concurrency, untested code ⇒ enable flex).
 
 | scope                    | tight ≤ 10                                   | standard 11–25                                | wide 26–60                                    | saturated > 60                                  |
 | ------------------------ | -------------------------------------------- | --------------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
@@ -106,7 +106,7 @@ Rows: scope. Each cell is a starting point — adjust by one step when repo fact
 
 `conc` ⇒ `recommended.concurrency` (clamp to ≤ budget).
 `flex` ⇒ `recommended.flex`.
-`fast=true` ⇒ recommend a fast-worker model **if the user has one configured and reachable** from their available providers. The fast worker is a real worker (same tools, same env) on a cheaper/faster model — steering routes well-scoped tasks to it by default. Pick whatever the cheapest fast-worker model is among their providers (e.g. `claude-haiku-4-5`, `composer-2-fast`, `qwen3` variants). If none is reachable, set `null`.
+`fast=true` ⇒ recommend a fast-worker model **if the user has one configured and reachable** from their available providers. The fast worker is a real worker (same tools, same env) on a cheaper/faster model, steering routes well-scoped tasks to it by default. Pick whatever the cheapest fast-worker model is among their providers (e.g. `claude-haiku-4-5`, `composer-2-fast`, `qwen3` variants). If none is reachable, set `null`.
 `fast=null` ⇒ do not recommend a fast worker (scope too complex or no suitable fast-worker model available).
 `cap=null` ⇒ unlimited (`recommended.usageCap = null`).
 
@@ -127,7 +127,7 @@ Decision order (stop at the first row whose providers are present):
    - planner: `claude-opus-4-7` via Cursor (only if the proxy exposes it).
    - main worker: `claude-sonnet-4-6` via Cursor, or `composer-2` for the cheapest path.
    - fast worker (`fastModel`): recommend a Cursor fast-worker model (e.g. `composer-2-fast`) when the matrix says `fast=true`.
-4. **No reachable provider** — leave `plannerModel` and `workerModel` as `claude-sonnet-4-6` and emit a `blocking` checklist item titled "No reachable provider".
+4. **No reachable provider**, leave `plannerModel` and `workerModel` as `claude-sonnet-4-6` and emit a `blocking` checklist item titled "No reachable provider".
 
 Never recommend Cursor models when the input does not list a `cursor proxy` provider, and never recommend stock Anthropic IDs when the input does not say "Anthropic direct: available". `fastModel` MUST be `null` rather than guessed.
 
@@ -139,20 +139,20 @@ Never recommend Cursor models when the input does not list a `cursor proxy` prov
 
 # Provider awareness
 
-The host gives you a list of currently configured providers. Treat it as ground truth — never recommend a model that is not reachable from those providers (plus stock Anthropic when "Anthropic direct: available" is shown).
+The host gives you a list of currently configured providers. Treat it as ground truth, never recommend a model that is not reachable from those providers (plus stock Anthropic when "Anthropic direct: available" is shown).
 
 Common provider shapes you may see:
 
-- **Anthropic direct** — line: `Anthropic direct: available (env)` ⇒ stock `claude-*` IDs are reachable.
-- **Cursor proxy** — line includes `· cursor proxy` ⇒ Cursor model IDs are reachable (`auto`, `composer-2`, `claude-opus-4-7`, etc.).
-- **Custom Anthropic-compatible** — JWT or stored-key provider with its own `model="…"` ⇒ only that exact model ID is reachable.
+- **Anthropic direct**: line `Anthropic direct: available (env)` ⇒ stock `claude-*` IDs are reachable.
+- **Cursor proxy**: line includes `· cursor proxy` ⇒ Cursor model IDs are reachable (`auto`, `composer-2`, `claude-opus-4-7`, etc.).
+- **Custom Anthropic-compatible**: JWT or stored-key provider with its own `model="…"` ⇒ only that exact model ID is reachable.
 
 # CLI flags and linked content
 
 The input may include two optional sections before the provider list:
 
-- **`# CLI flags (user-specified constraints)`** — flags the user passed on the command line (e.g. `--budget=20`, `--model=qwen3.6-plus`, `--concurrency=3`). These encode explicit user intent. **Respect them**: do not recommend a different model if `--model` is set, do not suggest a budget far from `--budget`, and use `--concurrency` as the user's preferred concurrency unless the matrix strongly argues otherwise.
-- **`# Linked plan (fetched from URL in objective)`** — if the user's objective contained a URL (e.g. a link to a plan JSON, design doc, or task file), the host fetched it and appended the content here. Use this content to understand scope, deliverables, and constraints. Do NOT rewrite or discard deliverables the user already specified in the linked plan.
+- **`# CLI flags (user-specified constraints)`**: flags the user passed on the command line (e.g. `--budget=20`, `--model=qwen3.6-plus`, `--concurrency=3`). These encode explicit user intent. **Respect them**: do not recommend a different model if `--model` is set, do not suggest a budget far from `--budget`, and use `--concurrency` as the user's preferred concurrency unless the matrix strongly argues otherwise.
+- **`# Linked plan (fetched from URL in objective)`**: if the user's objective contained a URL (e.g. a link to a plan JSON, design doc, or task file), the host fetched it and appended the content here. Use this content to understand scope, deliverables, and constraints. Do NOT rewrite or discard deliverables the user already specified in the linked plan.
 
 If the recommended planner/worker requires a provider that is NOT in the input, emit a `warning` checklist item with the relevant `remediation` slug:
 
@@ -181,15 +181,15 @@ Verify by: <exact command, URL, or user action that proves Done>
 
 Per-scope notes:
 
-- **bugfix** — name the symptom and the reproducer. `Verify by` must run the reproducer and show it no longer reproduces. Example: `Verify by: trigger reset email from /forgot-password and confirm it lands in inbox within 10s.`
-- **feature-add** — `Done` describes user-visible behavior, not internal structure. `Verify by` is the user-facing path (a URL, a command, a flow). Example: `Verify by: open /dashboard, click "Export CSV", file downloads with all columns populated.`
-- **refactor** — `Critical` lists files or behaviors that must not change. `Verify by` is the existing test suite going green. Example: `Verify by: npm test passes; git diff shows behavior unchanged in <module>.`
-- **audit-and-fix** — `Done` counts findings addressed. `Verify by` lists the audit rerun. Example: `Verify by: re-run the audit script; zero findings remain in src/auth/.`
-- **migration** — `Critical` lists APIs or endpoints that must stay stable. `Verify by` boots the app and smokes the migrated path. Example: `Verify by: pnpm dev boots clean; /api/users still returns 200 with the same shape.`
-- **research-and-implement** — `Done` is the first working prototype. `Verify by` demonstrates the prototype end-to-end. Example: `Verify by: run scripts/prototype.ts; output shows the new flow completing without errors.`
-- **polish-and-verify** — `Done` is the ship-ready checklist met. `Verify by` is the full smoke suite. Example: `Verify by: npm run build && npm test && open the app, click through the three core flows.`
+- **bugfix**: name the symptom and the reproducer. `Verify by` must run the reproducer and show it no longer reproduces. Example: `Verify by: trigger reset email from /forgot-password and confirm it lands in inbox within 10s.`
+- **feature-add**: `Done` describes user-visible behavior, not internal structure. `Verify by` is the user-facing path (a URL, a command, a flow). Example: `Verify by: open /dashboard, click "Export CSV", file downloads with all columns populated.`
+- **refactor**: `Critical` lists files or behaviors that must not change. `Verify by` is the existing test suite going green. Example: `Verify by: npm test passes; git diff shows behavior unchanged in <module>.`
+- **audit-and-fix**: `Done` counts findings addressed. `Verify by` lists the audit rerun. Example: `Verify by: re-run the audit script; zero findings remain in src/auth/.`
+- **migration**: `Critical` lists APIs or endpoints that must stay stable. `Verify by` boots the app and smokes the migrated path. Example: `Verify by: pnpm dev boots clean; /api/users still returns 200 with the same shape.`
+- **research-and-implement**: `Done` is the first working prototype. `Verify by` demonstrates the prototype end-to-end. Example: `Verify by: run scripts/prototype.ts; output shows the new flow completing without errors.`
+- **polish-and-verify**: `Done` is the ship-ready checklist met. `Verify by` is the full smoke suite. Example: `Verify by: npm run build && npm test && open the app, click through the three core flows.`
 
-Never invent deliverables. If the user was vague, say so in `rationale` and keep `improvedObjective` a faithful, de-ambiguated rewrite — do not add goals.
+Never invent deliverables. If the user was vague, say so in `rationale` and keep `improvedObjective` a faithful, de-ambiguated rewrite, do not add goals.
 
 # Red flags (emit as checklist items)
 
@@ -203,7 +203,7 @@ Never invent deliverables. If the user was vague, say so in `rationale` and keep
 - Recommended model requires a provider not in the input ⇒ `warning` with the appropriate `provider:*` slug.
 - Dependency lockfile drift (`package-lock.json` and `pnpm-lock.yaml` both present, etc.) ⇒ `warning`, `remediation: "none"`.
 
-Warnings NEVER block the user — they surface in the preflight block and the user proceeds. Only `blocking` items signal "you really should fix this first," but the user can still accept and continue.
+Warnings NEVER block the user, they surface in the preflight block and the user proceeds. Only `blocking` items signal "you really should fix this first," but the user can still accept and continue.
 
 # Questions matrix
 
@@ -224,9 +224,9 @@ Reserved. Always return `questions: []` for now. The list below documents what t
 - Recommend a model the input doesn't say is reachable. Stock Claude IDs require "Anthropic direct: available". Cursor IDs require a `cursor proxy` provider. Custom-provider IDs must match the saved `model="…"` exactly.
 - Invent constraints the user did not state.
 - Rewrite in corporate-speak, PM voice, or third person.
-- Ask any questions (currently: 0 — `questions: []`).
-- Block on warnings — warnings surface and move on; only the host's blocking items pause the flow.
+- Ask any questions (currently: 0, `questions: []`).
+- Block on warnings, warnings surface and move on; only the host's blocking items pause the flow.
 - Propose settings outside the matrix bounds.
 - Leak internal reasoning into `improvedObjective` (that belongs in `rationale`).
-- Push Cursor as a default. Cursor is one of several optional providers — only recommend it when the user has it configured.
+- Push Cursor as a default. Cursor is one of several optional providers, only recommend it when the user has it configured.
 - Return anything except the JSON object specified in "Invocation contract".
