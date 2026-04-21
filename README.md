@@ -548,12 +548,35 @@ Conflicts retry with `-X theirs`. Unresolved branches are preserved for manual m
 
 ## Claude Code plugin
 
-This repo also ships a Claude Code plugin so any Claude instance (inside this repo or any other) knows how to use, inspect, and resume `claude-overnight` runs:
+This repo ships a Claude Code plugin so any Claude instance (inside this repo or any other) knows how to use, inspect, and resume `claude-overnight` runs:
 
 ```
 /plugin marketplace add Fornace/claude-overnight
 /plugin install claude-overnight
 ```
+
+The plugin includes a skill for **authoring runs outside the CLI**. Claude can help you pick the run shape, critique the budget and decomposition, and write a `tasks.json` file before you ever invoke the CLI.
+
+### Writing `tasks.json` externally
+
+When you pass a pre-written `tasks.json` to the CLI, it **skips the thinking wave and planning phase** and starts executing immediately:
+
+```bash
+claude-overnight tasks.json
+```
+
+This is useful when:
+- You already have a concrete task list and don't need the planner to explore the codebase.
+- You want to save the planner cost ($2–4) on a straightforward, mechanical job.
+- You used the Claude skill to design the run and want to lock the plan before executing.
+
+A fixed-plan `tasks.json` (without `flexiblePlan: true`) bypasses orchestration entirely. A flex-plan `tasks.json` (with `objective` + `flexiblePlan: true` + seed tasks) still uses steering across waves, but skips the initial thinking wave if the tasks are already concrete.
+
+### What happens when `tasks.json` exists
+
+- **Crash resilience.** During normal planning, the orchestrator writes `tasks.json` to disk as soon as it generates the tasks. If the planner crashes or the process dies before the run state is persisted, the next resume salvages the tasks from `tasks.json` instead of re-running the expensive planning query.
+- **Resume fallback.** If a run's state file is missing or incomplete, the resume flow falls back to `tasks.json` to reconstruct the task list. This also covers legacy runs from before v1.11.7 where the agent wrote the file but the orchestrator didn't save `run.json`.
+- **Orphan recovery.** The state scanner backfills minimal run metadata for any run directory that contains a `tasks.json` but no `run.json`, so incomplete planning shells still show up in `claude-overnight --list`.
 
 ## Exit codes
 
