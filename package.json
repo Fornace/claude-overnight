@@ -12,6 +12,7 @@
     "start": "node dist/bin.js",
     "test": "node --test dist/__tests__/*.test.js",
     "matrix:cursor-proxy": "node scripts/cursor-proxy-keychain-matrix.mjs",
+    "evolve": "node scripts/evolve-prompt.mjs",
     "prepublishOnly": "node scripts/sync-plugin-version.js"
   },
   "dependencies": {
