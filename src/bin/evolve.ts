@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 /**
- * CLI: evolve a prompt against benchmark cases.
+ * `claude-overnight-evolve` — CLI for the prompt-evolution engine.
+ *
+ * Ships with the npm package (compiled to dist/bin/evolve.js). The MCP-browser
+ * platform runs this binary inside a per-project `raw`-mode container via
+ * `docker exec`. See docs/prompt-evolution-research.md.
  *
  * Examples:
- *   # Evolve a claude-overnight planner prompt
- *   node scripts/evolve-prompt.mjs --prompt 10_planning/10-3_plan --eval-model claude-haiku-4-5 --generations 3
+ *   claude-overnight-evolve --prompt 10_planning/10-3_plan --eval-model claude-haiku-4-5 --generations 3
+ *   claude-overnight-evolve --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-k2-6
  *
- *   # Evolve an MCP-browser supervision prompt
- *   node scripts/evolve-prompt.mjs --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-k2-6 --generations 3
- *
- * Requires:
- *   - ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN in env
- *   - ANTHROPIC_BASE_URL if using a proxy (optional)
- *   - For MCP-browser: the MCP-browser repo at ../MCP-browser
- *   - The project to be built (npm run build)
+ * Requires ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) in env. When `--target
+ * mcp-browser` is used the cwd must be the MCP-browser repo root (so
+ * `platform/supervisor/gemini-client.ts` resolves), or pass the file via
+ * `MCP_BROWSER_GEMINI_CLIENT`.
  */
 
-import { evolvePrompt } from "../dist/prompt-evolution/index.js";
-import { PLAN_CASES } from "../dist/prompt-evolution/fixtures/plan-cases.js";
+import { evolvePrompt } from "../prompt-evolution/index.js";
+import { PLAN_CASES } from "../prompt-evolution/fixtures/plan-cases.js";
 import {
   scenariosToCases,
   PLANNING_SCENARIOS,
@@ -26,32 +26,53 @@ import {
   STUCK_SCENARIOS,
   hydrateCases,
   extractPrompt,
-} from "../dist/prompt-evolution/adapters/mcp-browser.js";
+  type McpPromptKind,
+  type McpScenario,
+} from "../prompt-evolution/adapters/mcp-browser.js";
+import type { BenchmarkCase } from "../prompt-evolution/types.js";
 
-function help() {
-  console.log(`Usage: node scripts/evolve-prompt.mjs [options]
+function help(): never {
+  process.stdout.write(`Usage: claude-overnight-evolve [options]
 
 Options:
-  --target <name>         Target project: claude-overnight | mcp-browser (default: claude-overnight)
-  --prompt <path>         Prompt file path (claude-overnight only)
-  --prompt-kind <kind>    MCP-browser prompt kind: planning | review | evolution | goal-refinement | plan-supervision | simple-supervision | stuck-analysis
+  --target <name>         claude-overnight | mcp-browser (default: claude-overnight)
+  --prompt <path>         Prompt file path (claude-overnight)
+  --prompt-kind <kind>    MCP-browser prompt kind: planning | review | evolution |
+                          goal-refinement | plan-supervision | simple-supervision | stuck-analysis
   --eval-model <model>    Fast model for evaluation (default: claude-haiku-4-5)
   --mutate-model <model>  Smarter model for mutation (defaults to eval-model)
   --generations <n>       Number of evolution generations (default: 10)
   --population <n>        Max population size (default: 8)
   --plateau <n>           Stop early if no improvement for N generations (default: 3)
-  --cases <suite>         Benchmark suite: plan | mcp-planning | mcp-review | mcp-supervision | mcp-stuck (default: plan)
+  --cases <suite>         Benchmark suite: plan | mcp-planning | mcp-review |
+                          mcp-supervision | mcp-stuck (default: plan)
   --base-url <url>        API base URL override
   --auth-token <token>    Auth token override
+  --run-id <id>           Preset run id (default: auto-generated)
 `);
   process.exit(0);
 }
 
-function parseArgs() {
+interface Opts {
+  target: "claude-overnight" | "mcp-browser";
+  prompt: string;
+  promptKind: McpPromptKind | "";
+  evalModel: string;
+  mutateModel?: string;
+  generations: number;
+  population: number;
+  plateau: number;
+  cases: string;
+  baseUrl?: string;
+  authToken?: string;
+  runId?: string;
+}
+
+function parseArgs(): Opts {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) help();
 
-  const opts = {
+  const opts: Opts = {
     target: "claude-overnight",
     prompt: "10_planning/10-3_plan",
     promptKind: "",
@@ -66,42 +87,40 @@ function parseArgs() {
   };
 
   for (let i = 0; i < args.length; i++) {
+    const v = args[i + 1];
     switch (args[i]) {
-      case "--target": opts.target = args[++i]; break;
-      case "--prompt": opts.prompt = args[++i]; break;
-      case "--prompt-kind": opts.promptKind = args[++i]; break;
-      case "--eval-model": opts.evalModel = args[++i]; break;
-      case "--mutate-model": opts.mutateModel = args[++i]; break;
-      case "--generations": opts.generations = parseInt(args[++i], 10); break;
-      case "--population": opts.population = parseInt(args[++i], 10); break;
-      case "--plateau": opts.plateau = parseInt(args[++i], 10); break;
-      case "--cases": opts.cases = args[++i]; break;
-      case "--base-url": opts.baseUrl = args[++i]; break;
-      case "--auth-token": opts.authToken = args[++i]; break;
+      case "--target": opts.target = v as Opts["target"]; i++; break;
+      case "--prompt": opts.prompt = v; i++; break;
+      case "--prompt-kind": opts.promptKind = v as McpPromptKind; i++; break;
+      case "--eval-model": opts.evalModel = v; i++; break;
+      case "--mutate-model": opts.mutateModel = v; i++; break;
+      case "--generations": opts.generations = parseInt(v, 10); i++; break;
+      case "--population": opts.population = parseInt(v, 10); i++; break;
+      case "--plateau": opts.plateau = parseInt(v, 10); i++; break;
+      case "--cases": opts.cases = v; i++; break;
+      case "--base-url": opts.baseUrl = v; i++; break;
+      case "--auth-token": opts.authToken = v; i++; break;
+      case "--run-id": opts.runId = v; i++; break;
     }
   }
 
-  // Auto-select cases for MCP-browser
   if (opts.target === "mcp-browser" && !opts.cases) {
-    const kind = opts.promptKind || "planning";
-    opts.cases = `mcp-${kind}`;
+    opts.cases = `mcp-${opts.promptKind || "planning"}`;
   }
   if (!opts.cases) opts.cases = "plan";
-
   return opts;
 }
 
-async function main() {
+async function main(): Promise<void> {
   const opts = parseArgs();
 
-  let cases;
+  let cases: BenchmarkCase[];
   let promptPath = opts.prompt;
-  let seedText;
-  let kind;
+  let seedText: string | undefined;
 
   if (opts.target === "mcp-browser") {
-    kind = /** @type {McpPromptKind} */ (opts.promptKind || "planning");
-    const scenarioMap = {
+    const kind = (opts.promptKind || "planning") as McpPromptKind;
+    const scenarioMap: Record<McpPromptKind, McpScenario[]> = {
       planning: PLANNING_SCENARIOS,
       review: REVIEW_SCENARIOS,
       evolution: [],
@@ -110,19 +129,12 @@ async function main() {
       "simple-supervision": SUPERVISION_SCENARIOS,
       "stuck-analysis": STUCK_SCENARIOS,
     };
-    const scenarios = scenarioMap[kind] || [];
-    cases = hydrateCases(scenariosToCases(kind, scenarios));
+    cases = hydrateCases(scenariosToCases(kind, scenarioMap[kind]));
     promptPath = `mcp-browser/${kind}`;
     seedText = extractPrompt(kind);
   } else {
-    switch (opts.cases) {
-      case "plan":
-        cases = PLAN_CASES;
-        break;
-      default:
-        console.error(`Unknown case suite: ${opts.cases}`);
-        process.exit(1);
-    }
+    if (opts.cases === "plan") cases = PLAN_CASES;
+    else throw new Error(`Unknown case suite: ${opts.cases}`);
   }
 
   console.log(`Evolution config:`);
@@ -148,11 +160,12 @@ async function main() {
     authToken: opts.authToken,
     seedText,
     target: opts.target,
+    runId: opts.runId,
     onLog: (text) => console.log(text),
   });
 
   console.log("\n=== BEST VARIANT ===");
-  console.log(`id:        ${result.bestVariant.variantId}`);
+  console.log(`id:         ${result.bestVariant.variantId}`);
   console.log(`generation: ${result.bestVariant.generation}`);
   console.log(`gmean:      ${(result.bestVariant.gmean * 100).toFixed(1)}%`);
   console.log(`parse:      ${(result.bestVariant.aggregate.parse * 100).toFixed(1)}%`);
@@ -164,7 +177,7 @@ async function main() {
   console.log(result.bestVariant.text);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });

@@ -15,7 +15,23 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { BenchmarkCase, PromptVars } from "../types.js";
 
-const GEMINI_CLIENT_PATH = resolve("/Users/francesco/works/repos/MCP-browser/platform/supervisor/gemini-client.ts");
+/**
+ * Resolve the path to `gemini-client.ts` inside whichever MCP-browser checkout
+ * is in scope. Order:
+ *   1. `MCP_BROWSER_GEMINI_CLIENT` env var — explicit override.
+ *   2. `MCP_BROWSER_REPO` env var — repo root, relative file is appended.
+ *   3. cwd — expected shape on fornace.net (inside the project's raw container
+ *      the repo is cloned at `/workspace`, so `process.cwd()` resolves it).
+ *
+ * NEVER hardcode an absolute host path — this runs in a container on the
+ * server and on any contributor's laptop.
+ */
+function resolveGeminiClientPath(): string {
+  const override = process.env.MCP_BROWSER_GEMINI_CLIENT;
+  if (override) return resolve(override);
+  const repo = process.env.MCP_BROWSER_REPO ?? process.cwd();
+  return resolve(repo, "platform/supervisor/gemini-client.ts");
+}
 
 /** Prompt kinds we can benchmark */
 export type McpPromptKind =
@@ -29,7 +45,8 @@ export type McpPromptKind =
 
 /** Extract a const prompt string from gemini-client.ts by name */
 export function extractPrompt(kind: McpPromptKind): string {
-  const source = readFileSync(GEMINI_CLIENT_PATH, "utf-8");
+  const path = resolveGeminiClientPath();
+  const source = readFileSync(path, "utf-8");
   const nameMap: Record<McpPromptKind, string> = {
     planning: "PLANNING_PROMPT",
     review: "REVIEW_PROMPT",
@@ -42,7 +59,7 @@ export function extractPrompt(kind: McpPromptKind): string {
   const constName = nameMap[kind];
   const pattern = new RegExp(`const ${constName} = \`([\\s\\S]*?)\`;`);
   const m = source.match(pattern);
-  if (!m) throw new Error(`Prompt ${constName} not found in ${GEMINI_CLIENT_PATH}`);
+  if (!m) throw new Error(`Prompt ${constName} not found in ${path}`);
   return m[1].trim();
 }
 

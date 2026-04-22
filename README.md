@@ -572,6 +572,14 @@ A fixed-plan `tasks.json` (without `flexiblePlan: true`) bypasses orchestration 
 | `1` | Some tasks failed |
 | `2` | All failed or none completed |
 
+## Prompt evolution (server-side)
+
+The `src/prompt-evolution/` engine and `claude-overnight-evolve` CLI power a self-evolution pipeline that optimises prompts (the planner prompt here, MCP-browser's supervisor prompts, or any prompt in a user's repo) via Pareto-frontier mutation with LLM-as-judge and heuristic scoring.
+
+**It is not meant to run on your laptop.** The intended deployment is fornace.net: the MCP-browser platform exposes `POST /api/projects/:id/prompt-evolution/enqueue`, which warm-reuses the project's `raw`-mode container (same primitive as `/api/tasks`) and runs `claude-overnight-evolve` inside it. Output lands in `<projectDir>/overnight-env/prompt-evolution/<runId>/` and is served back through `GET /api/projects/:id/prompt-evolution/:runId`.
+
+The local `claude-overnight-evolve` / `npm run evolve` is for smoke-testing the engine only. Full design: [docs/prompt-evolution-research.md](docs/prompt-evolution-research.md).
+
 ## License
 
 MIT

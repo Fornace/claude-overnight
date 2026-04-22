@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.52.0
+
+### Ship `claude-overnight-evolve` CLI; prompt-evolution runs on fornace.net
+
+The self-evolution suite (`src/prompt-evolution/`) is now deployable as a server-side capability on fornace.net, not a local-only script. Two changes land this:
+
+**`claude-overnight-evolve` binary.** The ad-hoc `scripts/evolve-prompt.mjs` is gone. The CLI now lives at `src/bin/evolve.ts`, compiles to `dist/bin/evolve.js`, and is declared as a `bin` entry in `package.json`. `npm i -g claude-overnight@latest` puts `claude-overnight-evolve` on PATH — which is exactly what the MCP-browser raw-mode container already does on boot, so the platform can simply `docker exec claude-overnight-evolve ...` inside a per-project container.
+
+**No more hardcoded host paths.** The MCP-browser adapter previously pinned `/Users/francesco/works/repos/MCP-browser/...` to find `platform/supervisor/gemini-client.ts`. It now resolves via `MCP_BROWSER_GEMINI_CLIENT` (explicit override) → `MCP_BROWSER_REPO` → `process.cwd()`. On fornace.net the project's repo is cloned at `/workspace` so cwd resolution is the intended shape; local runs work from the MCP-browser repo root.
+
+See `docs/prompt-evolution-research.md` for the full server-side architecture (route, persistence, container primitive).
+
 ## 1.51.3
 
 ### Rewrite npm description, README, and plugin skill around the actual recipe
