@@ -578,6 +578,8 @@ The `src/prompt-evolution/` engine and `claude-overnight-evolve` CLI power a sel
 
 **It is not meant to run on your laptop.** The intended deployment is fornace.net: the MCP-browser platform exposes `POST /api/projects/:id/prompt-evolution/enqueue`, which warm-reuses the project's `raw`-mode container (same primitive as `/api/tasks`) and runs `claude-overnight-evolve` inside it. Output lands in `<projectDir>/overnight-env/prompt-evolution/<runId>/` and is served back through `GET /api/projects/:id/prompt-evolution/:runId`.
 
+Experiment credentials — any Anthropic-compatible provider (Anthropic direct, OpenRouter, Kimi, DashScope, a local proxy) — are injected into the run via either the persistent `<projectDir>/overnight-env/.env` file (uploaded once via `POST /api/projects/:id/overnight/env`) or the per-run `env: { KEY: "value" }` map in the enqueue body. Typical keys: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `EVAL_MODEL`, `MUTATE_MODEL`.
+
 The local `claude-overnight-evolve` / `npm run evolve` is for smoke-testing the engine only. Full design: [docs/prompt-evolution-research.md](docs/prompt-evolution-research.md).
 
 ## License
