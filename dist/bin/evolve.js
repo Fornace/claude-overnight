@@ -35,6 +35,7 @@ Options:
                           mcp-supervision | mcp-stuck (default: plan)
   --base-url <url>        API base URL override
   --auth-token <token>    Auth token override
+  --run-id <id>           Preset run id (default: auto-generated)
 `);
     process.exit(0);
 }
@@ -102,6 +103,10 @@ function parseArgs() {
                 opts.authToken = v;
                 i++;
                 break;
+            case "--run-id":
+                opts.runId = v;
+                i++;
+                break;
         }
     }
     if (opts.target === "mcp-browser" && !opts.cases) {
@@ -159,6 +164,7 @@ async function main() {
         authToken: opts.authToken,
         seedText,
         target: opts.target,
+        runId: opts.runId,
         onLog: (text) => console.log(text),
     });
     console.log("\n=== BEST VARIANT ===");

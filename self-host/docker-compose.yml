@@ -1,0 +1,41 @@
+# Two services, same image:
+#   - `evolve`: one-shot run, invoked via `docker compose run evolve <flags>`
+#   - `server`: long-running HTTP server (enqueue + browse runs) on :8787
+#
+# Runs are persisted under ./out on the host (bind-mounted to /out in the
+# container). Point ./workspace at a target repo if you want to evolve a
+# prompt that lives outside the engine (e.g. --target mcp-browser).
+
+services:
+  evolve:
+    build:
+      context: .
+      args:
+        CLAUDE_OVERNIGHT_VERSION: ${CLAUDE_OVERNIGHT_VERSION:-latest}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./out:/out
+      - ./workspace:/workspace
+    profiles: ["oneshot"]
+
+  server:
+    build:
+      context: .
+      args:
+        CLAUDE_OVERNIGHT_VERSION: ${CLAUDE_OVERNIGHT_VERSION:-latest}
+    entrypoint: ["node", "/srv/server.mjs"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: "8787"
+      SELF_HOST_BIND: "0.0.0.0"
+    ports:
+      - "${SELF_HOST_PORT:-8787}:8787"
+    volumes:
+      - ./out:/out
+      - ./workspace:/workspace
+      - ./server.mjs:/srv/server.mjs:ro
+    restart: unless-stopped
