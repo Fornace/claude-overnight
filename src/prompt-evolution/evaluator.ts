@@ -25,6 +25,8 @@ export interface EvalOpts {
   maxTokens?: number;
   /** Concurrency for parallel case evaluation */
   concurrency?: number;
+  /** Per-call HTTP timeout. Defaults to 120s — bad endpoints can hang otherwise. */
+  timeoutMs?: number;
   /** Optional callback for progress */
   onProgress?: (done: number, total: number, caseName: string, variantId: string) => void;
 }
@@ -157,6 +159,7 @@ async function runSingle(job: EvalJob, opts: EvalOpts): Promise<EvaluationResult
       method: "POST",
       headers,
       body,
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
     });
 
     if (!res.ok) {
