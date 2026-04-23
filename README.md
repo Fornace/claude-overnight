@@ -576,10 +576,11 @@ A fixed-plan `tasks.json` (without `flexiblePlan: true`) bypasses orchestration 
 
 The `src/prompt-evolution/` engine and `claude-overnight-evolve` CLI power a self-evolution pipeline that optimises prompts (the planner prompt here, MCP-browser's supervisor prompts, or any prompt in a user's repo) via Pareto-frontier mutation with LLM-as-judge and heuristic scoring.
 
-**Multi-hour runs aren't meant for your laptop.** Two ways to run it:
+**Multi-hour runs aren't meant for your laptop.** Three ways to run it:
 
 1. **`npx claude-overnight-evolve …`** — quickest. Fine for smoke tests or short runs; needs `ANTHROPIC_API_KEY` in env and keeps running only as long as your shell is open. Output: `~/.claude-overnight/prompt-evolution/<runId>/`.
 2. **Self-hosted Docker** — [`self-host/`](self-host/README.md) ships a tiny runner image + optional HTTP server (enqueue + read-back) you can run on any VPS. Laptop can be off.
+3. **Fornace hosted** — already have a fornace project? `POST /api/projects/:id/prompt-evolution/enqueue` runs the same engine in your project's container. Body: `{ prompt, target, evalModel, generations, population, env?, anthropicApiKey?, anthropicBaseUrl?, anthropicModel? }`. Poll `GET /:runId` for status + inline `report.md`. See the [fornace integration doc § 2.6](https://github.com/Fornace/MCP-Browser/blob/main/docs/integration.md#26-prompt-evolution--apiprojectsidprompt-evolution).
 
 Experiment credentials — any Anthropic-compatible provider (Anthropic direct, OpenRouter, Kimi, DashScope, a local proxy) — are injected via env vars: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `EVAL_MODEL`, `MUTATE_MODEL`. Self-host reads them from `self-host/.env` (or per-run `env:` in the enqueue body).
 
