@@ -61,6 +61,15 @@ export interface EvolveOpts {
         cap: number;
         threshold?: number;
     };
+    /**
+     * Fraction of cases to hold out for a post-evolution validation eval.
+     * When > 0 and < 1: evolution (mutation + curation) sees only the
+     * train side; the final reported numbers are on the held-out test
+     * side, which fixes the selection bias in "best gmean after picking
+     * the best". Split is deterministic by case hash, so the same case
+     * always lands on the same side across reruns.
+     */
+    testFraction?: number;
     /** Optional llm-judge — replaces the heuristic content score for top-N variants each gen. */
     judge?: JudgeOpts & {
         topN?: number;

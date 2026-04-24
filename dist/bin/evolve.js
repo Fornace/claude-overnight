@@ -18,6 +18,7 @@
 import { evolvePrompt } from "../prompt-evolution/index.js";
 import { PLAN_CASES } from "../prompt-evolution/fixtures/plan-cases.js";
 import { harvestRealCases } from "../prompt-evolution/fixtures/harvest.js";
+import { generateCases } from "../prompt-evolution/fixtures/generate.js";
 import { scenariosToCases, PLANNING_SCENARIOS, REVIEW_SCENARIOS, SUPERVISION_SCENARIOS, STUCK_SCENARIOS, hydrateCases, extractPrompt, } from "../prompt-evolution/adapters/mcp-browser.js";
 function help() {
     process.stdout.write(`Usage: claude-overnight-evolve [options]
@@ -47,6 +48,11 @@ Options:
   --harvest-only          Use ONLY harvested real objectives (fails if none found)
   --harvest-limit <n>     Max harvested cases (default: 10)
   --prompts <list>        Comma-separated prompt paths to evolve in sequence
+  --test-split <f>        Hold out fraction f of cases for a selection-bias-free
+                          final eval (default: 0 = no split). Use 0.3 for rigor.
+  --case-pool <n>         Target total case count; generates synthetic cases via
+                          LLM to top up if the current pool is smaller.
+  --gen-model <model>     Model used by the case generator (default: eval-model)
 
 Subcommands:
   claude-overnight-evolve diff <runIdA> <runIdB>
@@ -78,6 +84,7 @@ function parseArgs() {
         harvest: false,
         harvestOnly: false,
         harvestLimit: 10,
+        testSplit: 0,
         baseUrl: process.env.ANTHROPIC_BASE_URL,
         authToken: process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
     };
@@ -169,6 +176,18 @@ function parseArgs() {
                 opts.prompts = v.split(",").map((s) => s.trim()).filter(Boolean);
                 i++;
                 break;
+            case "--test-split":
+                opts.testSplit = parseFloat(v);
+                i++;
+                break;
+            case "--case-pool":
+                opts.casePool = parseInt(v, 10);
+                i++;
+                break;
+            case "--gen-model":
+                opts.genModel = v;
+                i++;
+                break;
             case "--base-url":
                 opts.baseUrl = v;
                 i++;
@@ -256,6 +275,27 @@ async function evolveOne(opts) {
                 cases = cases.concat(harvested);
             }
         }
+        // Top up to --case-pool with LLM-generated synthetic cases. The generator
+        // caches its output so successive runs share the pool — real cost is
+        // paid once, amortised across every subsequent round.
+        if (opts.casePool && cases.length < opts.casePool) {
+            console.log(`  (generating cases to reach pool size ${opts.casePool}…)`);
+            try {
+                const generated = await generateCases({
+                    targetCount: opts.casePool - cases.length,
+                    model: opts.genModel ?? opts.evalModel,
+                    baseUrl: opts.baseUrl,
+                    authToken: opts.authToken,
+                    promptPath,
+                    existing: cases,
+                });
+                console.log(`  (generated: +${generated.length} synthetic cases)`);
+                cases = cases.concat(generated);
+            }
+            catch (err) {
+                console.log(`  (case generation failed: ${err.message})`);
+            }
+        }
     }
     console.log(`Evolution config:`);
     console.log(`  target:      ${opts.target}`);
@@ -282,6 +322,7 @@ async function evolveOne(opts) {
         adaptiveReps: opts.adaptiveCap
             ? { cap: opts.adaptiveCap, threshold: opts.adaptiveThreshold }
             : undefined,
+        testFraction: opts.testSplit > 0 ? opts.testSplit : undefined,
         judge: opts.useJudge
             ? {
                 model: opts.judgeModel ?? opts.evalModel,

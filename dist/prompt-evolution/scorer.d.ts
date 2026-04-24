@@ -38,6 +38,26 @@ export declare function aggregateReps(results: EvaluationResult[]): {
  */
 export declare function bootstrapCI(values: number[], iterations?: number): [low: number, high: number];
 /**
+ * Paired sign-flip permutation test for the null hypothesis mean(diffs) = 0.
+ *
+ * More honest than "95% CIs overlap" for ranking variants:
+ *   - non-parametric (no normality assumption — important for our bimodal
+ *     parse-failure data)
+ *   - respects pairing (same case, different variants → paired samples)
+ *   - accounts for dependence between within-case outcomes
+ *
+ * Input: per-case paired differences (variantA_score - variantB_score).
+ * Output: two-tailed p-value under H0: mean difference = 0.
+ *
+ * With `iterations=10000` the p-value has ±0.01 resolution, plenty for
+ * the α=0.05 / α=0.01 decision thresholds we care about.
+ */
+export declare function pairedPermutationTest(diffs: number[], iterations?: number): {
+    pValue: number;
+    observed: number;
+    effectSize: number;
+};
+/**
  * Kendall τ rank correlation between two same-length orderings of ids.
  * Returns 1.0 for identical rankings, -1.0 for reversed, 0 for random.
  * We use this to check whether splitting the reps in half produces the

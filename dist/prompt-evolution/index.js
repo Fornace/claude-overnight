@@ -46,6 +46,13 @@ export async function evolvePrompt(opts) {
         caseNames: opts.cases.map((c) => c.name),
     });
     log(`Run directory: ~/.claude-overnight/prompt-evolution/${runId}/`);
+    // ── 0.5 Deterministic train/test split ──
+    // Hold out a fraction of cases for the final validation eval so the
+    // reported "winner" isn't chosen on the same data we measure it with.
+    const { trainCases, testCases } = splitCases(opts.cases, opts.testFraction ?? 0);
+    if (testCases.length > 0) {
+        log(`Train/test split: ${trainCases.length} train / ${testCases.length} held-out test`);
+    }
     // ── 1. Seed population from existing variants or seed text ──
     let population = opts.seedText
         ? [{ id: "default", promptPath: opts.promptPath, generation: 0, text: opts.seedText }]
@@ -75,11 +82,11 @@ export async function evolvePrompt(opts) {
             },
             onBatchProgress: (msg) => log(`  [batch] ${msg}`),
         };
-        const matrix = await buildMatrix(population, opts.cases, evalOpts);
+        const matrix = await buildMatrix(population, trainCases, evalOpts);
         generationMatrices.push(matrix);
         snapshotPrompts(runId, matrix);
         appendMatrix(runId, gen, matrix);
-        log(formatMatrix(matrix, opts.cases.map((c) => c.name)));
+        log(formatMatrix(matrix, trainCases.map((c) => c.name)));
         // Track best
         const genBest = matrix.reduce((a, b) => (a.gmean > b.gmean ? a : b));
         if (!bestOverall || genBest.gmean > bestOverall.gmean + 0.001) {
@@ -176,9 +183,11 @@ export async function evolvePrompt(opts) {
             appendLearning(runId, newEntries);
         population = nextPop;
     }
-    // Final evaluation of surviving population
-    log(`\n=== Final evaluation ===`);
-    const finalMatrix = await buildMatrix(population, opts.cases, {
+    // Final evaluation of surviving population (on train cases — these are
+    // the numbers used for curator decisions and for the "last generation"
+    // report row). The test-set eval is a separate pass after this.
+    log(`\n=== Final evaluation (train) ===`);
+    const finalMatrix = await buildMatrix(population, trainCases, {
         model: opts.evalModel,
         models: opts.evalModels,
         baseUrl: opts.baseUrl,
@@ -195,7 +204,29 @@ export async function evolvePrompt(opts) {
     generationMatrices.push(finalMatrix);
     snapshotPrompts(runId, finalMatrix);
     appendMatrix(runId, generations, finalMatrix);
-    log(formatMatrix(finalMatrix, opts.cases.map((c) => c.name)));
+    log(formatMatrix(finalMatrix, trainCases.map((c) => c.name)));
+    // Held-out test evaluation — the honest, selection-bias-free number.
+    // Only the post-curation survivors get evaluated here (no mutation,
+    // no curator re-runs), and the report's executive summary leads with
+    // these numbers when available.
+    let testMatrix;
+    if (testCases.length > 0) {
+        log(`\n=== Held-out test evaluation (${testCases.length} cases) ===`);
+        testMatrix = await buildMatrix(population, testCases, {
+            model: opts.evalModel,
+            models: opts.evalModels,
+            baseUrl: opts.baseUrl,
+            authToken: opts.authToken,
+            concurrency: opts.concurrency ?? 8,
+            repetitions: opts.repetitions,
+            batch: opts.batch,
+            adaptiveReps: opts.adaptiveReps,
+            runId,
+            generation: generations + 1,
+            onBatchProgress: (msg) => log(`  [batch-test] ${msg}`),
+        });
+        log(formatMatrix(testMatrix, testCases.map((c) => c.name)));
+    }
     const best = finalMatrix.reduce((a, b) => (a.gmean > b.gmean ? a : b));
     const historicalBest = bestOverall && bestOverall.gmean > best.gmean ? bestOverall : best;
     const result = {
@@ -215,7 +246,7 @@ export async function evolvePrompt(opts) {
         repetitions: opts.repetitions,
         generations,
         baselineText,
-    }, result, generationMatrices);
+    }, result, generationMatrices, testMatrix);
     const { writeFileSync } = await import("node:fs");
     const { runDir } = await import("./persistence.js");
     const reportPath = `${runDir(runId)}/report.md`;
@@ -226,6 +257,22 @@ export async function evolvePrompt(opts) {
     return result;
 }
 // ── Helpers ──
+/**
+ * Deterministic hash-based split — the same case always lands on the
+ * same side across runs, so the cache-built case pool remains coherent
+ * whatever the evolution history.
+ */
+function splitCases(all, testFraction) {
+    if (testFraction <= 0 || testFraction >= 1 || all.length === 0) {
+        return { trainCases: all, testCases: [] };
+    }
+    const sorted = [...all].sort((a, b) => a.hash.localeCompare(b.hash));
+    const testCount = Math.max(1, Math.round(sorted.length * testFraction));
+    return {
+        testCases: sorted.slice(0, testCount),
+        trainCases: sorted.slice(testCount),
+    };
+}
 function seedPopulation(promptPath) {
     const variants = [];
     // Always seed the default (no variant)

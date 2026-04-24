@@ -9,6 +9,7 @@
  *   - explicit parse-failure count per variant
  */
 
+import { gmean as scoreGmean, pairedPermutationTest } from "./scorer.js";
 import type { VariantRow, EvolutionResult, ScoreDimensions } from "./types.js";
 
 export interface ReportOpts {
@@ -26,6 +27,7 @@ export function generateReport(
   opts: ReportOpts,
   result: EvolutionResult,
   generationMatrices: VariantRow[][],
+  testMatrix?: VariantRow[],
 ): string {
   const best = result.bestVariant;
   const baseline = generationMatrices[0]?.find((r) => r.variantId === "default" || r.variantId === "baseline");
@@ -49,24 +51,87 @@ export function generateReport(
   lines.push(`| Improvement | ${baseline ? `${((best.gmean - baseline.gmean) * 100).toFixed(1)}pp` : "N/A"} |`);
   lines.push("");
 
+  // When we have held-out test cases, lead the summary with those numbers
+  // — they're the selection-bias-free ground truth. Train scores get a
+  // secondary callout showing overfit (train >> test) if present.
+  const testBest = testMatrix
+    ? testMatrix.find((r) => r.variantId === best.variantId) ?? testMatrix.reduce((a, b) => (a.gmean > b.gmean ? a : b))
+    : undefined;
+  const testBaseline = testMatrix
+    ? testMatrix.find((r) => r.variantId === "default" || r.variantId === "baseline")
+    : undefined;
+
+  // Paired permutation test on winner vs baseline — proper significance
+  // check instead of the conservative "CIs overlap" heuristic.
+  let permP: number | undefined;
+  let permDelta: number | undefined;
+  if (testBest && testBaseline && testBest.variantId !== testBaseline.variantId) {
+    const diffs = collectPairedDifferences(testBest, testBaseline);
+    if (diffs.length >= 3) {
+      const perm = pairedPermutationTest(diffs, 10000);
+      permP = perm.pValue;
+      permDelta = perm.observed;
+    }
+  }
+
   lines.push("## Executive Summary");
   lines.push("");
-  const bestCI = best.gmeanCI ? ` (95% CI ${(best.gmeanCI[0] * 100).toFixed(1)}–${(best.gmeanCI[1] * 100).toFixed(1)}%)` : "";
-  const bestLine = `Best variant scores **${(best.gmean * 100).toFixed(1)}%**${bestCI}`;
-  if (baseline && best.gmean > baseline.gmean) {
+  if (testBest) {
+    const trainBest = best;
+    const overfit = trainBest.gmean - testBest.gmean;
+    const overfitWarn = overfit > 0.08
+      ? ` · **overfit risk** (train ${(trainBest.gmean * 100).toFixed(1)}% vs test ${(testBest.gmean * 100).toFixed(1)}%, Δ ${(overfit * 100).toFixed(1)}pp)`
+      : overfit > 0.03
+        ? ` (train/test gap ${(overfit * 100).toFixed(1)}pp — modest)`
+        : " (train/test agree — robust)";
+    const testCI = testBest.gmeanCI ? ` (CI ${(testBest.gmeanCI[0] * 100).toFixed(1)}–${(testBest.gmeanCI[1] * 100).toFixed(1)}%)` : "";
+    lines.push(`**Held-out test: best variant \`${testBest.variantId}\` scores ${(testBest.gmean * 100).toFixed(1)}%${testCI}**${overfitWarn}.`);
+    if (testBaseline && permP != null && permDelta != null) {
+      const sig = permP < 0.01 ? "**highly significant**"
+        : permP < 0.05 ? "**significant**"
+        : permP < 0.10 ? "marginal"
+        : "**not significant** (could be noise)";
+      lines.push("");
+      lines.push(`Winner Δ ${(permDelta * 100).toFixed(1)}pp over baseline on held-out cases, paired permutation p = **${permP.toFixed(3)}** — ${sig}.`);
+    }
+  } else if (baseline && best.gmean > baseline.gmean) {
+    const bestCI = best.gmeanCI ? ` (95% CI ${(best.gmeanCI[0] * 100).toFixed(1)}–${(best.gmeanCI[1] * 100).toFixed(1)}%)` : "";
     const blCI = baseline.gmeanCI ? ` (CI ${(baseline.gmeanCI[0] * 100).toFixed(1)}–${(baseline.gmeanCI[1] * 100).toFixed(1)}%)` : "";
     const overlap = baseline.gmeanCI && best.gmeanCI && baseline.gmeanCI[1] > best.gmeanCI[0];
-    const reliability = overlap ? " — **CIs overlap, ranking is not statistically reliable**" : "";
-    lines.push(`${bestLine}, Δ **${((best.gmean - baseline.gmean) * 100).toFixed(1)}pp** over baseline ${(baseline.gmean * 100).toFixed(1)}%${blCI}${reliability}.`);
+    const reliability = overlap ? " — **CIs overlap, ranking may not be reliable** (consider --test-split for a held-out eval)" : "";
+    lines.push(`Best variant scores **${(best.gmean * 100).toFixed(1)}%**${bestCI}, Δ **${((best.gmean - baseline.gmean) * 100).toFixed(1)}pp** over baseline ${(baseline.gmean * 100).toFixed(1)}%${blCI}${reliability}.`);
+    lines.push("");
+    lines.push(`> **Note**: scored on the same cases used to pick the winner — selection bias inflates this number. Add \`--test-split 0.3\` to get a held-out eval with a proper paired permutation p-value.`);
   } else if (baseline) {
-    lines.push(`No improvement over baseline. ${bestLine} (baseline: ${(baseline.gmean * 100).toFixed(1)}%).`);
+    lines.push(`No improvement over baseline. Best variant scores **${(best.gmean * 100).toFixed(1)}%** (baseline: ${(baseline.gmean * 100).toFixed(1)}%).`);
   } else {
-    lines.push(`${bestLine}.`);
+    lines.push(`Best variant scores **${(best.gmean * 100).toFixed(1)}%**.`);
   }
   if (best.rankStability != null) {
     const solid = best.rankStability >= 0.7;
     lines.push(`Rank stability τ = **${best.rankStability.toFixed(2)}**${solid ? " — ranking agrees across rep-split halves." : " — **ranking unstable, add more reps**."}`);
   }
+
+  // Full train/test table when held-out eval ran.
+  if (testMatrix && testMatrix.length > 0) {
+    lines.push("");
+    lines.push("## Held-Out Test Results");
+    lines.push("");
+    lines.push("These cases were never used for mutation or curation. Ranking here is selection-bias-free.");
+    lines.push("");
+    lines.push(`| Variant | test gmean | train gmean | Δ (overfit) | parse | schema | content |`);
+    lines.push(`|---------|-----------|-------------|-------------|-------|--------|---------|`);
+    for (const tr of [...testMatrix].sort((a, b) => b.gmean - a.gmean)) {
+      const trainRow = generationMatrices[generationMatrices.length - 1]?.find((r) => r.variantId === tr.variantId);
+      const overfit = trainRow ? (trainRow.gmean - tr.gmean) * 100 : 0;
+      lines.push(
+        `| ${tr.variantId.slice(0, 16)} | ${(tr.gmean * 100).toFixed(1)} | ` +
+        `${trainRow ? (trainRow.gmean * 100).toFixed(1) : "—"} | ${overfit >= 0 ? "+" : ""}${overfit.toFixed(1)}pp | ` +
+        `${pct(tr.aggregate.parse)} | ${pct(tr.aggregate.schema)} | ${pct(tr.aggregate.content)} |`,
+      );
+    }
+  }
+
   if (reps < 2) {
     lines.push("");
     lines.push(`> **Noise warning**: reps=1 means each variant was evaluated once per case. Two scores within a few points may not differ reliably. Re-run with \`repetitions >= 3\` to establish a noise floor.`);
@@ -201,6 +266,21 @@ export function generateReport(
 }
 
 function pct(n: number): string { return (n * 100).toFixed(0); }
+
+/**
+ * Collect per-case paired gmean differences between two variant rows.
+ * Keys are case hashes (prefix if multi-model) so we pair the same
+ * case across both variants.
+ */
+function collectPairedDifferences(a: VariantRow, b: VariantRow): number[] {
+  const out: number[] = [];
+  for (const [key, rA] of a.results) {
+    const rB = b.results.get(key);
+    if (!rB) continue;
+    out.push(scoreGmean(rA.scores) - scoreGmean(rB.scores));
+  }
+  return out;
+}
 
 /** Pareto frontier over (content, costEfficiency) — maximize both. */
 function paretoFrontier(rows: VariantRow[]): VariantRow[] {

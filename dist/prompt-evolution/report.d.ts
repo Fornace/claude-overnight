@@ -19,4 +19,4 @@ export interface ReportOpts {
     generations: number;
     baselineText?: string;
 }
-export declare function generateReport(opts: ReportOpts, result: EvolutionResult, generationMatrices: VariantRow[][]): string;
+export declare function generateReport(opts: ReportOpts, result: EvolutionResult, generationMatrices: VariantRow[][], testMatrix?: VariantRow[]): string;

@@ -218,6 +218,50 @@ export function bootstrapCI(values: number[], iterations = 1000): [low: number, 
 }
 
 /**
+ * Paired sign-flip permutation test for the null hypothesis mean(diffs) = 0.
+ *
+ * More honest than "95% CIs overlap" for ranking variants:
+ *   - non-parametric (no normality assumption — important for our bimodal
+ *     parse-failure data)
+ *   - respects pairing (same case, different variants → paired samples)
+ *   - accounts for dependence between within-case outcomes
+ *
+ * Input: per-case paired differences (variantA_score - variantB_score).
+ * Output: two-tailed p-value under H0: mean difference = 0.
+ *
+ * With `iterations=10000` the p-value has ±0.01 resolution, plenty for
+ * the α=0.05 / α=0.01 decision thresholds we care about.
+ */
+export function pairedPermutationTest(diffs: number[], iterations = 10000): {
+  pValue: number;
+  observed: number;
+  effectSize: number;
+} {
+  if (diffs.length === 0) return { pValue: 1, observed: 0, effectSize: 0 };
+  const n = diffs.length;
+  const observed = diffs.reduce((a, b) => a + b, 0) / n;
+  const absObserved = Math.abs(observed);
+
+  // σ_d / √n standardised effect (Cohen's d for paired data, loosely).
+  const mean = observed;
+  const variance = diffs.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, n - 1);
+  const stddev = Math.sqrt(variance);
+  const effectSize = stddev > 0 ? observed / stddev : 0;
+
+  let asExtreme = 0;
+  for (let iter = 0; iter < iterations; iter++) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      // Flip sign of each paired diff with 50% probability → null distribution
+      // over all 2^n sign patterns (we sample from it).
+      sum += (Math.random() < 0.5 ? -1 : 1) * diffs[i];
+    }
+    if (Math.abs(sum / n) >= absObserved) asExtreme++;
+  }
+  return { pValue: asExtreme / iterations, observed, effectSize };
+}
+
+/**
  * Kendall τ rank correlation between two same-length orderings of ids.
  * Returns 1.0 for identical rankings, -1.0 for reversed, 0 for random.
  * We use this to check whether splitting the reps in half produces the
