@@ -260,8 +260,17 @@ async function evolveOne(opts: Opts): Promise<{ runId: string; bestVariant: { gm
         cases = cases.concat(generated);
       } catch (err: unknown) {
         const msg = (err as Error).message ?? String(err);
-        console.log(`\n  ⚠ case generation failed: ${msg.slice(0, 500)}`);
-        console.log(`  Falling back to the existing ${cases.length} case(s). Try --gen-model with an Anthropic-compatible JSON-reliable model (e.g. claude-haiku-4-5) if this persists.\n`);
+        // When the user explicitly asked for --case-pool, fall-back to the
+        // 10-case default silently would be dishonest — the statistical
+        // power they expected won't be there. Fail loud so the error lands
+        // in the fornace `error` field (only surfaced on non-zero exit).
+        throw new Error(
+          `Case generation failed: ${msg.slice(0, 1500)}\n\n` +
+          `You asked for --case-pool ${opts.casePool}, but the generator ` +
+          `couldn't produce valid cases via ${opts.genModel ?? opts.evalModel}. ` +
+          `Try --gen-model claude-haiku-4-5 (or another JSON-reliable model), ` +
+          `or drop --case-pool to proceed with the synthetic fixture alone.`,
+        );
       }
     }
   }
