@@ -41,33 +41,72 @@ export async function generateCases(opts) {
         model: opts.model,
         baseUrl: opts.baseUrl,
         authToken: opts.authToken,
-        maxTokens: Math.max(4096, askFor * 120),
+        maxTokens: Math.max(8192, askFor * 200),
         timeoutMs: 120_000,
     };
     const { raw } = await defaultCallModel(prompt, undefined, callOpts);
     const parsed = attemptJsonParse(raw);
-    const items = Array.isArray(parsed) ? parsed : parsed?.cases;
+    const items = coerceArray(parsed);
     if (!Array.isArray(items)) {
-        throw new Error(`Generator returned non-array response (${raw.slice(0, 200)})`);
+        throw new Error(`Generator returned no JSON array. First 500 chars of response:\n${raw.slice(0, 500)}`);
     }
     const newCases = [];
     const seen = new Set([
         ...existingSigs,
         ...cached.map((c) => signatureOf(String(c.vars.objective))),
     ]);
+    let rejected = 0;
     for (const it of items) {
         const parsed = parseGenerated(it);
-        if (!parsed)
+        if (!parsed) {
+            rejected++;
             continue;
+        }
         const sig = signatureOf(parsed.objective);
         if (seen.has(sig))
             continue;
         seen.add(sig);
         newCases.push(toCase(parsed, opts.promptPath));
     }
+    if (newCases.length === 0) {
+        // Silent fall-through hid this in 1.57.0-1.57.2. Throw with diagnostics
+        // so the CLI's loud error handler surfaces the real reason.
+        throw new Error(`Generator returned ${items.length} item(s) but none passed validation ` +
+            `(${rejected} rejected). Check the tier/objective/budget schema. ` +
+            `First 500 chars of raw:\n${raw.slice(0, 500)}`);
+    }
     const combined = cached.concat(newCases);
     writeCache(cachePath, combined);
     return combined.slice(0, opts.targetCount);
+}
+/**
+ * Coerce a parsed JSON value into an array of objectives. Accepts:
+ *   - Top-level array: [ {tier, objective, budget}, … ]
+ *   - Wrapper object under a known key: {cases: […]} | {tasks: […]} |
+ *     {items: […]} | {data: […]} | {objectives: […]}
+ *   - Array of strings: treat each string as an objective with budget
+ *     inferred from length (TIGHT < 80 chars, LARGE > 160 chars).
+ */
+function coerceArray(parsed) {
+    if (Array.isArray(parsed))
+        return parsed.map(stringToRecord);
+    if (parsed && typeof parsed === "object") {
+        const wrapperKeys = ["cases", "tasks", "items", "data", "objectives"];
+        const obj = parsed;
+        for (const k of wrapperKeys) {
+            if (Array.isArray(obj[k]))
+                return obj[k].map(stringToRecord);
+        }
+    }
+    return null;
+}
+function stringToRecord(it) {
+    if (typeof it !== "string")
+        return it;
+    const len = it.length;
+    const tier = len < 80 ? "TIGHT" : len > 160 ? "LARGE" : "STANDARD";
+    const budget = tier === "TIGHT" ? 4 : tier === "LARGE" ? 30 : 10;
+    return { tier, objective: it, budget };
 }
 function buildGeneratorPrompt(count) {
     return `You are generating benchmark test cases for a planner prompt evaluation.
@@ -98,14 +137,21 @@ function parseGenerated(raw) {
     if (typeof raw !== "object" || raw == null)
         return null;
     const obj = raw;
-    const tier = obj.tier;
-    const objective = obj.objective;
-    const budget = obj.budget;
-    if (tier !== "TIGHT" && tier !== "STANDARD" && tier !== "LARGE")
+    const tierRaw = typeof obj.tier === "string" ? obj.tier.toUpperCase() : "";
+    const tier = tierRaw === "TIGHT" || tierRaw === "SMALL" ? "TIGHT"
+        : tierRaw === "LARGE" || tierRaw === "BIG" ? "LARGE"
+            : tierRaw === "STANDARD" || tierRaw === "MEDIUM" ? "STANDARD"
+                : null;
+    const objective = typeof obj.objective === "string" ? obj.objective
+        : typeof obj.prompt === "string" ? obj.prompt
+            : typeof obj.task === "string" ? obj.task
+                : null;
+    const budget = typeof obj.budget === "number" ? obj.budget
+        : typeof obj.size === "number" ? obj.size
+            : tier === "TIGHT" ? 4 : tier === "LARGE" ? 30 : 10;
+    if (!tier || !objective || objective.length < 10)
         return null;
-    if (typeof objective !== "string" || objective.length < 10)
-        return null;
-    if (typeof budget !== "number" || budget < 1 || budget > 100)
+    if (budget < 1 || budget > 100)
         return null;
     return { tier, objective: objective.trim(), budget };
 }
