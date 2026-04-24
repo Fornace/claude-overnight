@@ -12,7 +12,7 @@
  *   - openrouter → NO batch support; throws (caller must fall back to online)
  *
  * Custom IDs route results back to the right (variant, case, model, rep)
- * cell. The evaluator builds ids like `v0:h_abc:kimi-k2-6:r0`.
+ * cell. The evaluator builds ids like `v0:h_abc:kimi-for-coding:r0`.
  *
  * Poll state is persisted via `persistBatchState` so a crashed or
  * restarted run can resume without resubmitting.

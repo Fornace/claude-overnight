@@ -8,7 +8,7 @@
  *
  * Examples:
  *   claude-overnight-evolve --prompt 10_planning/10-3_plan --eval-model claude-haiku-4-5 --generations 3
- *   claude-overnight-evolve --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-k2-6
+ *   claude-overnight-evolve --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-for-coding
  *
  * Requires ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) in env. When `--target
  * mcp-browser` is used the cwd must be the MCP-browser repo root (so
@@ -41,7 +41,10 @@ Options:
   --prompt <path>         Prompt file path (claude-overnight)
   --prompt-kind <kind>    MCP-browser prompt kind: planning | review | evolution |
                           goal-refinement | plan-supervision | simple-supervision | stuck-analysis
-  --eval-model <model>    Fast model for evaluation (default: claude-haiku-4-5)
+  --eval-model <model>    Fast model for evaluation (default: claude-haiku-4-5).
+                          For Kimi endpoints use "kimi-for-coding" (stable alias,
+                          auto-upgrades as flagship revs). For Moonshot platform
+                          API use "kimi-k2.6" (dot, not dash).
   --eval-models <list>    Comma-separated list to run cross-model (overrides --eval-model)
   --mutate-model <model>  Smarter model for mutation (defaults to eval-model)
   --generations <n>       Number of evolution generations (default: 10)

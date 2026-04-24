@@ -12,13 +12,16 @@
  *   - openrouter → NO batch support; throws (caller must fall back to online)
  *
  * Custom IDs route results back to the right (variant, case, model, rep)
- * cell. The evaluator builds ids like `v0:h_abc:kimi-k2-6:r0`.
+ * cell. The evaluator builds ids like `v0:h_abc:kimi-for-coding:r0`.
  *
  * Poll state is persisted via `persistBatchState` so a crashed or
  * restarted run can resume without resubmitting.
  */
 
 import type { CallModelResult } from "./transport.js";
+import { VERSION } from "../core/_version.js";
+
+const USER_AGENT = `claude-overnight-evolve/${VERSION}`;
 
 export interface BatchJob {
   customId: string;
@@ -59,9 +62,17 @@ export type BatchProvider = "anthropic" | "openai-compatible" | "unsupported";
 export function detectBatchProvider(baseUrl: string | undefined): BatchProvider {
   const url = (baseUrl ?? "https://api.anthropic.com").toLowerCase();
   if (/(^|\/\/)(api\.)?anthropic\.com/.test(url)) return "anthropic";
+  // Providers with no batch support — caller auto-falls back to online.
+  // - OpenRouter: no batch API at all.
+  // - api.kimi.com/coding: Moonshot's coding-specific endpoint; synchronous
+  //   only (30 concurrent, 300-1200 req/5hr) with no /v1/files upload flow.
+  //   Moonshot's generic platform.moonshot.ai might have batch; this one
+  //   doesn't.
   if (/openrouter/.test(url)) return "unsupported";
-  // Everything else that speaks /v1/chat/completions — OpenAI, Kimi, Moonshot,
-  // DeepSeek — exposes an OpenAI-compatible batch endpoint.
+  if (/(api\.)?kimi\.com\/coding/.test(url)) return "unsupported";
+  // Everything else that speaks /v1/chat/completions — OpenAI, DeepSeek,
+  // DashScope in OpenAI-compat mode — exposes an OpenAI-compatible batch
+  // endpoint we can ride.
   return "openai-compatible";
 }
 
@@ -86,6 +97,7 @@ async function runAnthropicBatch(jobs: BatchJob[], opts: BatchOpts): Promise<Map
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Authorization": `Bearer ${authToken}`,
+    "User-Agent": USER_AGENT,
     "anthropic-version": "2023-06-01",
     "anthropic-beta": "message-batches-2024-09-24",
   };
@@ -166,7 +178,10 @@ async function runAnthropicBatch(jobs: BatchJob[], opts: BatchOpts): Promise<Map
 async function runOpenAIBatch(jobs: BatchJob[], opts: BatchOpts): Promise<Map<string, CallModelResult>> {
   const baseUrl = (opts.baseUrl ?? "https://api.openai.com").replace(/\/$/, "");
   const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
-  const authHeaders: Record<string, string> = { "Authorization": `Bearer ${authToken}` };
+  const authHeaders: Record<string, string> = {
+    "Authorization": `Bearer ${authToken}`,
+    "User-Agent": USER_AGENT,
+  };
 
   let batchId = opts.resumeBatchId;
   let outputFileId: string | undefined;
@@ -181,7 +196,7 @@ async function runOpenAIBatch(jobs: BatchJob[], opts: BatchOpts): Promise<Map<st
         custom_id: j.customId,
         method: "POST",
         url: "/v1/chat/completions",
-        body: { model: j.model, max_tokens: opts.maxTokens ?? 4096, messages },
+        body: { model: j.model, max_tokens: opts.maxTokens ?? 4096, max_completion_tokens: opts.maxTokens ?? 4096, messages },
       });
     }).join("\n");
 

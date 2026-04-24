@@ -9,6 +9,10 @@
  * run the same eval against Haiku, Kimi, and OpenRouter without a rewrite.
  */
 
+import { VERSION } from "../core/_version.js";
+
+const USER_AGENT = `claude-overnight-evolve/${VERSION}`;
+
 export interface CallModelOpts {
   model: string;
   baseUrl?: string;
@@ -39,13 +43,18 @@ export async function defaultCallModel(
   const baseUrl = (opts.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
   const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
   const isAnthropic = /^https?:\/\/(api\.)?anthropic\.com/i.test(baseUrl);
-  const isKimi = /kimi\.com/i.test(baseUrl);
 
+  // Identify ourselves honestly. Kimi's coding-endpoint docs explicitly say
+  // "Tampering with the client identifier (User-Agent) is considered a
+  // violation." The previous "Kilo-Code/1.0" was impersonating a third-party
+  // tool; we now send our real binary name + version.
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Authorization": `Bearer ${authToken}`,
+    "User-Agent": USER_AGENT,
   };
-  if (isKimi) headers["User-Agent"] = "Kilo-Code/1.0";
+
+  const maxOut = opts.maxTokens ?? 4096;
 
   let endpoint: string;
   let body: string;
@@ -54,7 +63,7 @@ export async function defaultCallModel(
     headers["anthropic-version"] = "2023-06-01";
     const payload: Record<string, unknown> = {
       model: opts.model,
-      max_tokens: opts.maxTokens ?? 4096,
+      max_tokens: maxOut, // Anthropic uses max_tokens, not max_completion_tokens.
       messages: [{ role: "user", content: userText }],
     };
     if (systemText) payload.system = systemText;
@@ -64,9 +73,14 @@ export async function defaultCallModel(
     const messages: Array<{ role: string; content: string }> = [];
     if (systemText) messages.push({ role: "system", content: systemText });
     messages.push({ role: "user", content: userText });
+    // Platform.moonshot.ai marks max_tokens deprecated in favor of
+    // max_completion_tokens. Kimi's coding endpoint still accepts max_tokens.
+    // Sending both is safe — OpenAI, Moonshot, DeepSeek, and Kimi all tolerate
+    // the extra field, and we're future-proof against the deprecation.
     body = JSON.stringify({
       model: opts.model,
-      max_tokens: opts.maxTokens ?? 4096,
+      max_tokens: maxOut,
+      max_completion_tokens: maxOut,
       messages,
     });
   }

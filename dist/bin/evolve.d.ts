@@ -8,7 +8,7 @@
  *
  * Examples:
  *   claude-overnight-evolve --prompt 10_planning/10-3_plan --eval-model claude-haiku-4-5 --generations 3
- *   claude-overnight-evolve --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-k2-6
+ *   claude-overnight-evolve --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-for-coding
  *
  * Requires ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) in env. When `--target
  * mcp-browser` is used the cwd must be the MCP-browser repo root (so

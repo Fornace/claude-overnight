@@ -183,7 +183,7 @@ Your laptop can be off the whole time.
 npm run evolve -- --prompt 10_planning/10-3_plan --eval-model claude-haiku-4-5 --generations 10
 
 # Evolve an MCP-browser supervision prompt
-npm run evolve -- --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-k2-6 --generations 10
+npm run evolve -- --target mcp-browser --prompt-kind plan-supervision --eval-model kimi-for-coding --generations 10
 ```
 
 ### Via Platform API (runs on server)
