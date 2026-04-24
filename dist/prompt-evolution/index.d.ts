@@ -17,6 +17,7 @@
  *   4. Mutate worst-performing variants using failure traces
  *   5. Repeat
  */
+import type { JudgeOpts } from "./llm-judge.js";
 import type { BenchmarkCase, EvolutionResult } from "./types.js";
 export interface EvolveOpts {
     /** Prompt file path, e.g. "10_planning/10-3_plan" or "mcp-browser/planning" */
@@ -47,5 +48,13 @@ export interface EvolveOpts {
     target?: string;
     /** Run ID override (auto-generated if omitted) */
     runId?: string;
+    /** Extra eval models for cross-model variance. If set, every case runs on each model. */
+    evalModels?: string[];
+    /** Repetitions per (variant, case, model). Default 1. Recommended ≥3 for noise floor. */
+    repetitions?: number;
+    /** Optional llm-judge — replaces the heuristic content score for top-N variants each gen. */
+    judge?: JudgeOpts & {
+        topN?: number;
+    };
 }
 export declare function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult>;

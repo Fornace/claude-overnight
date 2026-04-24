@@ -31,10 +31,6 @@ export interface BenchmarkCase {
 }
 
 export interface Criteria {
-  /** Expected task count (for planner prompts). null = don't check */
-  expectedTaskCount?: number | null;
-  /** Allowed deviation from expectedTaskCount (default 0.25 = ±25%) */
-  taskCountTolerance?: number;
   /** Should tasks be independent? (no "after", "then", "depends on") */
   independentTasks?: boolean;
   /** Should tasks mention specific files/functions? */
@@ -68,6 +64,14 @@ export interface EvaluationResult {
   scores: ScoreDimensions;
   /** Human-readable failure notes */
   notes: string[];
+  /** Model that generated this output (for multi-model runs). */
+  model?: string;
+  /** Per-dimension standard deviation across repetitions (only set when reps > 1). */
+  stddev?: ScoreDimensions;
+  /** Number of repetitions that produced this aggregated result. */
+  reps?: number;
+  /** Set when an llm-judge was used to compute content. */
+  judgeJustification?: string;
 }
 
 /** Row in the evaluation matrix: one variant across all cases */
@@ -78,12 +82,18 @@ export interface VariantRow {
   parentId?: string;
   /** Full prompt text */
   text: string;
-  /** caseHash → result */
+  /** caseHash → result (per-model results keyed by caseHash:model when multi-model) */
   results: Map<string, EvaluationResult>;
   /** Aggregated Pareto fitness vector */
   aggregate: ScoreDimensions;
   /** Overall scalar for quick sorting (geometric mean of dimensions) */
   gmean: number;
+  /** Cross-model stddev of gmean, if run on multiple generator models. */
+  crossModelStddev?: number;
+  /** Per-model aggregates for multi-model runs (model → aggregate dimensions). */
+  perModel?: Record<string, ScoreDimensions>;
+  /** Count of cases that failed to parse as JSON (orthogonal to content). */
+  parseFailures?: number;
 }
 
 export interface MutationRequest {

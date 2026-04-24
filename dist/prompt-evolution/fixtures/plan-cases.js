@@ -1,13 +1,16 @@
 /**
  * Benchmark fixtures for the planner prompt (10_planning/10-3_plan).
  *
- * Each case is a synthetic scenario: we render the prompt with these vars,
- * send it to a model, and score the JSON output.
+ * Each case renders the prompt with `vars`, sends it to a generator model, and
+ * scores the JSON output. The deterministic scorer checks parse / schema /
+ * budget-band / independence / specificity. When an llm-judge is enabled the
+ * judge reads objective + output and overrides the content dimension.
  *
- * Designing good benchmarks:
- * - Cover the three budget tiers (TIGHT, STANDARD, LARGE)
- * - Include edge cases (tiny objective, vague objective, cross-cutting concern)
- * - Make criteria objective enough to auto-score without an LLM judge
+ * We deliberately do NOT encode expected task counts: those were author-guessed
+ * and made the benchmark circular (high score == "matches Francesco's intuition").
+ * The case's `vars.budget` already tells the model how many tasks to produce; an
+ * output that's empty or 5× over budget is a prompt failure we catch on the
+ * content dim, everything in between is the judge's call.
  */
 function contextConstraintNote(model) {
     return `Context budget: use the ${model} model's context window efficiently.`;
@@ -25,8 +28,6 @@ export const PLAN_CASES = [
             contextConstraintNote: contextConstraintNote("claude-sonnet-4-6"),
         },
         criteria: {
-            expectedTaskCount: 5,
-            taskCountTolerance: 0.2,
             independentTasks: true,
             specificTasks: true,
             requiredJsonFields: ["tasks"],
@@ -44,8 +45,6 @@ export const PLAN_CASES = [
             contextConstraintNote: contextConstraintNote("claude-sonnet-4-6"),
         },
         criteria: {
-            expectedTaskCount: 3,
-            taskCountTolerance: 0.34, // ±1 for tiny counts
             independentTasks: true,
             specificTasks: true,
             requiredJsonFields: ["tasks"],
@@ -64,10 +63,8 @@ export const PLAN_CASES = [
             flexNote: "wave 1 of 2",
         },
         criteria: {
-            expectedTaskCount: 12,
-            taskCountTolerance: 0.25,
             independentTasks: true,
-            specificTasks: false, // missions can be broader
+            specificTasks: false,
             requiredJsonFields: ["tasks"],
         },
     },
@@ -83,8 +80,6 @@ export const PLAN_CASES = [
             contextConstraintNote: contextConstraintNote("claude-sonnet-4-6"),
         },
         criteria: {
-            expectedTaskCount: 10,
-            taskCountTolerance: 0.25,
             independentTasks: true,
             specificTasks: false,
             requiredJsonFields: ["tasks"],
@@ -102,8 +97,6 @@ export const PLAN_CASES = [
             contextConstraintNote: contextConstraintNote("claude-opus-4-6"),
         },
         criteria: {
-            expectedTaskCount: 35,
-            taskCountTolerance: 0.2,
             independentTasks: true,
             specificTasks: false,
             requiredJsonFields: ["tasks"],
@@ -121,8 +114,6 @@ export const PLAN_CASES = [
             contextConstraintNote: contextConstraintNote("claude-opus-4-6"),
         },
         criteria: {
-            expectedTaskCount: 40,
-            taskCountTolerance: 0.2,
             independentTasks: true,
             specificTasks: false,
             requiredJsonFields: ["tasks"],
@@ -140,10 +131,69 @@ export const PLAN_CASES = [
             contextConstraintNote: contextConstraintNote("claude-sonnet-4-6"),
         },
         criteria: {
-            expectedTaskCount: 8,
-            taskCountTolerance: 0.25,
             independentTasks: true,
-            specificTasks: false, // vague objective → broader tasks are acceptable
+            specificTasks: false,
+            requiredJsonFields: ["tasks"],
+        },
+    },
+    // ── Failure-mode cases ──
+    // A good planner prompt shouldn't collapse on these. A bad one will either
+    // invent tasks out of thin air or return garbage.
+    {
+        name: "failure-ambiguous-noun",
+        hash: "",
+        promptPath: "10_planning/10-3_plan",
+        variant: "STANDARD",
+        vars: {
+            // "dashboard" could mean the admin dashboard or the analytics dashboard;
+            // a good prompt asks or splits; a bad one picks wrong.
+            objective: "Improve the dashboard.",
+            budget: 6,
+            concurrency: 3,
+            contextConstraintNote: contextConstraintNote("claude-sonnet-4-6"),
+        },
+        criteria: {
+            independentTasks: true,
+            specificTasks: false,
+            requiredJsonFields: ["tasks"],
+        },
+    },
+    {
+        name: "failure-already-done",
+        hash: "",
+        promptPath: "10_planning/10-3_plan",
+        variant: "TIGHT",
+        vars: {
+            // A good prompt should notice and produce few or zero tasks. A bad one
+            // invents redundant work to hit the budget.
+            objective: "Add TypeScript types to src/index.ts (the file already has full typings).",
+            budget: 4,
+            concurrency: 2,
+            contextConstraintNote: contextConstraintNote("claude-sonnet-4-6"),
+        },
+        criteria: {
+            independentTasks: true,
+            specificTasks: true,
+            requiredJsonFields: ["tasks"],
+        },
+    },
+    {
+        name: "failure-crosscut",
+        hash: "",
+        promptPath: "10_planning/10-3_plan",
+        variant: "STANDARD",
+        vars: {
+            // Genuinely cross-cutting — the independence heuristic will be stressed.
+            // A well-designed prompt should admit sequence where it's real instead
+            // of faking independence.
+            objective: "Introduce a request-id header: generate in middleware, propagate to downstream services, log in every request line, expose in error responses, and cover with integration tests.",
+            budget: 9,
+            concurrency: 3,
+            contextConstraintNote: contextConstraintNote("claude-sonnet-4-6"),
+        },
+        criteria: {
+            independentTasks: false, // real dependencies exist here
+            specificTasks: true,
             requiredJsonFields: ["tasks"],
         },
     },
@@ -154,7 +204,6 @@ for (const c of PLAN_CASES) {
 }
 function hashCase(c) {
     const key = `${c.promptPath}:${c.variant ?? "default"}:${JSON.stringify(c.vars)}`;
-    // Simple stable hash — good enough for local evolution runs
     let h = 0;
     for (let i = 0; i < key.length; i++) {
         h = ((h << 5) - h + key.charCodeAt(i)) | 0;

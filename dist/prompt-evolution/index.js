@@ -60,9 +60,12 @@ export async function evolvePrompt(opts) {
         // ── 2. Evaluate ──
         const evalOpts = {
             model: opts.evalModel,
+            models: opts.evalModels,
             baseUrl: opts.baseUrl,
             authToken: opts.authToken,
             concurrency: 4,
+            repetitions: opts.repetitions,
+            judge: opts.judge,
             onProgress: (done, total, caseName, variantId) => {
                 log(`  [${done}/${total}] ${variantId.slice(0, 16)} → ${caseName}`);
             },
@@ -142,7 +145,6 @@ export async function evolvePrompt(opts) {
                     });
                     mutant.generation = gen + 1;
                     mutant.parentId = parent.variantId;
-                    const prevGmean = parent.gmean;
                     nextPop.push({
                         id: mutant.variantId,
                         promptPath: opts.promptPath,
@@ -173,9 +175,12 @@ export async function evolvePrompt(opts) {
     log(`\n=== Final evaluation ===`);
     const finalMatrix = await buildMatrix(population, opts.cases, {
         model: opts.evalModel,
+        models: opts.evalModels,
         baseUrl: opts.baseUrl,
         authToken: opts.authToken,
         concurrency: 4,
+        repetitions: opts.repetitions,
+        judge: opts.judge,
     });
     generationMatrices.push(finalMatrix);
     snapshotPrompts(runId, finalMatrix);
@@ -196,6 +201,8 @@ export async function evolvePrompt(opts) {
         promptPath: opts.promptPath,
         target,
         evalModel: opts.evalModel,
+        evalModels: opts.evalModels,
+        repetitions: opts.repetitions,
         generations,
         baselineText,
     }, result, generationMatrices);

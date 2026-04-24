@@ -20,7 +20,8 @@
 
 import { renderPrompt } from "../prompts/load.js";
 import { buildMatrix, renderVariant, type EvalOpts } from "./evaluator.js";
-import { mutate, type MutateOpts } from "./mutator.js";
+import type { JudgeOpts } from "./llm-judge.js";
+import { mutate } from "./mutator.js";
 import { curate, formatMatrix, type CurateOpts } from "./curator.js";
 import { initRun, appendMatrix, appendLearning, snapshotPrompts, finalizeRun } from "./persistence.js";
 import { generateReport } from "./report.js";
@@ -29,7 +30,6 @@ import type {
   VariantRow,
   MutationRequest,
   LearningEntry,
-  Mutant,
   EvolutionResult,
 } from "./types.js";
 
@@ -62,6 +62,12 @@ export interface EvolveOpts {
   target?: string;
   /** Run ID override (auto-generated if omitted) */
   runId?: string;
+  /** Extra eval models for cross-model variance. If set, every case runs on each model. */
+  evalModels?: string[];
+  /** Repetitions per (variant, case, model). Default 1. Recommended ≥3 for noise floor. */
+  repetitions?: number;
+  /** Optional llm-judge — replaces the heuristic content score for top-N variants each gen. */
+  judge?: JudgeOpts & { topN?: number };
 }
 
 export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
@@ -106,9 +112,12 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
     // ── 2. Evaluate ──
     const evalOpts: EvalOpts = {
       model: opts.evalModel,
+      models: opts.evalModels,
       baseUrl: opts.baseUrl,
       authToken: opts.authToken,
       concurrency: 4,
+      repetitions: opts.repetitions,
+      judge: opts.judge,
       onProgress: (done, total, caseName, variantId) => {
         log(`  [${done}/${total}] ${variantId.slice(0, 16)} → ${caseName}`);
       },
@@ -199,7 +208,6 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
           mutant.generation = gen + 1;
           mutant.parentId = parent.variantId;
 
-          const prevGmean = parent.gmean;
           nextPop.push({
             id: mutant.variantId,
             promptPath: opts.promptPath,
@@ -232,9 +240,12 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
   log(`\n=== Final evaluation ===`);
   const finalMatrix = await buildMatrix(population, opts.cases, {
     model: opts.evalModel,
+    models: opts.evalModels,
     baseUrl: opts.baseUrl,
     authToken: opts.authToken,
     concurrency: 4,
+    repetitions: opts.repetitions,
+    judge: opts.judge,
   });
   generationMatrices.push(finalMatrix);
   snapshotPrompts(runId, finalMatrix);
@@ -258,6 +269,8 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
     promptPath: opts.promptPath,
     target,
     evalModel: opts.evalModel,
+    evalModels: opts.evalModels,
+    repetitions: opts.repetitions,
     generations,
     baselineText,
   }, result, generationMatrices);

@@ -1,18 +1,28 @@
 /**
  * Evaluation matrix runner.
  *
- * Given a set of prompt variants and benchmark cases, produces a matrix:
- *   rows    = variants
- *   columns = cases
- *   cells   = EvaluationResult with multi-dimensional scores
+ * rows    = variants
+ * columns = cases (optionally × models)
+ * cells   = EvaluationResult with multi-dimensional scores
  *
- * Uses direct HTTP fetch (not the full Agent SDK) so it's fast and works with
- * any Anthropic-compatible endpoint (OpenRouter, local proxies, etc.).
+ * Repetitions (N) give us a noise floor: the same (variant, case) is run N
+ * times and results aggregate to mean + stddev. Without this we can't tell
+ * whether 56.7 vs 37.4 is signal or variance.
+ *
+ * Multi-model runs (models[].length > 1) give us cross-model stddev: a
+ * prompt that only works on one generator is fragile.
+ *
+ * All HTTP calls go through `transport.callModel` so tests can inject a
+ * deterministic mock (see prompt-evolution-discrimination.test.ts).
  */
+import { type JudgeOpts } from "./llm-judge.js";
+import { type CallModel } from "./transport.js";
 import type { BenchmarkCase, VariantRow, PromptVars } from "./types.js";
 export interface EvalOpts {
-    /** Model to run evaluations with. Should be fast/cheap (haiku, flash, etc.) */
+    /** Primary generator model (retained for single-model compat). */
     model: string;
+    /** Multiple generator models — enables cross-model scoring. Overrides `model` when ≥2 entries. */
+    models?: string[];
     /** Base URL for the API endpoint */
     baseUrl?: string;
     /** Auth token */
@@ -21,6 +31,16 @@ export interface EvalOpts {
     maxTokens?: number;
     /** Concurrency for parallel case evaluation */
     concurrency?: number;
+    /** Per-call HTTP timeout. Defaults to 120s — bad endpoints can hang otherwise. */
+    timeoutMs?: number;
+    /** Repetitions per (variant, case, model). Default 1 — opt-in to 3+ for noise floor. */
+    repetitions?: number;
+    /** Inject an llm-judge call per case; content dimension is replaced by judge score. */
+    judge?: JudgeOpts & {
+        topN?: number;
+    };
+    /** Transport override for tests. */
+    callModel?: CallModel;
     /** Optional callback for progress */
     onProgress?: (done: number, total: number, caseName: string, variantId: string) => void;
 }

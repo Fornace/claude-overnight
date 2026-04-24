@@ -18,6 +18,7 @@
 
 import { evolvePrompt } from "../prompt-evolution/index.js";
 import { PLAN_CASES } from "../prompt-evolution/fixtures/plan-cases.js";
+import { harvestRealCases } from "../prompt-evolution/fixtures/harvest.js";
 import {
   scenariosToCases,
   PLANNING_SCENARIOS,
@@ -40,12 +41,19 @@ Options:
   --prompt-kind <kind>    MCP-browser prompt kind: planning | review | evolution |
                           goal-refinement | plan-supervision | simple-supervision | stuck-analysis
   --eval-model <model>    Fast model for evaluation (default: claude-haiku-4-5)
+  --eval-models <list>    Comma-separated list to run cross-model (overrides --eval-model)
   --mutate-model <model>  Smarter model for mutation (defaults to eval-model)
   --generations <n>       Number of evolution generations (default: 10)
   --population <n>        Max population size (default: 8)
   --plateau <n>           Stop early if no improvement for N generations (default: 3)
+  --reps <n>              Repetitions per (variant, case, model) for noise floor (default: 1)
+  --judge                 Use llm-judge for content scoring (costs extra API calls)
+  --judge-model <model>   Model to use for the judge (default: same as eval-model)
+  --judge-top-n <n>       Judge only the top-N variants per generation (default: 4)
   --cases <suite>         Benchmark suite: plan | mcp-planning | mcp-review |
                           mcp-supervision | mcp-stuck (default: plan)
+  --harvest               Append cases harvested from <cwd>/.claude-overnight/runs/*
+  --harvest-limit <n>     Max harvested cases (default: 10)
   --base-url <url>        API base URL override
   --auth-token <token>    Auth token override
   --run-id <id>           Preset run id (default: auto-generated)
@@ -58,11 +66,18 @@ interface Opts {
   prompt: string;
   promptKind: McpPromptKind | "";
   evalModel: string;
+  evalModels?: string[];
   mutateModel?: string;
   generations: number;
   population: number;
   plateau: number;
+  reps: number;
+  useJudge: boolean;
+  judgeModel?: string;
+  judgeTopN: number;
   cases: string;
+  harvest: boolean;
+  harvestLimit: number;
   baseUrl?: string;
   authToken?: string;
   runId?: string;
@@ -81,7 +96,12 @@ function parseArgs(): Opts {
     generations: 10,
     population: 8,
     plateau: 3,
+    reps: 1,
+    useJudge: false,
+    judgeTopN: 4,
     cases: "",
+    harvest: false,
+    harvestLimit: 10,
     baseUrl: process.env.ANTHROPIC_BASE_URL,
     authToken: process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
   };
@@ -93,11 +113,18 @@ function parseArgs(): Opts {
       case "--prompt": opts.prompt = v; i++; break;
       case "--prompt-kind": opts.promptKind = v as McpPromptKind; i++; break;
       case "--eval-model": opts.evalModel = v; i++; break;
+      case "--eval-models": opts.evalModels = v.split(",").map((s) => s.trim()).filter(Boolean); i++; break;
       case "--mutate-model": opts.mutateModel = v; i++; break;
       case "--generations": opts.generations = parseInt(v, 10); i++; break;
       case "--population": opts.population = parseInt(v, 10); i++; break;
       case "--plateau": opts.plateau = parseInt(v, 10); i++; break;
+      case "--reps": opts.reps = parseInt(v, 10); i++; break;
+      case "--judge": opts.useJudge = true; break;
+      case "--judge-model": opts.judgeModel = v; i++; break;
+      case "--judge-top-n": opts.judgeTopN = parseInt(v, 10); i++; break;
       case "--cases": opts.cases = v; i++; break;
+      case "--harvest": opts.harvest = true; break;
+      case "--harvest-limit": opts.harvestLimit = parseInt(v, 10); i++; break;
       case "--base-url": opts.baseUrl = v; i++; break;
       case "--auth-token": opts.authToken = v; i++; break;
       case "--run-id": opts.runId = v; i++; break;
@@ -133,8 +160,21 @@ async function main(): Promise<void> {
     promptPath = `mcp-browser/${kind}`;
     seedText = extractPrompt(kind);
   } else {
-    if (opts.cases === "plan") cases = PLAN_CASES;
+    if (opts.cases === "plan") cases = [...PLAN_CASES];
     else throw new Error(`Unknown case suite: ${opts.cases}`);
+    if (opts.harvest) {
+      const harvested = harvestRealCases({
+        cwd: process.cwd(),
+        promptPath,
+        limit: opts.harvestLimit,
+      });
+      if (harvested.length === 0) {
+        console.log(`  (harvest: no runs found under <cwd>/.claude-overnight/runs)`);
+      } else {
+        console.log(`  (harvest: +${harvested.length} real objectives)`);
+        cases = cases.concat(harvested);
+      }
+    }
   }
 
   console.log(`Evolution config:`);
@@ -152,10 +192,20 @@ async function main(): Promise<void> {
     promptPath,
     cases,
     evalModel: opts.evalModel,
+    evalModels: opts.evalModels,
     mutateModel: opts.mutateModel,
     generations: opts.generations,
     populationCap: opts.population,
     plateauGenerations: opts.plateau,
+    repetitions: opts.reps > 1 ? opts.reps : undefined,
+    judge: opts.useJudge
+      ? {
+          model: opts.judgeModel ?? opts.evalModel,
+          baseUrl: opts.baseUrl,
+          authToken: opts.authToken,
+          topN: opts.judgeTopN,
+        }
+      : undefined,
     baseUrl: opts.baseUrl,
     authToken: opts.authToken,
     seedText,

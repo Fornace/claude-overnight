@@ -10,14 +10,12 @@ describe("scorer", () => {
         variant: "TIGHT",
         vars: { objective: "fix bug", budget: 5 },
         criteria: {
-            expectedTaskCount: 5,
-            taskCountTolerance: 0.2,
             independentTasks: true,
             specificTasks: true,
             requiredJsonFields: ["tasks"],
         },
     };
-    it("scores perfect output at 1.0 across dimensions", () => {
+    it("scores perfect output at 1.0 across content heuristics", () => {
         const raw = JSON.stringify({ tasks: [
                 { prompt: "Fix off-by-one in src/paginate.ts line 42" },
                 { prompt: "Add test for src/paginate.test.ts covering edge cases" },
@@ -32,14 +30,22 @@ describe("scorer", () => {
         assert.ok(result.scores.content >= 0.79, `content should be high, got ${result.scores.content}`);
         assert.equal(result.notes.length, 0);
     });
-    it("penalizes wrong task count", () => {
-        const raw = JSON.stringify({ tasks: [{ prompt: "fix it" }] });
+    it("penalizes empty task array even with valid schema (budget sanity)", () => {
+        const raw = JSON.stringify({ tasks: [] });
         const parsed = JSON.parse(raw);
         const result = scoreOutput(raw, parsed, 0.001, 2000, baseCase);
         assert.equal(result.scores.parse, 1);
         assert.equal(result.scores.schema, 1);
         assert.ok(result.scores.content < 1, `content should be penalized, got ${result.scores.content}`);
-        assert.ok(result.notes.some((n) => n.includes("Task count")));
+        assert.ok(result.notes.some((n) => n.includes("Empty tasks")));
+    });
+    it("penalizes task count that vastly exceeds budget", () => {
+        const tasks = Array.from({ length: 50 }, (_, i) => ({ prompt: `task ${i} in src/file${i}.ts` }));
+        const raw = JSON.stringify({ tasks });
+        const parsed = JSON.parse(raw);
+        const result = scoreOutput(raw, parsed, 0.001, 2000, baseCase);
+        assert.ok(result.scores.content < 0.8, `content should be penalized for 50 tasks vs budget=5, got ${result.scores.content}`);
+        assert.ok(result.notes.some((n) => n.includes("vastly exceeds budget")));
     });
     it("penalizes dependent tasks", () => {
         const raw = JSON.stringify({ tasks: [
