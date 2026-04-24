@@ -54,6 +54,13 @@ export interface EvolveOpts {
     repetitions?: number;
     /** Max in-flight eval calls. Default 8. Raise for slow endpoints, lower for strict rate limits. */
     concurrency?: number;
+    /** Use provider batch API instead of online calls. 50% cheaper, slower wall-clock. */
+    batch?: boolean;
+    /** Adaptive sampling cap (opt-in). Keeps adding reps to noisy cells up to this count. */
+    adaptiveReps?: {
+        cap: number;
+        threshold?: number;
+    };
     /** Optional llm-judge — replaces the heuristic content score for top-N variants each gen. */
     judge?: JudgeOpts & {
         topN?: number;

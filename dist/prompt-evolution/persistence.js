@@ -118,6 +118,45 @@ ${result.learningLog.map((l) => `| ${l.generation} | ${l.mutationSummary} | ${(l
 `;
     writeFileSync(join(root, "best.md"), report);
 }
+export function saveBatchState(runId, entry) {
+    const path = join(runDir(runId), "batch-jobs.jsonl");
+    writeFileSync(path, JSON.stringify(entry) + "\n", { flag: "a" });
+}
+export function loadBatchState(runId, generation, phase) {
+    const path = join(runDir(runId), "batch-jobs.jsonl");
+    if (!existsSync(path))
+        return null;
+    const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+    let latest = null;
+    for (const line of lines) {
+        try {
+            const e = JSON.parse(line);
+            if (e.generation === generation && e.phase === phase)
+                latest = e;
+        }
+        catch { /* skip malformed */ }
+    }
+    // Only return if not yet finished — otherwise caller would re-poll a consumed batch.
+    return latest && !latest.finishedAt ? latest : null;
+}
+export function markBatchFinished(runId, batchId) {
+    const path = join(runDir(runId), "batch-jobs.jsonl");
+    if (!existsSync(path))
+        return;
+    const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+    const updated = lines.map((line) => {
+        try {
+            const e = JSON.parse(line);
+            if (e.batchId === batchId && !e.finishedAt) {
+                e.finishedAt = new Date().toISOString();
+                return JSON.stringify(e);
+            }
+        }
+        catch { /* skip */ }
+        return line;
+    });
+    writeFileSync(path, updated.join("\n") + "\n");
+}
 /** List all runs, newest first. */
 export function listRuns() {
     const root = storeRoot();

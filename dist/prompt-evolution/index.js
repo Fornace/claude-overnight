@@ -66,9 +66,14 @@ export async function evolvePrompt(opts) {
             concurrency: opts.concurrency ?? 8,
             repetitions: opts.repetitions,
             judge: opts.judge,
+            batch: opts.batch,
+            adaptiveReps: opts.adaptiveReps,
+            runId,
+            generation: gen,
             onProgress: (done, total, caseName, variantId) => {
                 log(`  [${done}/${total}] ${variantId.slice(0, 16)} → ${caseName}`);
             },
+            onBatchProgress: (msg) => log(`  [batch] ${msg}`),
         };
         const matrix = await buildMatrix(population, opts.cases, evalOpts);
         generationMatrices.push(matrix);
@@ -181,6 +186,11 @@ export async function evolvePrompt(opts) {
         concurrency: opts.concurrency ?? 8,
         repetitions: opts.repetitions,
         judge: opts.judge,
+        batch: opts.batch,
+        adaptiveReps: opts.adaptiveReps,
+        runId,
+        generation: generations,
+        onBatchProgress: (msg) => log(`  [batch] ${msg}`),
     });
     generationMatrices.push(finalMatrix);
     snapshotPrompts(runId, finalMatrix);

@@ -17,14 +17,22 @@
  */
 
 import { renderPrompt } from "../prompts/load.js";
-import { scoreOutput, gmean, aggregateReps } from "./scorer.js";
-import { judgeOutput, type JudgeOpts } from "./llm-judge.js";
+import { scoreOutput, gmean, aggregateReps, bootstrapCI, kendallTau } from "./scorer.js";
+import { type JudgeOpts } from "./llm-judge.js";
 import {
   defaultCallModel,
   attemptJsonParse,
   type CallModel,
   type CallModelOpts,
 } from "./transport.js";
+import {
+  batchCallModel,
+  detectBatchProvider,
+  type BatchJob,
+} from "./transport-batch.js";
+import { saveBatchState, loadBatchState, markBatchFinished } from "./persistence.js";
+import { averageDimensions } from "./evaluator-utils.js";
+import { runJudge } from "./evaluator-judge.js";
 import type { BenchmarkCase, VariantRow, EvaluationResult, PromptVars, ScoreDimensions } from "./types.js";
 
 export interface EvalOpts {
@@ -44,12 +52,28 @@ export interface EvalOpts {
   timeoutMs?: number;
   /** Repetitions per (variant, case, model). Default 1 — opt-in to 3+ for noise floor. */
   repetitions?: number;
+  /**
+   * Adaptive sampling: after initial `repetitions`, keep adding one rep per cell
+   * where any score-dim σ exceeds `threshold`, up to `cap` total reps. Prevents
+   * wasted reps on already-stable cells while driving noisy ones down.
+   */
+  adaptiveReps?: { cap: number; threshold?: number };
   /** Inject an llm-judge call per case; content dimension is replaced by judge score. */
   judge?: JudgeOpts & { topN?: number };
   /** Transport override for tests. */
   callModel?: CallModel;
+  /** Use provider batch API instead of online calls (50% cheaper, slower wall-clock). */
+  batch?: boolean;
+  /** Run id — required when batch=true so state is crash-resumable. */
+  runId?: string;
+  /** Current generation number — used to key batch state. */
+  generation?: number;
+  /** Batch-transport override for tests. Same return shape as transport-batch.batchCallModel. */
+  batchCallModel?: typeof batchCallModel;
   /** Optional callback for progress */
   onProgress?: (done: number, total: number, caseName: string, variantId: string) => void;
+  /** Progress callback specific to batch-phase transitions. */
+  onBatchProgress?: (msg: string) => void;
 }
 
 interface EvalJob {
@@ -83,27 +107,73 @@ export async function buildMatrix(
     }
   }
 
-  // Work-stealing pool: keep `concurrency` jobs in flight at all times so a
-  // slow call (Kimi at 4 min/call is typical) doesn't block the others in its
-  // slice. Previous batch-and-wait loop serialized the slowest job in every
-  // window of `concurrency`.
+  // Two execution paths:
+  //   batch=true  — submit every job to the provider batch API, poll, score
+  //                 results as they arrive. 50% cheaper, slower wall-clock.
+  //   batch=false — work-stealing pool: keep `concurrency` jobs in flight so
+  //                 a slow call doesn't block the others in its slice.
   const rawByKey = new Map<string, EvaluationResult[]>();
-  let done = 0;
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (true) {
-      const i = next++;
-      if (i >= jobs.length) return;
-      const r = await runSingle(jobs[i], opts, transport);
-      const key = `${r.variantId}:${r.caseHash}:${r.model ?? ""}`;
-      const arr = rawByKey.get(key) ?? [];
-      arr.push(r);
-      rawByKey.set(key, arr);
-      done++;
-      opts.onProgress?.(done, jobs.length, r.caseName, r.variantId);
+  if (opts.batch) {
+    await runBatchPath(jobs, opts, rawByKey);
+  } else {
+    let done = 0;
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const i = next++;
+        if (i >= jobs.length) return;
+        const r = await runSingle(jobs[i], opts, transport);
+        const key = `${r.variantId}:${r.caseHash}:${r.model ?? ""}`;
+        const arr = rawByKey.get(key) ?? [];
+        arr.push(r);
+        rawByKey.set(key, arr);
+        done++;
+        opts.onProgress?.(done, jobs.length, r.caseName, r.variantId);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
+  }
+
+  // Adaptive sampling: for cells where any score-dim σ exceeds threshold,
+  // add one more rep and rerun — up to `cap` total reps. Converges on a
+  // stable estimate without wasting reps on already-stable cells.
+  if (!opts.batch && opts.adaptiveReps) {
+    const cap = opts.adaptiveReps.cap;
+    const threshold = opts.adaptiveReps.threshold ?? 0.1;
+    for (let round = 0; round < cap - reps; round++) {
+      const extra: EvalJob[] = [];
+      for (const v of variants) {
+        for (const c of cases) {
+          for (const model of models) {
+            const key = `${v.id}:${c.hash}:${model}`;
+            const runs = rawByKey.get(key) ?? [];
+            if (runs.length >= cap) continue;
+            const { stddev } = aggregateReps(runs);
+            const dims: Array<keyof ScoreDimensions> = ["parse", "schema", "content", "costEfficiency", "speed"];
+            const maxSigma = Math.max(...dims.map((d) => stddev[d]));
+            if (maxSigma > threshold) {
+              extra.push({ case: c, variantId: v.id, text: v.text, systemText: c.systemPrompt, model, rep: runs.length });
+            }
+          }
+        }
+      }
+      if (extra.length === 0) break;
+      opts.onProgress?.(jobs.length, jobs.length + extra.length, "adaptive", `round ${round + 1}`);
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        while (true) {
+          const i = next++;
+          if (i >= extra.length) return;
+          const r = await runSingle(extra[i], opts, transport);
+          const key = `${r.variantId}:${r.caseHash}:${r.model ?? ""}`;
+          const arr = rawByKey.get(key) ?? [];
+          arr.push(r);
+          rawByKey.set(key, arr);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, extra.length) }, worker));
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
+  }
 
   // Collapse reps: one aggregated EvaluationResult per (variant, case, model).
   const aggregated = new Map<string, EvaluationResult>();
@@ -112,7 +182,7 @@ export async function buildMatrix(
   }
 
   // Optional llm-judge pass on top-N variants (by current heuristic content).
-  if (opts.judge) await runJudge(variants, cases, models, aggregated, opts.judge);
+  if (opts.judge) await runJudge(variants, cases, models, aggregated, opts.judge, opts);
 
   // Assemble rows: per-variant aggregate across all cases and models.
   const rows: VariantRow[] = [];
@@ -150,6 +220,32 @@ export async function buildMatrix(
       crossModelStddev = Math.sqrt(variance);
     }
 
+    // Rep-level stddev of gmean across all per-cell results for this variant.
+    // Fills the `σ gmean` report column in single-model runs, which previously
+    // always showed "—" because the column was tied to crossModelStddev.
+    let repsStddev: number | undefined;
+    if (reps > 1) {
+      const cellStddevs: number[] = [];
+      for (const r of rowResults.values()) {
+        if (r.stddev) {
+          // Use the stddev of gmean-per-rep if we had the reps at hand; since
+          // we've already collapsed, approximate with gmean of the per-dim stddevs.
+          cellStddevs.push(gmean(r.stddev));
+        }
+      }
+      if (cellStddevs.length > 0) {
+        repsStddev = cellStddevs.reduce((a, b) => a + b, 0) / cellStddevs.length;
+      }
+    }
+
+    // Bootstrap CI over per-case gmean samples — if two variants' CIs overlap,
+    // the ranking between them is not reliable.
+    let gmeanCI: [number, number] | undefined;
+    if (allScores.length >= 2) {
+      const perCaseGmeans = [...rowResults.values()].map((r) => gmean(r.scores));
+      gmeanCI = bootstrapCI(perCaseGmeans, 500);
+    }
+
     rows.push({
       variantId: v.id,
       promptPath: v.promptPath,
@@ -161,10 +257,136 @@ export async function buildMatrix(
       crossModelStddev,
       perModel: models.length > 1 ? perModel : undefined,
       parseFailures,
+      repsStddev,
+      gmeanCI,
     });
   }
 
+  // Rank-order stability: split reps in half per cell, compute per-variant
+  // gmeans for each half, rank variants, compare with Kendall τ. τ ≥ 0.7
+  // means the ranking is trustworthy; lower than that means the benchmark
+  // can't reliably order these variants.
+  if (reps >= 4) {
+    const halfA = halfSplitMatrix(variants, cases, models, rawByKey, 0);
+    const halfB = halfSplitMatrix(variants, cases, models, rawByKey, 1);
+    if (halfA.length >= 2 && halfB.length >= 2) {
+      const tau = kendallTau(halfA, halfB);
+      for (const row of rows) row.rankStability = tau;
+    }
+  }
+
   return rows;
+}
+
+/**
+ * Return a variant ranking computed from only half of the reps (even or odd).
+ * Used to measure whether the same reps split two ways agree on the order.
+ */
+function halfSplitMatrix(
+  variants: Array<{ id: string }>,
+  cases: BenchmarkCase[],
+  models: string[],
+  rawByKey: Map<string, EvaluationResult[]>,
+  side: 0 | 1,
+): string[] {
+  const scored: Array<{ id: string; g: number }> = [];
+  for (const v of variants) {
+    const dims: ScoreDimensions[] = [];
+    for (const c of cases) {
+      for (const m of models) {
+        const key = `${v.id}:${c.hash}:${m}`;
+        const runs = rawByKey.get(key) ?? [];
+        const half = runs.filter((_, i) => i % 2 === side);
+        if (half.length === 0) continue;
+        dims.push(aggregateReps(half).mean);
+      }
+    }
+    if (dims.length > 0) scored.push({ id: v.id, g: gmean(averageDimensions(dims)) });
+  }
+  scored.sort((a, b) => b.g - a.g);
+  return scored.map((s) => s.id);
+}
+
+async function runBatchPath(
+  jobs: EvalJob[],
+  opts: EvalOpts,
+  rawByKey: Map<string, EvaluationResult[]>,
+): Promise<void> {
+  const provider = detectBatchProvider(opts.baseUrl);
+  if (provider === "unsupported") {
+    throw new Error(`Batch API not supported for baseUrl=${opts.baseUrl}; rerun without --batch or point at an Anthropic / OpenAI-compatible endpoint.`);
+  }
+
+  // Build custom_ids that route results back to the right cell. Index is
+  // included so reps of the same (variant, case, model) don't collide.
+  const keyed = jobs.map((job, i) => ({
+    job,
+    index: i,
+    customId: `v:${job.variantId}|h:${job.case.hash}|m:${job.model}|r:${job.rep}|i:${i}`,
+  }));
+  const batchJobs: BatchJob[] = keyed.map((k) => ({
+    customId: k.customId,
+    userText: k.job.text,
+    systemText: k.job.systemText,
+    model: k.job.model,
+  }));
+
+  const started = Date.now();
+  const existing = opts.runId != null && opts.generation != null
+    ? loadBatchState(opts.runId, opts.generation, "eval")
+    : null;
+
+  const transport = opts.batchCallModel ?? batchCallModel;
+  const results = await transport(batchJobs, {
+    baseUrl: opts.baseUrl,
+    authToken: opts.authToken,
+    maxTokens: opts.maxTokens,
+    resumeBatchId: existing?.batchId,
+    onSubmitted: (batchId, p) => {
+      if (opts.runId != null && opts.generation != null && !existing) {
+        saveBatchState(opts.runId, {
+          generation: opts.generation,
+          phase: "eval",
+          batchId,
+          provider: p as "anthropic" | "openai-compatible",
+          submittedAt: new Date().toISOString(),
+        });
+      }
+      opts.onBatchProgress?.(`batch submitted: ${batchId} (${p})`);
+    },
+    onProgress: (p) => {
+      if (p.phase === "polling") {
+        const ok = p.succeeded ?? 0;
+        const failed = p.failed ?? 0;
+        const total = p.total ?? batchJobs.length;
+        opts.onBatchProgress?.(`batch ${p.batchId} polling: ${ok}/${total} done${failed ? `, ${failed} failed` : ""}`);
+      } else {
+        opts.onBatchProgress?.(`batch ${p.batchId} ${p.phase}`);
+      }
+    },
+  });
+
+  // Mark the state entry as finished so a crash after this point doesn't
+  // cause the next run to try resuming an already-consumed batch.
+  if (opts.runId != null && existing) markBatchFinished(opts.runId, existing.batchId);
+
+  // Score each result and populate rawByKey the same way runSingle does.
+  const durationMs = Math.round((Date.now() - started) / Math.max(1, jobs.length));
+  let done = 0;
+  for (const k of keyed) {
+    const r = results.get(k.customId);
+    const raw = r?.raw ?? "batch returned no result for this custom_id";
+    const costUsd = r?.costUsd ?? 0;
+    const parsed = attemptJsonParse(raw);
+    const scored = scoreOutput(raw, parsed, costUsd, durationMs, k.job.case, { model: k.job.model });
+    scored.variantId = k.job.variantId;
+    const mapKey = `${scored.variantId}:${scored.caseHash}:${scored.model ?? ""}`;
+    const arr = rawByKey.get(mapKey) ?? [];
+    arr.push(scored);
+    rawByKey.set(mapKey, arr);
+    done++;
+    opts.onProgress?.(done, jobs.length, k.job.case.name, k.job.variantId);
+  }
 }
 
 async function runSingle(job: EvalJob, opts: EvalOpts, transport: CallModel): Promise<EvaluationResult> {
@@ -216,76 +438,6 @@ function collapseReps(runs: EvaluationResult[]): EvaluationResult {
     scores: mean,
     stddev,
     reps: runs.length,
-  };
-}
-
-async function runJudge(
-  variants: Array<{ id: string; text: string }>,
-  cases: BenchmarkCase[],
-  models: string[],
-  aggregated: Map<string, EvaluationResult>,
-  judge: JudgeOpts & { topN?: number },
-): Promise<void> {
-  // Judge only the top-N variants to cap cost: a judge call per
-  // (variant, case, model) on a large population blows up fast.
-  const topN = judge.topN ?? 4;
-  const variantGmeans = variants.map((v) => {
-    const scores: ScoreDimensions[] = [];
-    for (const c of cases) {
-      for (const model of models) {
-        const r = aggregated.get(`${v.id}:${c.hash}:${model}`);
-        if (r) scores.push(r.scores);
-      }
-    }
-    return { id: v.id, g: scores.length > 0 ? gmean(averageDimensions(scores)) : 0 };
-  });
-  variantGmeans.sort((a, b) => b.g - a.g);
-  const eligible = new Set(variantGmeans.slice(0, topN).map((x) => x.id));
-
-  const jobs: Array<() => Promise<void>> = [];
-  for (const v of variants) {
-    if (!eligible.has(v.id)) continue;
-    for (const c of cases) {
-      for (const model of models) {
-        const key = `${v.id}:${c.hash}:${model}`;
-        const r = aggregated.get(key);
-        if (!r || r.scores.parse < 0.5) continue; // no point judging unparseable output
-        jobs.push(async () => {
-          try {
-            const jr = await judgeOutput(r.rawOutput, c, judge);
-            r.scores = { ...r.scores, content: jr.score };
-            r.judgeJustification = jr.justification;
-          } catch {
-            // Judge failure is non-fatal — keep heuristic content.
-          }
-        });
-      }
-    }
-  }
-
-  // Work-stealing pool for judge calls — modest concurrency to stay under
-  // provider rate limits, but no slice-blocking.
-  const judgeConcurrency = 3;
-  let nextJob = 0;
-  const judgeWorker = async (): Promise<void> => {
-    while (true) {
-      const i = nextJob++;
-      if (i >= jobs.length) return;
-      await jobs[i]();
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(judgeConcurrency, jobs.length) }, judgeWorker));
-}
-
-function averageDimensions(scores: ScoreDimensions[]): ScoreDimensions {
-  if (scores.length === 0) return { parse: 0, schema: 0, content: 0, costEfficiency: 0, speed: 0 };
-  const n = scores.length;
-  return {
-    parse: scores.reduce((a, b) => a + b.parse, 0) / n,
-    schema: scores.reduce((a, b) => a + b.schema, 0) / n,
-    content: scores.reduce((a, b) => a + b.content, 0) / n,
-    costEfficiency: scores.reduce((a, b) => a + b.costEfficiency, 0) / n,
-    speed: scores.reduce((a, b) => a + b.speed, 0) / n,
   };
 }
 

@@ -193,3 +193,54 @@ export function aggregateReps(results: EvaluationResult[]): {
   }
   return { mean, stddev };
 }
+
+/**
+ * Bootstrap 95% confidence interval over a sample. Resamples with
+ * replacement `iterations` times, takes the 2.5th and 97.5th percentile
+ * of the resampled means. Used to decide whether two variants differ
+ * for real or sit within each other's noise.
+ */
+export function bootstrapCI(values: number[], iterations = 1000): [low: number, high: number] {
+  if (values.length === 0) return [0, 0];
+  if (values.length === 1) return [values[0], values[0]];
+  const means: number[] = [];
+  for (let iter = 0; iter < iterations; iter++) {
+    let sum = 0;
+    for (let j = 0; j < values.length; j++) {
+      sum += values[Math.floor(Math.random() * values.length)];
+    }
+    means.push(sum / values.length);
+  }
+  means.sort((a, b) => a - b);
+  const lo = Math.floor(iterations * 0.025);
+  const hi = Math.floor(iterations * 0.975);
+  return [means[lo], means[hi]];
+}
+
+/**
+ * Kendall τ rank correlation between two same-length orderings of ids.
+ * Returns 1.0 for identical rankings, -1.0 for reversed, 0 for random.
+ * We use this to check whether splitting the reps in half produces the
+ * same per-variant ordering twice — low τ means the benchmark is noise.
+ */
+export function kendallTau(rankA: string[], rankB: string[]): number {
+  if (rankA.length !== rankB.length || rankA.length < 2) return 1;
+  const n = rankA.length;
+  const posB = new Map<string, number>();
+  rankB.forEach((id, i) => posB.set(id, i));
+  let concordant = 0;
+  let discordant = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const ai = i;
+      const aj = j;
+      const bi = posB.get(rankA[i]);
+      const bj = posB.get(rankA[j]);
+      if (bi == null || bj == null) continue;
+      if ((ai < aj && bi < bj) || (ai > aj && bi > bj)) concordant++;
+      else if (ai !== aj && bi !== bj) discordant++;
+    }
+  }
+  const denom = (n * (n - 1)) / 2;
+  return denom === 0 ? 1 : (concordant - discordant) / denom;
+}

@@ -17,6 +17,7 @@
  */
 import { type JudgeOpts } from "./llm-judge.js";
 import { type CallModel } from "./transport.js";
+import { batchCallModel } from "./transport-batch.js";
 import type { BenchmarkCase, VariantRow, PromptVars } from "./types.js";
 export interface EvalOpts {
     /** Primary generator model (retained for single-model compat). */
@@ -35,14 +36,33 @@ export interface EvalOpts {
     timeoutMs?: number;
     /** Repetitions per (variant, case, model). Default 1 — opt-in to 3+ for noise floor. */
     repetitions?: number;
+    /**
+     * Adaptive sampling: after initial `repetitions`, keep adding one rep per cell
+     * where any score-dim σ exceeds `threshold`, up to `cap` total reps. Prevents
+     * wasted reps on already-stable cells while driving noisy ones down.
+     */
+    adaptiveReps?: {
+        cap: number;
+        threshold?: number;
+    };
     /** Inject an llm-judge call per case; content dimension is replaced by judge score. */
     judge?: JudgeOpts & {
         topN?: number;
     };
     /** Transport override for tests. */
     callModel?: CallModel;
+    /** Use provider batch API instead of online calls (50% cheaper, slower wall-clock). */
+    batch?: boolean;
+    /** Run id — required when batch=true so state is crash-resumable. */
+    runId?: string;
+    /** Current generation number — used to key batch state. */
+    generation?: number;
+    /** Batch-transport override for tests. Same return shape as transport-batch.batchCallModel. */
+    batchCallModel?: typeof batchCallModel;
     /** Optional callback for progress */
     onProgress?: (done: number, total: number, caseName: string, variantId: string) => void;
+    /** Progress callback specific to batch-phase transitions. */
+    onBatchProgress?: (msg: string) => void;
 }
 export declare function buildMatrix(variants: Array<{
     id: string;

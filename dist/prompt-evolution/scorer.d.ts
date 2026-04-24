@@ -30,3 +30,17 @@ export declare function aggregateReps(results: EvaluationResult[]): {
     mean: ScoreDimensions;
     stddev: ScoreDimensions;
 };
+/**
+ * Bootstrap 95% confidence interval over a sample. Resamples with
+ * replacement `iterations` times, takes the 2.5th and 97.5th percentile
+ * of the resampled means. Used to decide whether two variants differ
+ * for real or sit within each other's noise.
+ */
+export declare function bootstrapCI(values: number[], iterations?: number): [low: number, high: number];
+/**
+ * Kendall τ rank correlation between two same-length orderings of ids.
+ * Returns 1.0 for identical rankings, -1.0 for reversed, 0 for random.
+ * We use this to check whether splitting the reps in half produces the
+ * same per-variant ordering twice — low τ means the benchmark is noise.
+ */
+export declare function kendallTau(rankA: string[], rankB: string[]): number;

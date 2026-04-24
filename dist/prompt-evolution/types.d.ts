@@ -88,6 +88,16 @@ export interface VariantRow {
     perModel?: Record<string, ScoreDimensions>;
     /** Count of cases that failed to parse as JSON (orthogonal to content). */
     parseFailures?: number;
+    /** Rep-level stddev of gmean. Populated when reps>1. */
+    repsStddev?: number;
+    /** 95% bootstrap CI for gmean over the case-level samples. */
+    gmeanCI?: [low: number, high: number];
+    /**
+     * Kendall τ of per-variant rankings between first-half and second-half reps.
+     * Same value for every row in the generation — it's a matrix-level metric.
+     * Only meaningful when reps >= 4 (needs at least 2 per half).
+     */
+    rankStability?: number;
 }
 export interface MutationRequest {
     currentText: string;

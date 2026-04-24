@@ -152,6 +152,61 @@ ${result.learningLog.map((l) => `| ${l.generation} | ${l.mutationSummary} | ${(l
   writeFileSync(join(root, "best.md"), report);
 }
 
+/**
+ * Persist batch submission state so a crashed or restarted run can resume
+ * polling instead of resubmitting (which would duplicate the bill).
+ *
+ * Keyed by (generation, phase) so multi-generation runs and eval-vs-judge
+ * submissions don't collide. Written append-only — the latest entry wins
+ * on load.
+ */
+export interface BatchStateEntry {
+  generation: number;
+  phase: "eval" | "judge";
+  batchId: string;
+  provider: "anthropic" | "openai-compatible";
+  submittedAt: string;
+  /** If set, we've already collected results for this entry — ignore on resume. */
+  finishedAt?: string;
+}
+
+export function saveBatchState(runId: string, entry: BatchStateEntry): void {
+  const path = join(runDir(runId), "batch-jobs.jsonl");
+  writeFileSync(path, JSON.stringify(entry) + "\n", { flag: "a" });
+}
+
+export function loadBatchState(runId: string, generation: number, phase: "eval" | "judge"): BatchStateEntry | null {
+  const path = join(runDir(runId), "batch-jobs.jsonl");
+  if (!existsSync(path)) return null;
+  const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+  let latest: BatchStateEntry | null = null;
+  for (const line of lines) {
+    try {
+      const e = JSON.parse(line) as BatchStateEntry;
+      if (e.generation === generation && e.phase === phase) latest = e;
+    } catch { /* skip malformed */ }
+  }
+  // Only return if not yet finished — otherwise caller would re-poll a consumed batch.
+  return latest && !latest.finishedAt ? latest : null;
+}
+
+export function markBatchFinished(runId: string, batchId: string): void {
+  const path = join(runDir(runId), "batch-jobs.jsonl");
+  if (!existsSync(path)) return;
+  const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+  const updated = lines.map((line) => {
+    try {
+      const e = JSON.parse(line) as BatchStateEntry;
+      if (e.batchId === batchId && !e.finishedAt) {
+        e.finishedAt = new Date().toISOString();
+        return JSON.stringify(e);
+      }
+    } catch { /* skip */ }
+    return line;
+  });
+  writeFileSync(path, updated.join("\n") + "\n");
+}
+
 /** List all runs, newest first. */
 export function listRuns(): Array<{ runId: string; meta: RunMeta }> {
   const root = storeRoot();

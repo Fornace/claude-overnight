@@ -48,13 +48,22 @@ Options:
   --plateau <n>           Stop early if no improvement for N generations (default: 3)
   --reps <n>              Repetitions per (variant, case, model) for noise floor (default: 1)
   --concurrency <n>       Max in-flight eval calls (default: 8; bump for slow endpoints)
+  --batch                 Use provider batch API (50% cheaper, slower wall-clock)
+  --adaptive-cap <n>      Adaptive sampling: extend reps up to N when σ > threshold (default: off)
+  --adaptive-threshold <x> σ threshold that triggers an extra rep (default: 0.1)
   --judge                 Use llm-judge for content scoring (costs extra API calls)
   --judge-model <model>   Model to use for the judge (default: same as eval-model)
   --judge-top-n <n>       Judge only the top-N variants per generation (default: 4)
   --cases <suite>         Benchmark suite: plan | mcp-planning | mcp-review |
                           mcp-supervision | mcp-stuck (default: plan)
   --harvest               Append cases harvested from <cwd>/.claude-overnight/runs/*
+  --harvest-only          Use ONLY harvested real objectives (fails if none found)
   --harvest-limit <n>     Max harvested cases (default: 10)
+  --prompts <list>        Comma-separated prompt paths to evolve in sequence
+
+Subcommands:
+  claude-overnight-evolve diff <runIdA> <runIdB>
+                          Print a per-variant diff of two persisted runs
   --base-url <url>        API base URL override
   --auth-token <token>    Auth token override
   --run-id <id>           Preset run id (default: auto-generated)
@@ -74,12 +83,17 @@ interface Opts {
   plateau: number;
   reps: number;
   concurrency?: number;
+  batch: boolean;
+  adaptiveCap?: number;
+  adaptiveThreshold?: number;
   useJudge: boolean;
   judgeModel?: string;
   judgeTopN: number;
   cases: string;
   harvest: boolean;
+  harvestOnly: boolean;
   harvestLimit: number;
+  prompts?: string[];
   baseUrl?: string;
   authToken?: string;
   runId?: string;
@@ -99,10 +113,12 @@ function parseArgs(): Opts {
     population: 8,
     plateau: 3,
     reps: 1,
+    batch: false,
     useJudge: false,
     judgeTopN: 4,
     cases: "",
     harvest: false,
+    harvestOnly: false,
     harvestLimit: 10,
     baseUrl: process.env.ANTHROPIC_BASE_URL,
     authToken: process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY,
@@ -122,12 +138,17 @@ function parseArgs(): Opts {
       case "--plateau": opts.plateau = parseInt(v, 10); i++; break;
       case "--reps": opts.reps = parseInt(v, 10); i++; break;
       case "--concurrency": opts.concurrency = parseInt(v, 10); i++; break;
+      case "--batch": opts.batch = true; break;
+      case "--adaptive-cap": opts.adaptiveCap = parseInt(v, 10); i++; break;
+      case "--adaptive-threshold": opts.adaptiveThreshold = parseFloat(v); i++; break;
       case "--judge": opts.useJudge = true; break;
       case "--judge-model": opts.judgeModel = v; i++; break;
       case "--judge-top-n": opts.judgeTopN = parseInt(v, 10); i++; break;
       case "--cases": opts.cases = v; i++; break;
       case "--harvest": opts.harvest = true; break;
+      case "--harvest-only": opts.harvest = true; opts.harvestOnly = true; break;
       case "--harvest-limit": opts.harvestLimit = parseInt(v, 10); i++; break;
+      case "--prompts": opts.prompts = v.split(",").map((s) => s.trim()).filter(Boolean); i++; break;
       case "--base-url": opts.baseUrl = v; i++; break;
       case "--auth-token": opts.authToken = v; i++; break;
       case "--run-id": opts.runId = v; i++; break;
@@ -142,8 +163,35 @@ function parseArgs(): Opts {
 }
 
 async function main(): Promise<void> {
+  // Subcommand: diff two persisted runs.
+  if (process.argv[2] === "diff") {
+    await runDiff(process.argv[3], process.argv[4]);
+    return;
+  }
+
   const opts = parseArgs();
 
+  // Multi-prompt mode: loop evolvePrompt once per prompt in opts.prompts.
+  // Each iteration gets its own runId and report. Post a combined summary
+  // at the end so the user sees best-of-batch across all prompts.
+  if (opts.prompts && opts.prompts.length > 0) {
+    const summary: Array<{ prompt: string; runId: string; gmean: number; reportPath?: string }> = [];
+    for (const p of opts.prompts) {
+      console.log(`\n========== Evolving ${p} ==========\n`);
+      const result = await evolveOne({ ...opts, prompt: p });
+      summary.push({ prompt: p, runId: result.runId, gmean: result.bestVariant.gmean, reportPath: result.reportPath });
+    }
+    console.log("\n========== Multi-prompt summary ==========");
+    for (const s of summary) {
+      console.log(`  ${s.prompt.padEnd(40)} gmean=${(s.gmean * 100).toFixed(1)}% runId=${s.runId}`);
+    }
+    return;
+  }
+
+  await evolveOne(opts);
+}
+
+async function evolveOne(opts: Opts): Promise<{ runId: string; bestVariant: { gmean: number; variantId: string; generation: number; text: string; aggregate: { parse: number; schema: number; content: number; costEfficiency: number; speed: number } }; reportPath?: string }> {
   let cases: BenchmarkCase[];
   let promptPath = opts.prompt;
   let seedText: string | undefined;
@@ -163,7 +211,7 @@ async function main(): Promise<void> {
     promptPath = `mcp-browser/${kind}`;
     seedText = extractPrompt(kind);
   } else {
-    if (opts.cases === "plan") cases = [...PLAN_CASES];
+    if (opts.cases === "plan") cases = opts.harvestOnly ? [] : [...PLAN_CASES];
     else throw new Error(`Unknown case suite: ${opts.cases}`);
     if (opts.harvest) {
       const harvested = harvestRealCases({
@@ -172,9 +220,12 @@ async function main(): Promise<void> {
         limit: opts.harvestLimit,
       });
       if (harvested.length === 0) {
+        if (opts.harvestOnly) {
+          throw new Error("--harvest-only set but no runs found under <cwd>/.claude-overnight/runs");
+        }
         console.log(`  (harvest: no runs found under <cwd>/.claude-overnight/runs)`);
       } else {
-        console.log(`  (harvest: +${harvested.length} real objectives)`);
+        console.log(`  (harvest: ${opts.harvestOnly ? "" : "+"}${harvested.length} real objectives)`);
         cases = cases.concat(harvested);
       }
     }
@@ -202,6 +253,10 @@ async function main(): Promise<void> {
     plateauGenerations: opts.plateau,
     repetitions: opts.reps > 1 ? opts.reps : undefined,
     concurrency: opts.concurrency,
+    batch: opts.batch || undefined,
+    adaptiveReps: opts.adaptiveCap
+      ? { cap: opts.adaptiveCap, threshold: opts.adaptiveThreshold }
+      : undefined,
     judge: opts.useJudge
       ? {
           model: opts.judgeModel ?? opts.evalModel,
@@ -229,6 +284,49 @@ async function main(): Promise<void> {
   console.log(`speed:      ${(result.bestVariant.aggregate.speed * 100).toFixed(1)}%`);
   console.log("\n--- Prompt text ---");
   console.log(result.bestVariant.text);
+  return result;
+}
+
+async function runDiff(runIdA: string | undefined, runIdB: string | undefined): Promise<void> {
+  if (!runIdA || !runIdB) {
+    console.error("usage: claude-overnight-evolve diff <runIdA> <runIdB>");
+    process.exit(2);
+  }
+  const { loadRun } = await import("../prompt-evolution/persistence.js");
+  const a = loadRun(runIdA);
+  const b = loadRun(runIdB);
+
+  type Row = { generation: number; variantId: string; gmean: number };
+  const collect = (run: { matrix: unknown[] }): Map<string, Row> => {
+    const out = new Map<string, Row>();
+    for (const rec of run.matrix as Array<{ generation: number; variantId: string; gmean: number }>) {
+      // Keep the latest-generation row per variantId so diff compares final state.
+      const existing = out.get(rec.variantId);
+      if (!existing || rec.generation > existing.generation) {
+        out.set(rec.variantId, { generation: rec.generation, variantId: rec.variantId, gmean: rec.gmean });
+      }
+    }
+    return out;
+  };
+
+  const rowsA = collect(a);
+  const rowsB = collect(b);
+  const ids = new Set([...rowsA.keys(), ...rowsB.keys()]);
+
+  console.log(`# Diff: ${runIdA} → ${runIdB}`);
+  console.log("");
+  console.log(`|  Variant  |  A gmean  |  B gmean  |   Δ   |  note  |`);
+  console.log(`|-----------|-----------|-----------|-------|--------|`);
+  const sorted = [...ids].sort();
+  for (const id of sorted) {
+    const ra = rowsA.get(id);
+    const rb = rowsB.get(id);
+    const ga = ra ? (ra.gmean * 100).toFixed(1) : "—";
+    const gb = rb ? (rb.gmean * 100).toFixed(1) : "—";
+    const delta = ra && rb ? ((rb.gmean - ra.gmean) * 100).toFixed(1) : "—";
+    const note = !ra ? "new in B" : !rb ? "missing in B" : ra.gmean < rb.gmean ? "↑" : ra.gmean > rb.gmean ? "↓" : "=";
+    console.log(`| ${id.padEnd(10)}| ${ga.padStart(9)} | ${gb.padStart(9)} | ${delta.padStart(5)} | ${note} |`);
+  }
 }
 
 main().catch((err: unknown) => {

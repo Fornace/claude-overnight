@@ -30,14 +30,23 @@ export function generateReport(opts, result, generationMatrices) {
     lines.push("");
     lines.push("## Executive Summary");
     lines.push("");
+    const bestCI = best.gmeanCI ? ` (95% CI ${(best.gmeanCI[0] * 100).toFixed(1)}–${(best.gmeanCI[1] * 100).toFixed(1)}%)` : "";
+    const bestLine = `Best variant scores **${(best.gmean * 100).toFixed(1)}%**${bestCI}`;
     if (baseline && best.gmean > baseline.gmean) {
-        lines.push(`Best variant scores **${(best.gmean * 100).toFixed(1)}%** (baseline: ${(baseline.gmean * 100).toFixed(1)}%), Δ **${((best.gmean - baseline.gmean) * 100).toFixed(1)}pp**.`);
+        const blCI = baseline.gmeanCI ? ` (CI ${(baseline.gmeanCI[0] * 100).toFixed(1)}–${(baseline.gmeanCI[1] * 100).toFixed(1)}%)` : "";
+        const overlap = baseline.gmeanCI && best.gmeanCI && baseline.gmeanCI[1] > best.gmeanCI[0];
+        const reliability = overlap ? " — **CIs overlap, ranking is not statistically reliable**" : "";
+        lines.push(`${bestLine}, Δ **${((best.gmean - baseline.gmean) * 100).toFixed(1)}pp** over baseline ${(baseline.gmean * 100).toFixed(1)}%${blCI}${reliability}.`);
     }
     else if (baseline) {
-        lines.push(`No improvement over baseline. Best variant scores **${(best.gmean * 100).toFixed(1)}%** (baseline: ${(baseline.gmean * 100).toFixed(1)}%).`);
+        lines.push(`No improvement over baseline. ${bestLine} (baseline: ${(baseline.gmean * 100).toFixed(1)}%).`);
     }
     else {
-        lines.push(`Best variant scores **${(best.gmean * 100).toFixed(1)}%**.`);
+        lines.push(`${bestLine}.`);
+    }
+    if (best.rankStability != null) {
+        const solid = best.rankStability >= 0.7;
+        lines.push(`Rank stability τ = **${best.rankStability.toFixed(2)}**${solid ? " — ranking agrees across rep-split halves." : " — **ranking unstable, add more reps**."}`);
     }
     if (reps < 2) {
         lines.push("");
@@ -51,14 +60,22 @@ export function generateReport(opts, result, generationMatrices) {
     lines.push("## Per-Generation Matrix");
     lines.push("");
     const stddevCol = reps > 1 ? " | σ gmean" : "";
-    lines.push(`| Gen | Variant | gmean${stddevCol} | parse | schema | content | cost | speed | parseFail |`);
-    lines.push(`|-----|---------|-------${reps > 1 ? "|-------" : ""}|-------|--------|---------|------|-------|-----------|`);
+    const ciCol = reps > 1 ? " | 95% CI" : "";
+    lines.push(`| Gen | Variant | gmean${stddevCol}${ciCol} | parse | schema | content | cost | speed | parseFail |`);
+    lines.push(`|-----|---------|-------${reps > 1 ? "|-------|-------" : ""}|-------|--------|---------|------|-------|-----------|`);
     for (let g = 0; g < generationMatrices.length; g++) {
         const rows = [...generationMatrices[g]].sort((a, b) => b.gmean - a.gmean);
         for (const r of rows) {
             const s = r.aggregate;
-            const sigma = reps > 1 ? ` | ${r.crossModelStddev != null ? (r.crossModelStddev * 100).toFixed(1) : "—"}` : "";
-            lines.push(`| ${g} | ${r.variantId.slice(0, 16)} | ${(r.gmean * 100).toFixed(1)}${sigma} | ` +
+            // Prefer repsStddev for single-model runs (reps noise floor);
+            // fall back to crossModelStddev for multi-model runs; dash if neither.
+            const sigma = reps > 1
+                ? ` | ${r.repsStddev != null ? (r.repsStddev * 100).toFixed(1) : r.crossModelStddev != null ? (r.crossModelStddev * 100).toFixed(1) : "—"}`
+                : "";
+            const ci = reps > 1
+                ? ` | ${r.gmeanCI ? `${(r.gmeanCI[0] * 100).toFixed(1)}–${(r.gmeanCI[1] * 100).toFixed(1)}` : "—"}`
+                : "";
+            lines.push(`| ${g} | ${r.variantId.slice(0, 16)} | ${(r.gmean * 100).toFixed(1)}${sigma}${ci} | ` +
                 `${pct(s.parse)} | ${pct(s.schema)} | ${pct(s.content)} | ` +
                 `${pct(s.costEfficiency)} | ${pct(s.speed)} | ${r.parseFailures ?? 0} |`);
         }
@@ -83,6 +100,26 @@ export function generateReport(opts, result, generationMatrices) {
             lines.push(`| ${r.variantId.slice(0, 16)} | ${cells.join(" | ")} | ${r.crossModelStddev != null ? (r.crossModelStddev * 100).toFixed(1) : "—"} |`);
         }
         lines.push("");
+    }
+    // Pareto section: surface variants on the (cost, content) frontier.
+    // A variant is on the frontier if no other variant beats it on BOTH
+    // axes. When two variants trade cost for quality, the user should see
+    // both — gmean alone hides the tradeoff.
+    {
+        const finalMatrix = generationMatrices[generationMatrices.length - 1] ?? [];
+        const frontier = paretoFrontier(finalMatrix);
+        if (frontier.length > 1) {
+            lines.push("## Pareto Frontier (content vs cost)");
+            lines.push("");
+            lines.push("Variants that no other variant beats on **both** content and cost. When the frontier has >1 member, you're picking a tradeoff, not a single winner.");
+            lines.push("");
+            lines.push(`| Variant | content | costEff |`);
+            lines.push(`|---------|---------|---------|`);
+            for (const r of frontier) {
+                lines.push(`| ${r.variantId.slice(0, 16)} | ${pct(r.aggregate.content)} | ${pct(r.aggregate.costEfficiency)} |`);
+            }
+            lines.push("");
+        }
     }
     lines.push("## Learning Log");
     lines.push("");
@@ -143,6 +180,22 @@ export function generateReport(opts, result, generationMatrices) {
     return lines.join("\n");
 }
 function pct(n) { return (n * 100).toFixed(0); }
+/** Pareto frontier over (content, costEfficiency) — maximize both. */
+function paretoFrontier(rows) {
+    return rows.filter((r) => {
+        for (const other of rows) {
+            if (other === r)
+                continue;
+            if (other.aggregate.content >= r.aggregate.content &&
+                other.aggregate.costEfficiency >= r.aggregate.costEfficiency &&
+                (other.aggregate.content > r.aggregate.content ||
+                    other.aggregate.costEfficiency > r.aggregate.costEfficiency)) {
+                return false; // dominated
+            }
+        }
+        return true;
+    });
+}
 function shorten(model) {
     // "claude-haiku-4-5" → "haiku", "zai-org/GLM-5.1-TEE" → "GLM"
     const tail = model.split("/").pop() ?? model;

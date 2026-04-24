@@ -38,3 +38,5 @@ export interface JudgeResult {
  *   - Forced JSON output schema
  */
 export declare function judgeOutput(rawOutput: string, c: BenchmarkCase, opts: JudgeOpts): Promise<JudgeResult>;
+export declare function buildJudgePrompt(rawOutput: string, c: BenchmarkCase): string;
+export declare function parseJudgeOutput(raw: string): JudgeResult;

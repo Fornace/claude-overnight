@@ -69,7 +69,7 @@ export async function judgeOutput(rawOutput, c, opts) {
     }
     return parseJudgeOutput(raw);
 }
-function buildJudgePrompt(rawOutput, c) {
+export function buildJudgePrompt(rawOutput, c) {
     const rubricLines = DEFAULT_RUBRIC
         .map((r, i) => `${i + 1}. **${r.name}**: ${r.question}`)
         .join("\n");
@@ -106,7 +106,7 @@ Respond ONLY with a JSON object in this exact shape (no markdown fences, no extr
 {"parse":5,"schema":5,"content":4,"concision":4,"instruction":5,"justification":"Brief justification here."}
 `;
 }
-function parseJudgeOutput(raw) {
+export function parseJudgeOutput(raw) {
     // Strip fences
     const cleaned = raw
         .replace(/^\`\`\`(?:json)?\s*\n?/i, "")
