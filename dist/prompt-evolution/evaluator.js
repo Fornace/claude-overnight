@@ -44,10 +44,7 @@ export async function buildMatrix(variants, cases, opts) {
     //   batch=false — work-stealing pool: keep `concurrency` jobs in flight so
     //                 a slow call doesn't block the others in its slice.
     const rawByKey = new Map();
-    if (opts.batch) {
-        await runBatchPath(jobs, opts, rawByKey);
-    }
-    else {
+    const runOnlinePool = async () => {
         let done = 0;
         let next = 0;
         const worker = async () => {
@@ -65,6 +62,24 @@ export async function buildMatrix(variants, cases, opts) {
             }
         };
         await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
+    };
+    if (opts.batch) {
+        try {
+            await runBatchPath(jobs, opts, rawByKey);
+        }
+        catch (err) {
+            // Batch submission failed (Kimi's /v1/files doesn't match OpenAI,
+            // OpenRouter has no batch at all, transient provider error, etc.).
+            // Fall back to the online pool so the whole run doesn't die — losing
+            // the 50% batch discount is better than losing the run.
+            const msg = err instanceof Error ? err.message : String(err);
+            opts.onBatchProgress?.(`batch path failed, falling back to online: ${msg.slice(0, 200)}`);
+            rawByKey.clear(); // discard any partial state
+            await runOnlinePool();
+        }
+    }
+    else {
+        await runOnlinePool();
     }
     // Adaptive sampling: for cells where any score-dim σ exceeds threshold,
     // add one more rep and rerun — up to `cap` total reps. Converges on a

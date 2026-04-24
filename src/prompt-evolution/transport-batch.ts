@@ -189,7 +189,11 @@ async function runOpenAIBatch(jobs: BatchJob[], opts: BatchOpts): Promise<Map<st
     form.append("purpose", "batch");
     form.append("file", new Blob([jsonl], { type: "application/jsonl" }), "batch-input.jsonl");
     const fileRes = await fetch(`${baseUrl}/v1/files`, { method: "POST", headers: authHeaders, body: form });
-    if (!fileRes.ok) throw new Error(`OpenAI-compat file upload: HTTP ${fileRes.status} ${await fileRes.text()}`);
+    if (!fileRes.ok) {
+      const body = await fileRes.text().catch(() => "");
+      throw new Error(`Batch file-upload failed: HTTP ${fileRes.status} at ${baseUrl}/v1/files. ` +
+        `This provider may not support OpenAI-compatible batch. Response: ${body.slice(0, 300)}`);
+    }
     const fileData = await fileRes.json() as { id: string };
 
     const createRes = await fetch(`${baseUrl}/v1/batches`, {

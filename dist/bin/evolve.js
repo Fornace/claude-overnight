@@ -293,7 +293,9 @@ async function evolveOne(opts) {
                 cases = cases.concat(generated);
             }
             catch (err) {
-                console.log(`  (case generation failed: ${err.message})`);
+                const msg = err.message ?? String(err);
+                console.log(`\n  ⚠ case generation failed: ${msg.slice(0, 500)}`);
+                console.log(`  Falling back to the existing ${cases.length} case(s). Try --gen-model with an Anthropic-compatible JSON-reliable model (e.g. claude-haiku-4-5) if this persists.\n`);
             }
         }
     }

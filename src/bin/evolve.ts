@@ -259,7 +259,9 @@ async function evolveOne(opts: Opts): Promise<{ runId: string; bestVariant: { gm
         console.log(`  (generated: +${generated.length} synthetic cases)`);
         cases = cases.concat(generated);
       } catch (err: unknown) {
-        console.log(`  (case generation failed: ${(err as Error).message})`);
+        const msg = (err as Error).message ?? String(err);
+        console.log(`\n  ⚠ case generation failed: ${msg.slice(0, 500)}`);
+        console.log(`  Falling back to the existing ${cases.length} case(s). Try --gen-model with an Anthropic-compatible JSON-reliable model (e.g. claude-haiku-4-5) if this persists.\n`);
       }
     }
   }
