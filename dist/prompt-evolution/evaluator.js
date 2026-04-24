@@ -268,8 +268,9 @@ async function runBatchPath(jobs, opts, rawByKey) {
         : null;
     const transport = opts.batchCallModel ?? batchCallModel;
     const results = await transport(batchJobs, {
-        baseUrl: opts.baseUrl,
-        authToken: opts.authToken,
+        baseUrl: opts.batchBaseUrl ?? opts.baseUrl,
+        authToken: opts.batchAuthToken ?? opts.authToken,
+        modelOverride: opts.batchModel,
         maxTokens: opts.maxTokens,
         resumeBatchId: existing?.batchId,
         onSubmitted: (batchId, p) => {

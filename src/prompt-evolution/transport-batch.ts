@@ -33,6 +33,14 @@ export interface BatchJob {
 export interface BatchOpts {
   baseUrl?: string;
   authToken?: string;
+  /**
+   * Override model for the batch submission. Moonshot's batch API only
+   * accepts kimi-k2.5 or kimi-k2.6 — NOT the kimi-for-coding alias that the
+   * coding endpoint uses. When batch is enabled against a Kimi stack, set
+   * this so online eval keeps using kimi-for-coding while batch uses the
+   * concrete version.
+   */
+  modelOverride?: string;
   maxTokens?: number;
   /** Poll interval starts here and doubles to `pollMaxMs`. Defaults 30s → 5min. */
   pollStartMs?: number;
@@ -83,7 +91,13 @@ export async function batchCallModel(
   if (jobs.length === 0) return new Map();
   const provider = detectBatchProvider(opts.baseUrl);
   if (provider === "unsupported") {
-    throw new Error(`Batch API not supported for baseUrl=${opts.baseUrl}; use online transport`);
+    throw new Error(
+      `Batch API not supported for baseUrl=${opts.baseUrl}. ` +
+      `Options: (1) omit --batch and use online transport, or (2) point ` +
+      `the batch call at a provider with batch support (e.g. set --batch-base-url ` +
+      `https://api.moonshot.ai/v1 --batch-model kimi-k2.6 for Kimi users whose ` +
+      `online endpoint is api.kimi.com/coding).`,
+    );
   }
   if (provider === "anthropic") return runAnthropicBatch(jobs, opts);
   return runOpenAIBatch(jobs, opts);
@@ -107,7 +121,7 @@ async function runAnthropicBatch(jobs: BatchJob[], opts: BatchOpts): Promise<Map
     const body = JSON.stringify({
       requests: jobs.map((j) => {
         const params: Record<string, unknown> = {
-          model: j.model,
+          model: opts.modelOverride ?? j.model,
           max_tokens: opts.maxTokens ?? 4096,
           messages: [{ role: "user", content: j.userText }],
         };
@@ -196,7 +210,7 @@ async function runOpenAIBatch(jobs: BatchJob[], opts: BatchOpts): Promise<Map<st
         custom_id: j.customId,
         method: "POST",
         url: "/v1/chat/completions",
-        body: { model: j.model, max_tokens: opts.maxTokens ?? 4096, max_completion_tokens: opts.maxTokens ?? 4096, messages },
+        body: { model: opts.modelOverride ?? j.model, max_tokens: opts.maxTokens ?? 4096, max_completion_tokens: opts.maxTokens ?? 4096, messages },
       });
     }).join("\n");
 

@@ -43,7 +43,11 @@ export async function batchCallModel(jobs, opts) {
         return new Map();
     const provider = detectBatchProvider(opts.baseUrl);
     if (provider === "unsupported") {
-        throw new Error(`Batch API not supported for baseUrl=${opts.baseUrl}; use online transport`);
+        throw new Error(`Batch API not supported for baseUrl=${opts.baseUrl}. ` +
+            `Options: (1) omit --batch and use online transport, or (2) point ` +
+            `the batch call at a provider with batch support (e.g. set --batch-base-url ` +
+            `https://api.moonshot.ai/v1 --batch-model kimi-k2.6 for Kimi users whose ` +
+            `online endpoint is api.kimi.com/coding).`);
     }
     if (provider === "anthropic")
         return runAnthropicBatch(jobs, opts);
@@ -65,7 +69,7 @@ async function runAnthropicBatch(jobs, opts) {
         const body = JSON.stringify({
             requests: jobs.map((j) => {
                 const params = {
-                    model: j.model,
+                    model: opts.modelOverride ?? j.model,
                     max_tokens: opts.maxTokens ?? 4096,
                     messages: [{ role: "user", content: j.userText }],
                 };
@@ -144,7 +148,7 @@ async function runOpenAIBatch(jobs, opts) {
                 custom_id: j.customId,
                 method: "POST",
                 url: "/v1/chat/completions",
-                body: { model: j.model, max_tokens: opts.maxTokens ?? 4096, max_completion_tokens: opts.maxTokens ?? 4096, messages },
+                body: { model: opts.modelOverride ?? j.model, max_tokens: opts.maxTokens ?? 4096, max_completion_tokens: opts.maxTokens ?? 4096, messages },
             });
         }).join("\n");
         const form = new FormData();

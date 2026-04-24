@@ -96,8 +96,12 @@ async function runJudgeBatch(
     : null;
   const transport = opts.batchCallModel ?? batchCallModel;
   const results = await transport(batchJobs, {
-    baseUrl: judge.baseUrl ?? opts.baseUrl,
-    authToken: judge.authToken ?? opts.authToken,
+    // Judge batch follows the same override hierarchy as eval batch: if a
+    // dedicated batch endpoint is set on EvalOpts, use it; else fall back
+    // to the judge's own endpoint or the main one.
+    baseUrl: opts.batchBaseUrl ?? judge.baseUrl ?? opts.baseUrl,
+    authToken: opts.batchAuthToken ?? judge.authToken ?? opts.authToken,
+    modelOverride: opts.batchModel,
     maxTokens: judge.maxTokens ?? 2048,
     resumeBatchId: existing?.batchId,
     onSubmitted: (batchId, p) => {

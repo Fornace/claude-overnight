@@ -27,6 +27,14 @@ export interface BatchJob {
 export interface BatchOpts {
     baseUrl?: string;
     authToken?: string;
+    /**
+     * Override model for the batch submission. Moonshot's batch API only
+     * accepts kimi-k2.5 or kimi-k2.6 — NOT the kimi-for-coding alias that the
+     * coding endpoint uses. When batch is enabled against a Kimi stack, set
+     * this so online eval keeps using kimi-for-coding while batch uses the
+     * concrete version.
+     */
+    modelOverride?: string;
     maxTokens?: number;
     /** Poll interval starts here and doubles to `pollMaxMs`. Defaults 30s → 5min. */
     pollStartMs?: number;

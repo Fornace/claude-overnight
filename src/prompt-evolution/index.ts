@@ -70,6 +70,12 @@ export interface EvolveOpts {
   concurrency?: number;
   /** Use provider batch API instead of online calls. 50% cheaper, slower wall-clock. */
   batch?: boolean;
+  /** Override base URL for batch submissions only. */
+  batchBaseUrl?: string;
+  /** Override auth token for batch submissions only. */
+  batchAuthToken?: string;
+  /** Override model for batch submissions (e.g. kimi-k2.6 when online uses kimi-for-coding). */
+  batchModel?: string;
   /** Adaptive sampling cap (opt-in). Keeps adding reps to noisy cells up to this count. */
   adaptiveReps?: { cap: number; threshold?: number };
   /**
@@ -142,6 +148,9 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
       repetitions: opts.repetitions,
       judge: opts.judge,
       batch: opts.batch,
+      batchBaseUrl: opts.batchBaseUrl,
+      batchAuthToken: opts.batchAuthToken,
+      batchModel: opts.batchModel,
       adaptiveReps: opts.adaptiveReps,
       runId,
       generation: gen,
@@ -302,6 +311,9 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
       concurrency: opts.concurrency ?? 8,
       repetitions: opts.repetitions,
       batch: opts.batch,
+      batchBaseUrl: opts.batchBaseUrl,
+      batchAuthToken: opts.batchAuthToken,
+      batchModel: opts.batchModel,
       adaptiveReps: opts.adaptiveReps,
       runId,
       generation: generations + 1,
