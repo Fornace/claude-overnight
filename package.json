@@ -1,6 +1,6 @@
 {
   "name": "claude-overnight",
-  "version": "1.55.0",
+  "version": "1.55.1",
   "description": "Overnight parallel coding agents in git worktrees, with a self-curating skill memory that improves while the run is going. Mix Claude Opus as planner, Kimi 2.6 or Cursor composer-2 as cheap fast worker, Gemini or Qwen for bulk implementation. Multi-wave autonomous loop that plans, executes, reviews, and steers itself until the objective is met. Crash-safe resume, rate-limit aware, usage cap preserves headroom for your interactive Claude Code.",
   "type": "module",
   "bin": {
