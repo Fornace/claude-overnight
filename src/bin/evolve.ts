@@ -47,6 +47,7 @@ Options:
   --population <n>        Max population size (default: 8)
   --plateau <n>           Stop early if no improvement for N generations (default: 3)
   --reps <n>              Repetitions per (variant, case, model) for noise floor (default: 1)
+  --concurrency <n>       Max in-flight eval calls (default: 8; bump for slow endpoints)
   --judge                 Use llm-judge for content scoring (costs extra API calls)
   --judge-model <model>   Model to use for the judge (default: same as eval-model)
   --judge-top-n <n>       Judge only the top-N variants per generation (default: 4)
@@ -72,6 +73,7 @@ interface Opts {
   population: number;
   plateau: number;
   reps: number;
+  concurrency?: number;
   useJudge: boolean;
   judgeModel?: string;
   judgeTopN: number;
@@ -119,6 +121,7 @@ function parseArgs(): Opts {
       case "--population": opts.population = parseInt(v, 10); i++; break;
       case "--plateau": opts.plateau = parseInt(v, 10); i++; break;
       case "--reps": opts.reps = parseInt(v, 10); i++; break;
+      case "--concurrency": opts.concurrency = parseInt(v, 10); i++; break;
       case "--judge": opts.useJudge = true; break;
       case "--judge-model": opts.judgeModel = v; i++; break;
       case "--judge-top-n": opts.judgeTopN = parseInt(v, 10); i++; break;
@@ -198,6 +201,7 @@ async function main(): Promise<void> {
     populationCap: opts.population,
     plateauGenerations: opts.plateau,
     repetitions: opts.reps > 1 ? opts.reps : undefined,
+    concurrency: opts.concurrency,
     judge: opts.useJudge
       ? {
           model: opts.judgeModel ?? opts.evalModel,

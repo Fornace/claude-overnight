@@ -52,6 +52,8 @@ export interface EvolveOpts {
     evalModels?: string[];
     /** Repetitions per (variant, case, model). Default 1. Recommended ≥3 for noise floor. */
     repetitions?: number;
+    /** Max in-flight eval calls. Default 8. Raise for slow endpoints, lower for strict rate limits. */
+    concurrency?: number;
     /** Optional llm-judge — replaces the heuristic content score for top-N variants each gen. */
     judge?: JudgeOpts & {
         topN?: number;

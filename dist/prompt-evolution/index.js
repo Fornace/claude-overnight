@@ -63,7 +63,7 @@ export async function evolvePrompt(opts) {
             models: opts.evalModels,
             baseUrl: opts.baseUrl,
             authToken: opts.authToken,
-            concurrency: 4,
+            concurrency: opts.concurrency ?? 8,
             repetitions: opts.repetitions,
             judge: opts.judge,
             onProgress: (done, total, caseName, variantId) => {
@@ -178,7 +178,7 @@ export async function evolvePrompt(opts) {
         models: opts.evalModels,
         baseUrl: opts.baseUrl,
         authToken: opts.authToken,
-        concurrency: 4,
+        concurrency: opts.concurrency ?? 8,
         repetitions: opts.repetitions,
         judge: opts.judge,
     });

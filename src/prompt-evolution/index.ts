@@ -66,6 +66,8 @@ export interface EvolveOpts {
   evalModels?: string[];
   /** Repetitions per (variant, case, model). Default 1. Recommended ≥3 for noise floor. */
   repetitions?: number;
+  /** Max in-flight eval calls. Default 8. Raise for slow endpoints, lower for strict rate limits. */
+  concurrency?: number;
   /** Optional llm-judge — replaces the heuristic content score for top-N variants each gen. */
   judge?: JudgeOpts & { topN?: number };
 }
@@ -115,7 +117,7 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
       models: opts.evalModels,
       baseUrl: opts.baseUrl,
       authToken: opts.authToken,
-      concurrency: 4,
+      concurrency: opts.concurrency ?? 8,
       repetitions: opts.repetitions,
       judge: opts.judge,
       onProgress: (done, total, caseName, variantId) => {
@@ -243,7 +245,7 @@ export async function evolvePrompt(opts: EvolveOpts): Promise<EvolutionResult> {
     models: opts.evalModels,
     baseUrl: opts.baseUrl,
     authToken: opts.authToken,
-    concurrency: 4,
+    concurrency: opts.concurrency ?? 8,
     repetitions: opts.repetitions,
     judge: opts.judge,
   });

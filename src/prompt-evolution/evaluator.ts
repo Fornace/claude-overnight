@@ -68,7 +68,7 @@ export async function buildMatrix(
 ): Promise<VariantRow[]> {
   const models = opts.models && opts.models.length > 0 ? opts.models : [opts.model];
   const reps = Math.max(1, opts.repetitions ?? 1);
-  const concurrency = opts.concurrency ?? 4;
+  const concurrency = opts.concurrency ?? 8;
   const transport = opts.callModel ?? defaultCallModel;
 
   // Build the full job list: (variant × case × model × rep).
@@ -83,13 +83,18 @@ export async function buildMatrix(
     }
   }
 
-  // Raw results, keyed by variant:case:model, each an array of per-rep results.
+  // Work-stealing pool: keep `concurrency` jobs in flight at all times so a
+  // slow call (Kimi at 4 min/call is typical) doesn't block the others in its
+  // slice. Previous batch-and-wait loop serialized the slowest job in every
+  // window of `concurrency`.
   const rawByKey = new Map<string, EvaluationResult[]>();
   let done = 0;
-  for (let i = 0; i < jobs.length; i += concurrency) {
-    const batch = jobs.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map((job) => runSingle(job, opts, transport)));
-    for (const r of batchResults) {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next++;
+      if (i >= jobs.length) return;
+      const r = await runSingle(jobs[i], opts, transport);
       const key = `${r.variantId}:${r.caseHash}:${r.model ?? ""}`;
       const arr = rawByKey.get(key) ?? [];
       arr.push(r);
@@ -97,7 +102,8 @@ export async function buildMatrix(
       done++;
       opts.onProgress?.(done, jobs.length, r.caseName, r.variantId);
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
 
   // Collapse reps: one aggregated EvaluationResult per (variant, case, model).
   const aggregated = new Map<string, EvaluationResult>();
@@ -257,11 +263,18 @@ async function runJudge(
     }
   }
 
-  // Run judge calls with modest concurrency to stay under provider rate limits.
-  const concurrency = 3;
-  for (let i = 0; i < jobs.length; i += concurrency) {
-    await Promise.all(jobs.slice(i, i + concurrency).map((fn) => fn()));
-  }
+  // Work-stealing pool for judge calls — modest concurrency to stay under
+  // provider rate limits, but no slice-blocking.
+  const judgeConcurrency = 3;
+  let nextJob = 0;
+  const judgeWorker = async (): Promise<void> => {
+    while (true) {
+      const i = nextJob++;
+      if (i >= jobs.length) return;
+      await jobs[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(judgeConcurrency, jobs.length) }, judgeWorker));
 }
 
 function averageDimensions(scores: ScoreDimensions[]): ScoreDimensions {
