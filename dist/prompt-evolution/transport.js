@@ -75,7 +75,14 @@ export async function defaultCallModel(userText, systemText, opts) {
     const costUsd = inputTokens * 0.000003 + outputTokens * 0.000015;
     return { raw, costUsd, inputTokens, outputTokens };
 }
-/** Strip markdown fences and try hard to find a JSON object in a model output. */
+/**
+ * Strip markdown fences, strip preamble, and try to find a JSON value.
+ *
+ * Handles both `{…}` objects and `[…]` arrays — the previous implementation
+ * missed arrays entirely, which broke the case generator (Kimi returns the
+ * case list as a top-level array that's often preceded by a one-line
+ * preamble even when instructed otherwise).
+ */
 export function attemptJsonParse(text) {
     const cleaned = text
         .replace(/^```(?:json)?\s*\n?/i, "")
@@ -85,14 +92,21 @@ export function attemptJsonParse(text) {
         return JSON.parse(cleaned);
     }
     catch {
-        const m = cleaned.match(/\{[\s\S]*\}/);
-        if (m) {
+        // Try the first plausible JSON value — object OR array, whichever comes
+        // first in the text. We build a regex union and pick the earliest match.
+        const objMatch = cleaned.match(/\{[\s\S]*\}/);
+        const arrMatch = cleaned.match(/\[[\s\S]*\]/);
+        const candidates = [];
+        if (objMatch && objMatch.index != null)
+            candidates.push({ idx: objMatch.index, text: objMatch[0] });
+        if (arrMatch && arrMatch.index != null)
+            candidates.push({ idx: arrMatch.index, text: arrMatch[0] });
+        candidates.sort((a, b) => a.idx - b.idx);
+        for (const c of candidates) {
             try {
-                return JSON.parse(m[0]);
+                return JSON.parse(c.text);
             }
-            catch {
-                return null;
-            }
+            catch { /* try next */ }
         }
         return null;
     }

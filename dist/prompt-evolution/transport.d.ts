@@ -24,5 +24,12 @@ export interface CallModelResult {
 /** Injectable model call — default is `defaultCallModel`; tests pass a mock. */
 export type CallModel = (userText: string, systemText: string | undefined, opts: CallModelOpts) => Promise<CallModelResult>;
 export declare function defaultCallModel(userText: string, systemText: string | undefined, opts: CallModelOpts): Promise<CallModelResult>;
-/** Strip markdown fences and try hard to find a JSON object in a model output. */
+/**
+ * Strip markdown fences, strip preamble, and try to find a JSON value.
+ *
+ * Handles both `{…}` objects and `[…]` arrays — the previous implementation
+ * missed arrays entirely, which broke the case generator (Kimi returns the
+ * case list as a top-level array that's often preceded by a one-line
+ * preamble even when instructed otherwise).
+ */
 export declare function attemptJsonParse(text: string): unknown;
