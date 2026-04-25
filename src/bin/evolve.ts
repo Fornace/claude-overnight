@@ -18,6 +18,8 @@
 
 import { evolvePrompt } from "../prompt-evolution/index.js";
 import { PLAN_CASES } from "../prompt-evolution/fixtures/plan-cases.js";
+import { STEER_CASES } from "../prompt-evolution/fixtures/steer-cases.js";
+import { COACH_CASES } from "../prompt-evolution/fixtures/coach-cases.js";
 import { harvestRealCases } from "../prompt-evolution/fixtures/harvest.js";
 import { generateCases } from "../prompt-evolution/fixtures/generate.js";
 import { runDiff, runDownload, runPromote } from "./evolve-subcommands.js";
@@ -58,8 +60,8 @@ Options:
   --judge                 Use llm-judge for content scoring (costs extra API calls)
   --judge-model <model>   Model to use for the judge (default: same as eval-model)
   --judge-top-n <n>       Judge only the top-N variants per generation (default: 4)
-  --cases <suite>         Benchmark suite: plan | mcp-planning | mcp-review |
-                          mcp-supervision | mcp-stuck (default: plan)
+  --cases <suite>         Benchmark suite: plan | steer | coach | mcp-planning |
+                          mcp-review | mcp-supervision | mcp-stuck (default: plan)
   --harvest               Append cases harvested from <cwd>/.claude-overnight/runs/*
   --harvest-only          Use ONLY harvested real objectives (fails if none found)
   --harvest-limit <n>     Max harvested cases (default: 10)
@@ -250,6 +252,8 @@ async function evolveOne(opts: Opts): Promise<{ runId: string; bestVariant: { gm
     seedText = extractPrompt(kind);
   } else {
     if (opts.cases === "plan") cases = opts.harvestOnly ? [] : [...PLAN_CASES];
+    else if (opts.cases === "steer") cases = opts.harvestOnly ? [] : [...STEER_CASES];
+    else if (opts.cases === "coach") cases = opts.harvestOnly ? [] : [...COACH_CASES];
     else throw new Error(`Unknown case suite: ${opts.cases}`);
     if (opts.harvest) {
       const harvested = harvestRealCases({
