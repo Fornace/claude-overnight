@@ -15,19 +15,36 @@ export async function mutate(request, opts) {
     const baseUrl = (opts.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
     const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
     const isKimi = /kimi\.com/i.test(baseUrl);
-    const body = JSON.stringify({
-        model: opts.model,
-        max_tokens: opts.maxTokens ?? 4096,
-        messages: [{ role: "user", content: prompt }],
-    });
+    let body;
+    if (baseUrl.includes("generativelanguage")) {
+        body = JSON.stringify({
+            model: opts.model,
+            max_completion_tokens: opts.maxTokens ?? 4096,
+            messages: [{ role: "user", content: prompt }],
+        });
+    }
+    else {
+        body = JSON.stringify({
+            model: opts.model,
+            max_tokens: opts.maxTokens ?? 4096,
+            messages: [{ role: "user", content: prompt }],
+        });
+    }
     const headers = {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${authToken}`,
         "anthropic-version": "2023-06-01",
+        "User-Agent": "Claude-Code/0.1.0",
     };
-    if (isKimi)
-        headers["User-Agent"] = "Kilo-Code/1.0";
-    const res = await fetch(`${baseUrl}/v1/messages`, {
+    let endpoint = `${baseUrl}/v1/messages`;
+    if (baseUrl.includes("generativelanguage")) {
+        endpoint = `${baseUrl}/v1/chat/completions`;
+    }
+    else if (!/^https?:\/\/(api\.)?anthropic\.com/i.test(baseUrl) && !baseUrl.includes("/v1/messages")) {
+        // A lot of OpenAI compatible endpoints use `/v1/chat/completions` natively
+        endpoint = `${baseUrl}/v1/chat/completions`;
+    }
+    const res = await fetch(endpoint, {
         method: "POST",
         headers,
         body,
@@ -38,7 +55,15 @@ export async function mutate(request, opts) {
         throw new Error(`Mutator HTTP ${res.status}: ${text.slice(0, 200)}`);
     }
     const data = await res.json();
-    const raw = data.content?.map((c) => c.text ?? "").join("") ?? "";
+    let raw = "";
+    if (endpoint.includes("chat/completions")) {
+        const chatData = data;
+        raw = chatData.choices?.[0]?.message?.content ?? "";
+    }
+    else {
+        const msgData = data;
+        raw = msgData.content?.map((c) => c.text ?? "").join("") ?? "";
+    }
     return parseMutantOutput(raw, request);
 }
 function buildMutatorPrompt(req) {

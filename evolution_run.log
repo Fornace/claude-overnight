@@ -1,0 +1,1213 @@
+
+> claude-overnight@1.60.0 evolve:favorite
+> node dist/bin/evolve.js --prompt 10_planning/10-3_plan --eval-model gemini-3.1-flash-lite-preview --mutate-model gemini-3.1-pro-preview --generations 10 --population 8 --plateau 3 --reps 3
+
+Evolution config:
+  target:      claude-overnight
+  prompt:      10_planning/10-3_plan
+  evalModel:   gemini-3.1-flash-lite-preview
+  mutateModel: gemini-3.1-pro-preview
+  generations: 10
+  population:  8
+  plateau:     3
+  cases:       10 (plan)
+
+Run directory: ~/.claude-overnight/prompt-evolution/run_moeuvadh_0bdj/
+Seeded 4 variants from 10_planning/10-3_plan
+
+=== Generation 1/10 | Population: 4 ===
+  [1/120] default → tight-typo
+  [2/120] default → tight-bugfix
+  [3/120] default → tight-bugfix
+  [4/120] default → tight-typo
+  [5/120] default → standard-feature
+  [6/120] default → tight-typo
+  [7/120] default → tight-bugfix
+  [8/120] default → standard-feature
+  [9/120] default → standard-feature
+  [10/120] default → standard-audit
+  [11/120] default → standard-audit
+  [12/120] default → large-refactor
+  [13/120] default → large-refactor
+  [14/120] default → large-refactor
+  [15/120] default → standard-audit
+  [16/120] default → large-greenfield
+  [17/120] default → large-greenfield
+  [18/120] default → large-greenfield
+  [19/120] default → standard-vague
+  [20/120] default → standard-vague
+  [21/120] default → failure-ambiguous-noun
+  [22/120] default → failure-ambiguous-noun
+  [23/120] default → standard-vague
+  [24/120] default → failure-ambiguous-noun
+  [25/120] tight → tight-bugfix
+  [26/120] default → failure-already-done
+  [27/120] tight → tight-bugfix
+  [28/120] default → failure-crosscut
+  [29/120] default → failure-already-done
+  [30/120] default → failure-already-done
+  [31/120] default → failure-crosscut
+  [32/120] default → failure-crosscut
+  [33/120] tight → tight-bugfix
+  [34/120] tight → tight-typo
+  [35/120] tight → tight-typo
+  [36/120] tight → standard-feature
+  [37/120] tight → tight-typo
+  [38/120] tight → standard-feature
+  [39/120] tight → standard-feature
+  [40/120] tight → standard-audit
+  [41/120] tight → standard-audit
+  [42/120] tight → large-refactor
+  [43/120] tight → large-refactor
+  [44/120] tight → large-greenfield
+  [45/120] tight → large-greenfield
+  [46/120] tight → large-greenfield
+  [47/120] tight → standard-vague
+  [48/120] tight → large-refactor
+  [49/120] tight → standard-vague
+  [50/120] tight → standard-vague
+  [51/120] tight → standard-audit
+  [52/120] tight → failure-ambiguous-noun
+  [53/120] tight → failure-already-done
+  [54/120] tight → failure-already-done
+  [55/120] tight → failure-already-done
+  [56/120] tight → failure-ambiguous-noun
+  [57/120] tight → failure-crosscut
+  [58/120] tight → failure-crosscut
+  [59/120] tight → failure-ambiguous-noun
+  [60/120] tight → failure-crosscut
+  [61/120] standard → tight-bugfix
+  [62/120] standard → tight-bugfix
+  [63/120] standard → tight-bugfix
+  [64/120] standard → tight-typo
+  [65/120] standard → tight-typo
+  [66/120] standard → standard-feature
+  [67/120] standard → standard-feature
+  [68/120] standard → standard-feature
+  [69/120] standard → tight-typo
+  [70/120] standard → standard-audit
+  [71/120] standard → standard-audit
+  [72/120] standard → standard-audit
+  [73/120] standard → large-refactor
+  [74/120] standard → large-refactor
+  [75/120] standard → large-greenfield
+  [76/120] standard → large-refactor
+  [77/120] standard → large-greenfield
+  [78/120] standard → standard-vague
+  [79/120] standard → large-greenfield
+  [80/120] standard → standard-vague
+  [81/120] standard → standard-vague
+  [82/120] standard → failure-already-done
+  [83/120] standard → failure-ambiguous-noun
+  [84/120] standard → failure-already-done
+  [85/120] standard → failure-already-done
+  [86/120] standard → failure-ambiguous-noun
+  [87/120] standard → failure-crosscut
+  [88/120] standard → failure-ambiguous-noun
+  [89/120] standard → failure-crosscut
+  [90/120] standard → failure-crosscut
+  [91/120] large → tight-bugfix
+  [92/120] large → tight-typo
+  [93/120] large → tight-bugfix
+  [94/120] large → tight-bugfix
+  [95/120] large → tight-typo
+  [96/120] large → standard-feature
+  [97/120] large → tight-typo
+  [98/120] large → standard-feature
+  [99/120] large → standard-feature
+  [100/120] large → standard-audit
+  [101/120] large → large-refactor
+  [102/120] large → standard-audit
+  [103/120] large → standard-audit
+  [104/120] large → large-refactor
+  [105/120] large → large-refactor
+  [106/120] large → large-greenfield
+  [107/120] large → large-greenfield
+  [108/120] large → large-greenfield
+  [109/120] large → standard-vague
+  [110/120] large → standard-vague
+  [111/120] large → standard-vague
+  [112/120] large → failure-ambiguous-noun
+  [113/120] large → failure-ambiguous-noun
+  [114/120] large → failure-already-done
+  [115/120] large → failure-ambiguous-noun
+  [116/120] large → failure-already-done
+  [117/120] large → failure-already-done
+  [118/120] large → failure-crosscut
+  [119/120] large → failure-crosscut
+  [120/120] large → failure-crosscut
+| variant | gen | gmean | parse | schema | content | cost | speed |
+|---------|-----|-------|-------|--------|---------|------|-------|
+| tight       |   0 |  90.6 |   100 |    100 |      99 |   71 |    86 |
+| standard    |   0 |  87.5 |   100 |    100 |      87 |   68 |    87 |
+| default     |   0 |  82.3 |   100 |    100 |      87 |   53 |    81 |
+| large       |   0 |  81.7 |   100 |    100 |      87 |   53 |    79 |
+
+Per-case breakdown:
+  tight (gen 0):
+    ✓ tight-bugfix: gmean=91% notes=ok
+    ✓ tight-typo: gmean=91% notes=ok
+    ✓ standard-feature: gmean=91% notes=ok
+    ✓ standard-audit: gmean=90% notes=ok
+    ✓ large-refactor: gmean=91% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ⚠ standard-vague: gmean=89% notes=1 task(s) appear to have dependencies
+    ✓ failure-ambiguous-noun: gmean=90% notes=ok
+    ✓ failure-already-done: gmean=91% notes=ok
+    ✓ failure-crosscut: gmean=91% notes=ok
+  standard (gen 0):
+    ⚠ tight-bugfix: gmean=85% notes=4 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=84% notes=1 task(s) appear to have dependencies; 5 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=90% notes=ok
+    ✓ standard-audit: gmean=90% notes=ok
+    ✓ large-refactor: gmean=89% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ✓ standard-vague: gmean=91% notes=ok
+    ⚠ failure-ambiguous-noun: gmean=88% notes=1 task(s) appear to have dependencies
+    ⚠ failure-already-done: gmean=84% notes=5 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=82% notes=4 task(s) lack file/function specificity
+  default (gen 0):
+    ⚠ tight-bugfix: gmean=79% notes=7 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=79% notes=7 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=85% notes=ok
+    ✓ large-refactor: gmean=86% notes=ok
+    ✓ large-greenfield: gmean=85% notes=ok
+    ✓ standard-vague: gmean=84% notes=ok
+    ✓ failure-ambiguous-noun: gmean=84% notes=ok
+    ⚠ failure-already-done: gmean=79% notes=6 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=75% notes=7 task(s) lack file/function specificity
+  large (gen 0):
+    ⚠ tight-bugfix: gmean=79% notes=6 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=78% notes=10 task(s) lack file/function specificity
+    ⚠ standard-feature: gmean=84% notes=1 task(s) appear to have dependencies
+    ✓ standard-audit: gmean=83% notes=ok
+    ✓ large-refactor: gmean=84% notes=ok
+    ✓ large-greenfield: gmean=85% notes=ok
+    ✓ standard-vague: gmean=85% notes=ok
+    ✓ failure-ambiguous-noun: gmean=84% notes=ok
+    ⚠ failure-already-done: gmean=78% notes=7 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=74% notes=9 task(s) lack file/function specificity
+Curator: promoted=[tight] kept=[tight, standard, large, default] quarantined=[]
+Generating 2 mutant(s)...
+  Mutant evo-f14681 ← large: Replaced the generic "own the entire subsystem" instruction with a requirement to mention exact file paths/folders/functions and updated the JSON examples accordingly to fix the "lack file/function specificity" penalty, borrowing from Sibling 1.
+  Mutant evo-eccvjn ← default: (no summary)
+
+=== Generation 2/10 | Population: 6 ===
+  [1/180] tight → tight-bugfix
+  [2/180] tight → tight-typo
+  [3/180] tight → standard-feature
+  [4/180] tight → tight-typo
+  [5/180] tight → standard-feature
+  [6/180] tight → tight-typo
+  [7/180] tight → tight-bugfix
+  [8/180] tight → tight-bugfix
+  [9/180] tight → standard-audit
+  [10/180] tight → standard-audit
+  [11/180] tight → standard-feature
+  [12/180] tight → large-refactor
+  [13/180] tight → large-refactor
+  [14/180] tight → standard-audit
+  [15/180] tight → large-greenfield
+  [16/180] tight → large-refactor
+  [17/180] tight → large-greenfield
+  [18/180] tight → large-greenfield
+  [19/180] tight → standard-vague
+  [20/180] tight → standard-vague
+  [21/180] tight → failure-ambiguous-noun
+  [22/180] tight → failure-ambiguous-noun
+  [23/180] tight → standard-vague
+  [24/180] tight → failure-ambiguous-noun
+  [25/180] tight → failure-crosscut
+  [26/180] tight → failure-already-done
+  [27/180] tight → failure-already-done
+  [28/180] tight → failure-already-done
+  [29/180] tight → failure-crosscut
+  [30/180] tight → failure-crosscut
+  [31/180] standard → tight-bugfix
+  [32/180] standard → tight-bugfix
+  [33/180] standard → tight-typo
+  [34/180] standard → tight-bugfix
+  [35/180] standard → tight-typo
+  [36/180] standard → standard-feature
+  [37/180] standard → standard-feature
+  [38/180] standard → tight-typo
+  [39/180] standard → standard-audit
+  [40/180] standard → standard-feature
+  [41/180] standard → large-refactor
+  [42/180] standard → standard-audit
+  [43/180] standard → standard-audit
+  [44/180] standard → large-refactor
+  [45/180] standard → large-refactor
+  [46/180] standard → large-greenfield
+  [47/180] standard → large-greenfield
+  [48/180] standard → large-greenfield
+  [49/180] standard → standard-vague
+  [50/180] standard → standard-vague
+  [51/180] standard → failure-ambiguous-noun
+  [52/180] standard → standard-vague
+  [53/180] standard → failure-ambiguous-noun
+  [54/180] standard → failure-ambiguous-noun
+  [55/180] standard → failure-already-done
+  [56/180] standard → failure-already-done
+  [57/180] standard → failure-already-done
+  [58/180] standard → failure-crosscut
+  [59/180] standard → failure-crosscut
+  [60/180] standard → failure-crosscut
+  [61/180] default → tight-bugfix
+  [62/180] default → tight-bugfix
+  [63/180] default → tight-typo
+  [64/180] default → tight-bugfix
+  [65/180] default → tight-typo
+  [66/180] default → standard-feature
+  [67/180] default → standard-feature
+  [68/180] default → standard-feature
+  [69/180] default → standard-audit
+  [70/180] default → standard-audit
+  [71/180] default → standard-audit
+  [72/180] default → tight-typo
+  [73/180] default → large-refactor
+  [74/180] default → large-refactor
+  [75/180] default → large-greenfield
+  [76/180] default → large-greenfield
+  [77/180] default → large-refactor
+  [78/180] default → large-greenfield
+  [79/180] default → standard-vague
+  [80/180] default → standard-vague
+  [81/180] default → standard-vague
+  [82/180] default → failure-ambiguous-noun
+  [83/180] default → failure-ambiguous-noun
+  [84/180] default → failure-already-done
+  [85/180] default → failure-ambiguous-noun
+  [86/180] default → failure-already-done
+  [87/180] default → failure-crosscut
+  [88/180] default → failure-already-done
+  [89/180] default → failure-crosscut
+  [90/180] default → failure-crosscut
+  [91/180] large → tight-bugfix
+  [92/180] large → tight-bugfix
+  [93/180] large → tight-bugfix
+  [94/180] large → tight-typo
+  [95/180] large → tight-typo
+  [96/180] large → tight-typo
+  [97/180] large → standard-feature
+  [98/180] large → standard-feature
+  [99/180] large → standard-feature
+  [100/180] large → standard-audit
+  [101/180] large → standard-audit
+  [102/180] large → large-refactor
+  [103/180] large → standard-audit
+  [104/180] large → large-refactor
+  [105/180] large → large-refactor
+  [106/180] large → large-greenfield
+  [107/180] large → large-greenfield
+  [108/180] large → large-greenfield
+  [109/180] large → standard-vague
+  [110/180] large → standard-vague
+  [111/180] large → standard-vague
+  [112/180] large → failure-ambiguous-noun
+  [113/180] large → failure-ambiguous-noun
+  [114/180] large → failure-ambiguous-noun
+  [115/180] large → failure-already-done
+  [116/180] large → failure-already-done
+  [117/180] large → failure-crosscut
+  [118/180] large → failure-already-done
+  [119/180] large → failure-crosscut
+  [120/180] large → failure-crosscut
+  [121/180] evo-f14681 → tight-bugfix
+  [122/180] evo-f14681 → tight-bugfix
+  [123/180] evo-f14681 → tight-bugfix
+  [124/180] evo-f14681 → tight-typo
+  [125/180] evo-f14681 → tight-typo
+  [126/180] evo-f14681 → standard-feature
+  [127/180] evo-f14681 → tight-typo
+  [128/180] evo-f14681 → standard-feature
+  [129/180] evo-f14681 → standard-audit
+  [130/180] evo-f14681 → standard-feature
+  [131/180] evo-f14681 → standard-audit
+  [132/180] evo-f14681 → standard-audit
+  [133/180] evo-f14681 → large-refactor
+  [134/180] evo-f14681 → large-refactor
+  [135/180] evo-f14681 → large-refactor
+  [136/180] evo-f14681 → large-greenfield
+  [137/180] evo-f14681 → large-greenfield
+  [138/180] evo-f14681 → large-greenfield
+  [139/180] evo-f14681 → standard-vague
+  [140/180] evo-f14681 → standard-vague
+  [141/180] evo-f14681 → failure-ambiguous-noun
+  [142/180] evo-f14681 → failure-ambiguous-noun
+  [143/180] evo-f14681 → standard-vague
+  [144/180] evo-f14681 → failure-ambiguous-noun
+  [145/180] evo-f14681 → failure-already-done
+  [146/180] evo-eccvjn → tight-bugfix
+  [147/180] evo-f14681 → failure-already-done
+  [148/180] evo-f14681 → failure-already-done
+  [149/180] evo-f14681 → failure-crosscut
+  [150/180] evo-eccvjn → tight-bugfix
+  [151/180] evo-eccvjn → tight-bugfix
+  [152/180] evo-eccvjn → tight-typo
+  [153/180] evo-eccvjn → tight-typo
+  [154/180] evo-f14681 → failure-crosscut
+  [155/180] evo-f14681 → failure-crosscut
+  [156/180] evo-eccvjn → tight-typo
+  [157/180] evo-eccvjn → standard-feature
+  [158/180] evo-eccvjn → standard-feature
+  [159/180] evo-eccvjn → standard-feature
+  [160/180] evo-eccvjn → standard-audit
+  [161/180] evo-eccvjn → large-refactor
+  [162/180] evo-eccvjn → standard-audit
+  [163/180] evo-eccvjn → standard-audit
+  [164/180] evo-eccvjn → large-refactor
+  [165/180] evo-eccvjn → large-refactor
+  [166/180] evo-eccvjn → large-greenfield
+  [167/180] evo-eccvjn → large-greenfield
+  [168/180] evo-eccvjn → standard-vague
+  [169/180] evo-eccvjn → large-greenfield
+  [170/180] evo-eccvjn → standard-vague
+  [171/180] evo-eccvjn → standard-vague
+  [172/180] evo-eccvjn → failure-ambiguous-noun
+  [173/180] evo-eccvjn → failure-ambiguous-noun
+  [174/180] evo-eccvjn → failure-already-done
+  [175/180] evo-eccvjn → failure-ambiguous-noun
+  [176/180] evo-eccvjn → failure-already-done
+  [177/180] evo-eccvjn → failure-crosscut
+  [178/180] evo-eccvjn → failure-crosscut
+  [179/180] evo-eccvjn → failure-already-done
+  [180/180] evo-eccvjn → failure-crosscut
+| variant | gen | gmean | parse | schema | content | cost | speed |
+|---------|-----|-------|-------|--------|---------|------|-------|
+| evo-eccvjn  |   1 |  91.5 |   100 |    100 |     100 |   72 |    89 |
+| tight       |   0 |  91.3 |   100 |    100 |     100 |   71 |    89 |
+| standard    |   0 |  87.5 |   100 |    100 |      86 |   69 |    87 |
+| evo-f14681  |   1 |  83.3 |   100 |    100 |      99 |   52 |    79 |
+| default     |   0 |  82.3 |   100 |    100 |      86 |   54 |    82 |
+| large       |   0 |  81.9 |   100 |    100 |      86 |   53 |    80 |
+
+Per-case breakdown:
+  evo-eccvjn (gen 1):
+    ✓ tight-bugfix: gmean=91% notes=ok
+    ✓ tight-typo: gmean=92% notes=ok
+    ✓ standard-feature: gmean=91% notes=ok
+    ✓ standard-audit: gmean=91% notes=ok
+    ✓ large-refactor: gmean=91% notes=ok
+    ✓ large-greenfield: gmean=92% notes=ok
+    ✓ standard-vague: gmean=92% notes=ok
+    ✓ failure-ambiguous-noun: gmean=92% notes=ok
+    ✓ failure-already-done: gmean=92% notes=ok
+    ✓ failure-crosscut: gmean=92% notes=ok
+  tight (gen 0):
+    ✓ tight-bugfix: gmean=91% notes=ok
+    ✓ tight-typo: gmean=91% notes=ok
+    ✓ standard-feature: gmean=91% notes=ok
+    ✓ standard-audit: gmean=91% notes=ok
+    ✓ large-refactor: gmean=91% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ✓ standard-vague: gmean=91% notes=ok
+    ✓ failure-ambiguous-noun: gmean=91% notes=ok
+    ✓ failure-already-done: gmean=91% notes=ok
+    ✓ failure-crosscut: gmean=91% notes=ok
+  standard (gen 0):
+    ⚠ tight-bugfix: gmean=85% notes=5 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=84% notes=5 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=89% notes=ok
+    ✓ standard-audit: gmean=90% notes=ok
+    ✓ large-refactor: gmean=91% notes=ok
+    ✓ large-greenfield: gmean=90% notes=ok
+    ✓ standard-vague: gmean=90% notes=ok
+    ⚠ failure-ambiguous-noun: gmean=89% notes=1 task(s) appear to have dependencies
+    ⚠ failure-already-done: gmean=85% notes=4 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=79% notes=5 task(s) lack file/function specificity
+  evo-f14681 (gen 1):
+    ✓ tight-bugfix: gmean=84% notes=ok
+    ✓ tight-typo: gmean=83% notes=ok
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=84% notes=ok
+    ✓ large-refactor: gmean=82% notes=ok
+    ✓ large-greenfield: gmean=83% notes=ok
+    ⚠ standard-vague: gmean=82% notes=1 task(s) appear to have dependencies
+    ✓ failure-ambiguous-noun: gmean=84% notes=ok
+    ✓ failure-already-done: gmean=84% notes=ok
+    ✓ failure-crosscut: gmean=84% notes=ok
+  default (gen 0):
+    ⚠ tight-bugfix: gmean=79% notes=8 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=78% notes=8 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=85% notes=ok
+    ✓ large-refactor: gmean=84% notes=ok
+    ✓ large-greenfield: gmean=85% notes=ok
+    ✓ standard-vague: gmean=85% notes=ok
+    ✓ failure-ambiguous-noun: gmean=85% notes=ok
+    ⚠ failure-already-done: gmean=79% notes=1 task(s) appear to have dependencies; 7 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=75% notes=8 task(s) lack file/function specificity
+  large (gen 0):
+    ⚠ tight-bugfix: gmean=79% notes=6 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=79% notes=6 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=85% notes=ok
+    ⚠ large-refactor: gmean=84% notes=1 task(s) appear to have dependencies
+    ✓ large-greenfield: gmean=84% notes=ok
+    ✓ standard-vague: gmean=85% notes=ok
+    ✓ failure-ambiguous-noun: gmean=84% notes=ok
+    ⚠ failure-already-done: gmean=79% notes=7 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=74% notes=8 task(s) lack file/function specificity
+Curator: promoted=[evo-eccvjn] kept=[evo-eccvjn, evo-f14681, standard] quarantined=[tight, default, large]
+Generating 2 mutant(s)...
+  Mutant evo-em9j4k ← evo-f14681: Removed contradictory instructions that suggested splitting implementation and testing/review into separate tasks, and explicitly mandated grouping related concerns into single tasks targeting strictly different files to prevent concurrent dependency and merge conflict failures.
+  Mutant evo-kgm9hg ← standard: Mandated file/function specificity within the agent scope rules and updated the examples to include explicit file paths, directly addressing the penalty for lacking specificity while preserving task autonomy.
+
+=== Generation 3/10 | Population: 5 ===
+  [1/150] evo-eccvjn → tight-typo
+  [2/150] evo-eccvjn → standard-feature
+  [3/150] evo-eccvjn → tight-typo
+  [4/150] evo-eccvjn → tight-bugfix
+  [5/150] evo-eccvjn → standard-feature
+  [6/150] evo-eccvjn → tight-typo
+  [7/150] evo-eccvjn → tight-bugfix
+  [8/150] evo-eccvjn → tight-bugfix
+  [9/150] evo-eccvjn → large-refactor
+  [10/150] evo-eccvjn → standard-audit
+  [11/150] evo-eccvjn → standard-feature
+  [12/150] evo-eccvjn → standard-audit
+  [13/150] evo-eccvjn → standard-audit
+  [14/150] evo-eccvjn → large-refactor
+  [15/150] evo-eccvjn → large-refactor
+  [16/150] evo-eccvjn → large-greenfield
+  [17/150] evo-eccvjn → standard-vague
+  [18/150] evo-eccvjn → large-greenfield
+  [19/150] evo-eccvjn → large-greenfield
+  [20/150] evo-eccvjn → failure-ambiguous-noun
+  [21/150] evo-eccvjn → standard-vague
+  [22/150] evo-eccvjn → standard-vague
+  [23/150] evo-eccvjn → failure-ambiguous-noun
+  [24/150] evo-eccvjn → failure-ambiguous-noun
+  [25/150] evo-eccvjn → failure-already-done
+  [26/150] evo-eccvjn → failure-already-done
+  [27/150] evo-eccvjn → failure-crosscut
+  [28/150] evo-eccvjn → failure-already-done
+  [29/150] standard → tight-bugfix
+  [30/150] evo-eccvjn → failure-crosscut
+  [31/150] evo-eccvjn → failure-crosscut
+  [32/150] standard → tight-bugfix
+  [33/150] standard → tight-typo
+  [34/150] standard → standard-feature
+  [35/150] standard → tight-typo
+  [36/150] standard → tight-bugfix
+  [37/150] standard → tight-typo
+  [38/150] standard → standard-feature
+  [39/150] standard → standard-audit
+  [40/150] standard → standard-feature
+  [41/150] standard → large-refactor
+  [42/150] standard → standard-audit
+  [43/150] standard → large-greenfield
+  [44/150] standard → standard-audit
+  [45/150] standard → large-refactor
+  [46/150] standard → large-greenfield
+  [47/150] standard → large-greenfield
+  [48/150] standard → large-refactor
+  [49/150] standard → standard-vague
+  [50/150] standard → standard-vague
+  [51/150] standard → failure-ambiguous-noun
+  [52/150] standard → standard-vague
+  [53/150] standard → failure-already-done
+  [54/150] standard → failure-ambiguous-noun
+  [55/150] standard → failure-ambiguous-noun
+  [56/150] standard → failure-already-done
+  [57/150] standard → failure-already-done
+  [58/150] standard → failure-crosscut
+  [59/150] standard → failure-crosscut
+  [60/150] standard → failure-crosscut
+  [61/150] evo-f14681 → tight-bugfix
+  [62/150] evo-f14681 → tight-bugfix
+  [63/150] evo-f14681 → tight-typo
+  [64/150] evo-f14681 → tight-bugfix
+  [65/150] evo-f14681 → tight-typo
+  [66/150] evo-f14681 → tight-typo
+  [67/150] evo-f14681 → standard-feature
+  [68/150] evo-f14681 → standard-feature
+  [69/150] evo-f14681 → standard-feature
+  [70/150] evo-f14681 → standard-audit
+  [71/150] evo-f14681 → large-refactor
+  [72/150] evo-f14681 → standard-audit
+  [73/150] evo-f14681 → standard-audit
+  [74/150] evo-f14681 → large-refactor
+  [75/150] evo-f14681 → large-refactor
+  [76/150] evo-f14681 → large-greenfield
+  [77/150] evo-f14681 → large-greenfield
+  [78/150] evo-f14681 → large-greenfield
+  [79/150] evo-f14681 → standard-vague
+  [80/150] evo-f14681 → standard-vague
+  [81/150] evo-f14681 → standard-vague
+  [82/150] evo-f14681 → failure-ambiguous-noun
+  [83/150] evo-f14681 → failure-ambiguous-noun
+  [84/150] evo-f14681 → failure-ambiguous-noun
+  [85/150] evo-f14681 → failure-already-done
+  [86/150] evo-f14681 → failure-already-done
+  [87/150] evo-f14681 → failure-already-done
+  [88/150] evo-f14681 → failure-crosscut
+  [89/150] evo-f14681 → failure-crosscut
+  [90/150] evo-f14681 → failure-crosscut
+  [91/150] evo-em9j4k → tight-bugfix
+  [92/150] evo-em9j4k → tight-bugfix
+  [93/150] evo-em9j4k → tight-bugfix
+  [94/150] evo-em9j4k → tight-typo
+  [95/150] evo-em9j4k → tight-typo
+  [96/150] evo-em9j4k → tight-typo
+  [97/150] evo-em9j4k → standard-feature
+  [98/150] evo-em9j4k → standard-feature
+  [99/150] evo-em9j4k → standard-feature
+  [100/150] evo-em9j4k → standard-audit
+  [101/150] evo-em9j4k → standard-audit
+  [102/150] evo-em9j4k → standard-audit
+  [103/150] evo-em9j4k → large-refactor
+  [104/150] evo-em9j4k → large-refactor
+  [105/150] evo-em9j4k → large-refactor
+  [106/150] evo-em9j4k → large-greenfield
+  [107/150] evo-em9j4k → large-greenfield
+  [108/150] evo-em9j4k → large-greenfield
+  [109/150] evo-em9j4k → standard-vague
+  [110/150] evo-em9j4k → standard-vague
+  [111/150] evo-em9j4k → failure-ambiguous-noun
+  [112/150] evo-em9j4k → standard-vague
+  [113/150] evo-em9j4k → failure-ambiguous-noun
+  [114/150] evo-em9j4k → failure-already-done
+  [115/150] evo-em9j4k → failure-ambiguous-noun
+  [116/150] evo-em9j4k → failure-already-done
+  [117/150] evo-em9j4k → failure-already-done
+  [118/150] evo-kgm9hg → tight-bugfix
+  [119/150] evo-em9j4k → failure-crosscut
+  [120/150] evo-kgm9hg → tight-typo
+  [121/150] evo-em9j4k → failure-crosscut
+  [122/150] evo-kgm9hg → tight-bugfix
+  [123/150] evo-kgm9hg → tight-bugfix
+  [124/150] evo-em9j4k → failure-crosscut
+  [125/150] evo-kgm9hg → tight-typo
+  [126/150] evo-kgm9hg → tight-typo
+  [127/150] evo-kgm9hg → standard-feature
+  [128/150] evo-kgm9hg → standard-feature
+  [129/150] evo-kgm9hg → standard-feature
+  [130/150] evo-kgm9hg → standard-audit
+  [131/150] evo-kgm9hg → standard-audit
+  [132/150] evo-kgm9hg → standard-audit
+  [133/150] evo-kgm9hg → large-refactor
+  [134/150] evo-kgm9hg → large-refactor
+  [135/150] evo-kgm9hg → large-greenfield
+  [136/150] evo-kgm9hg → large-refactor
+  [137/150] evo-kgm9hg → large-greenfield
+  [138/150] evo-kgm9hg → standard-vague
+  [139/150] evo-kgm9hg → standard-vague
+  [140/150] evo-kgm9hg → large-greenfield
+  [141/150] evo-kgm9hg → failure-ambiguous-noun
+  [142/150] evo-kgm9hg → standard-vague
+  [143/150] evo-kgm9hg → failure-ambiguous-noun
+  [144/150] evo-kgm9hg → failure-ambiguous-noun
+  [145/150] evo-kgm9hg → failure-already-done
+  [146/150] evo-kgm9hg → failure-already-done
+  [147/150] evo-kgm9hg → failure-crosscut
+  [148/150] evo-kgm9hg → failure-already-done
+  [149/150] evo-kgm9hg → failure-crosscut
+  [150/150] evo-kgm9hg → failure-crosscut
+| variant | gen | gmean | parse | schema | content | cost | speed |
+|---------|-----|-------|-------|--------|---------|------|-------|
+| evo-eccvjn  |   1 |  91.4 |   100 |    100 |     100 |   72 |    89 |
+| evo-kgm9hg  |   2 |  88.1 |   100 |    100 |      99 |   63 |    85 |
+| standard    |   0 |  87.5 |   100 |    100 |      86 |   68 |    87 |
+| evo-em9j4k  |   2 |  83.4 |   100 |    100 |      99 |   52 |    79 |
+| evo-f14681  |   1 |  83.0 |   100 |    100 |      99 |   51 |    78 |
+
+Per-case breakdown:
+  evo-eccvjn (gen 1):
+    ✓ tight-bugfix: gmean=90% notes=ok
+    ✓ tight-typo: gmean=91% notes=ok
+    ✓ standard-feature: gmean=91% notes=ok
+    ✓ standard-audit: gmean=91% notes=ok
+    ✓ large-refactor: gmean=92% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ✓ standard-vague: gmean=91% notes=ok
+    ✓ failure-ambiguous-noun: gmean=92% notes=ok
+    ✓ failure-already-done: gmean=91% notes=ok
+    ✓ failure-crosscut: gmean=91% notes=ok
+  evo-kgm9hg (gen 2):
+    ✓ tight-bugfix: gmean=88% notes=ok
+    ✓ tight-typo: gmean=89% notes=ok
+    ✓ standard-feature: gmean=89% notes=ok
+    ✓ standard-audit: gmean=88% notes=ok
+    ✓ large-refactor: gmean=88% notes=ok
+    ✓ large-greenfield: gmean=88% notes=ok
+    ✓ standard-vague: gmean=89% notes=ok
+    ✓ failure-ambiguous-noun: gmean=88% notes=ok
+    ⚠ failure-already-done: gmean=87% notes=1 task(s) lack file/function specificity
+    ✓ failure-crosscut: gmean=88% notes=ok
+  standard (gen 0):
+    ⚠ tight-bugfix: gmean=84% notes=1 task(s) appear to have dependencies; 5 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=85% notes=4 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=90% notes=ok
+    ✓ standard-audit: gmean=90% notes=ok
+    ✓ large-refactor: gmean=90% notes=ok
+    ✓ large-greenfield: gmean=90% notes=ok
+    ✓ standard-vague: gmean=90% notes=ok
+    ⚠ failure-ambiguous-noun: gmean=90% notes=1 task(s) appear to have dependencies
+    ⚠ failure-already-done: gmean=84% notes=5 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=81% notes=5 task(s) lack file/function specificity
+  evo-em9j4k (gen 2):
+    ⚠ tight-bugfix: gmean=84% notes=1 task(s) lack file/function specificity
+    ✓ tight-typo: gmean=84% notes=ok
+    ✓ standard-feature: gmean=83% notes=ok
+    ✓ standard-audit: gmean=83% notes=ok
+    ✓ large-refactor: gmean=83% notes=ok
+    ✓ large-greenfield: gmean=83% notes=ok
+    ✓ standard-vague: gmean=84% notes=ok
+    ✓ failure-ambiguous-noun: gmean=84% notes=ok
+    ⚠ failure-already-done: gmean=83% notes=1 task(s) appear to have dependencies
+    ✓ failure-crosscut: gmean=82% notes=ok
+  evo-f14681 (gen 1):
+    ✓ tight-bugfix: gmean=83% notes=ok
+    ✓ tight-typo: gmean=84% notes=ok
+    ✓ standard-feature: gmean=83% notes=ok
+    ✓ standard-audit: gmean=82% notes=ok
+    ✓ large-refactor: gmean=84% notes=ok
+    ✓ large-greenfield: gmean=83% notes=ok
+    ⚠ standard-vague: gmean=83% notes=1 task(s) appear to have dependencies
+    ✓ failure-ambiguous-noun: gmean=83% notes=ok
+    ✓ failure-already-done: gmean=83% notes=ok
+    ✓ failure-crosscut: gmean=82% notes=ok
+Curator: promoted=[evo-eccvjn] kept=[evo-eccvjn, standard, evo-f14681] quarantined=[evo-kgm9hg, evo-em9j4k]
+Generating 2 mutant(s)...
+  Mutant evo-qphxk8 ← evo-f14681: Removed contradictory instructions that allowed multiple tasks in the same area, and explicitly banned broad cross-cutting tasks (e.g., "refactor all route guards") to eliminate hidden dependencies and codebase overlap.
+  Mutant evo-x8z8ws ← standard: Replaced the anti-specificity rule with a requirement to mention exact file boundaries to fix the file/function specificity penalty, added an explicit example to prevent interdependent frontend/backend task splitting, and updated the JSON examples to include explicit file paths.
+
+=== Generation 4/10 | Population: 5 ===
+  [1/150] evo-eccvjn → tight-typo
+  [2/150] evo-eccvjn → tight-typo
+  [3/150] evo-eccvjn → tight-bugfix
+  [4/150] evo-eccvjn → tight-typo
+  [5/150] evo-eccvjn → tight-bugfix
+  [6/150] evo-eccvjn → standard-feature
+  [7/150] evo-eccvjn → tight-bugfix
+  [8/150] evo-eccvjn → standard-feature
+  [9/150] evo-eccvjn → standard-feature
+  [10/150] evo-eccvjn → large-refactor
+  [11/150] evo-eccvjn → standard-audit
+  [12/150] evo-eccvjn → standard-audit
+  [13/150] evo-eccvjn → standard-audit
+  [14/150] evo-eccvjn → large-refactor
+  [15/150] evo-eccvjn → large-refactor
+  [16/150] evo-eccvjn → large-greenfield
+  [17/150] evo-eccvjn → large-greenfield
+  [18/150] evo-eccvjn → standard-vague
+  [19/150] evo-eccvjn → large-greenfield
+  [20/150] evo-eccvjn → standard-vague
+  [21/150] evo-eccvjn → standard-vague
+  [22/150] evo-eccvjn → failure-ambiguous-noun
+  [23/150] evo-eccvjn → failure-ambiguous-noun
+  [24/150] evo-eccvjn → failure-ambiguous-noun
+  [25/150] evo-eccvjn → failure-already-done
+  [26/150] evo-eccvjn → failure-already-done
+  [27/150] evo-eccvjn → failure-already-done
+  [28/150] evo-eccvjn → failure-crosscut
+  [29/150] evo-eccvjn → failure-crosscut
+  [30/150] evo-eccvjn → failure-crosscut
+  [31/150] standard → tight-bugfix
+  [32/150] standard → tight-bugfix
+  [33/150] standard → tight-bugfix
+  [34/150] standard → standard-feature
+  [35/150] standard → standard-feature
+  [36/150] standard → tight-typo
+  [37/150] standard → tight-typo
+  [38/150] standard → tight-typo
+  [39/150] standard → standard-feature
+  [40/150] standard → standard-audit
+  [41/150] standard → standard-audit
+  [42/150] standard → large-refactor
+  [43/150] standard → standard-audit
+  [44/150] standard → large-refactor
+  [45/150] standard → large-refactor
+  [46/150] standard → large-greenfield
+  [47/150] standard → large-greenfield
+  [48/150] standard → large-greenfield
+  [49/150] standard → standard-vague
+  [50/150] standard → failure-ambiguous-noun
+  [51/150] standard → standard-vague
+  [52/150] standard → failure-ambiguous-noun
+  [53/150] standard → standard-vague
+  [54/150] standard → failure-ambiguous-noun
+  [55/150] standard → failure-already-done
+  [56/150] standard → failure-already-done
+  [57/150] standard → failure-already-done
+  [58/150] standard → failure-crosscut
+  [59/150] standard → failure-crosscut
+  [60/150] standard → failure-crosscut
+  [61/150] evo-f14681 → tight-bugfix
+  [62/150] evo-f14681 → tight-bugfix
+  [63/150] evo-f14681 → tight-bugfix
+  [64/150] evo-f14681 → tight-typo
+  [65/150] evo-f14681 → tight-typo
+  [66/150] evo-f14681 → standard-feature
+  [67/150] evo-f14681 → standard-feature
+  [68/150] evo-f14681 → tight-typo
+  [69/150] evo-f14681 → standard-audit
+  [70/150] evo-f14681 → standard-audit
+  [71/150] evo-f14681 → standard-audit
+  [72/150] evo-f14681 → standard-feature
+  [73/150] evo-f14681 → large-refactor
+  [74/150] evo-f14681 → large-refactor
+  [75/150] evo-f14681 → large-refactor
+  [76/150] evo-f14681 → large-greenfield
+  [77/150] evo-f14681 → large-greenfield
+  [78/150] evo-f14681 → large-greenfield
+  [79/150] evo-f14681 → standard-vague
+  [80/150] evo-f14681 → failure-ambiguous-noun
+  [81/150] evo-f14681 → standard-vague
+  [82/150] evo-f14681 → failure-ambiguous-noun
+  [83/150] evo-f14681 → standard-vague
+  [84/150] evo-f14681 → failure-ambiguous-noun
+  [85/150] evo-f14681 → failure-already-done
+  [86/150] evo-f14681 → failure-already-done
+  [87/150] evo-f14681 → failure-already-done
+  [88/150] evo-f14681 → failure-crosscut
+  [89/150] evo-f14681 → failure-crosscut
+  [90/150] evo-f14681 → failure-crosscut
+  [91/150] evo-qphxk8 → tight-bugfix
+  [92/150] evo-qphxk8 → tight-bugfix
+  [93/150] evo-qphxk8 → tight-bugfix
+  [94/150] evo-qphxk8 → tight-typo
+  [95/150] evo-qphxk8 → tight-typo
+  [96/150] evo-qphxk8 → standard-feature
+  [97/150] evo-qphxk8 → standard-feature
+  [98/150] evo-qphxk8 → tight-typo
+  [99/150] evo-qphxk8 → standard-feature
+  [100/150] evo-qphxk8 → standard-audit
+  [101/150] evo-qphxk8 → standard-audit
+  [102/150] evo-qphxk8 → standard-audit
+  [103/150] evo-qphxk8 → large-refactor
+  [104/150] evo-qphxk8 → large-greenfield
+  [105/150] evo-qphxk8 → large-refactor
+  [106/150] evo-qphxk8 → large-refactor
+  [107/150] evo-qphxk8 → large-greenfield
+  [108/150] evo-qphxk8 → large-greenfield
+  [109/150] evo-qphxk8 → standard-vague
+  [110/150] evo-qphxk8 → failure-ambiguous-noun
+  [111/150] evo-qphxk8 → standard-vague
+  [112/150] evo-qphxk8 → failure-already-done
+  [113/150] evo-qphxk8 → standard-vague
+  [114/150] evo-qphxk8 → failure-ambiguous-noun
+  [115/150] evo-qphxk8 → failure-ambiguous-noun
+  [116/150] evo-qphxk8 → failure-already-done
+  [117/150] evo-qphxk8 → failure-already-done
+  [118/150] evo-x8z8ws → tight-bugfix
+  [119/150] evo-x8z8ws → tight-bugfix
+  [120/150] evo-x8z8ws → tight-bugfix
+  [121/150] evo-qphxk8 → failure-crosscut
+  [122/150] evo-x8z8ws → tight-typo
+  [123/150] evo-x8z8ws → tight-typo
+  [124/150] evo-qphxk8 → failure-crosscut
+  [125/150] evo-qphxk8 → failure-crosscut
+  [126/150] evo-x8z8ws → tight-typo
+  [127/150] evo-x8z8ws → standard-feature
+  [128/150] evo-x8z8ws → standard-feature
+  [129/150] evo-x8z8ws → standard-audit
+  [130/150] evo-x8z8ws → standard-audit
+  [131/150] evo-x8z8ws → standard-feature
+  [132/150] evo-x8z8ws → standard-audit
+  [133/150] evo-x8z8ws → large-refactor
+  [134/150] evo-x8z8ws → large-refactor
+  [135/150] evo-x8z8ws → large-refactor
+  [136/150] evo-x8z8ws → standard-vague
+  [137/150] evo-x8z8ws → large-greenfield
+  [138/150] evo-x8z8ws → large-greenfield
+  [139/150] evo-x8z8ws → large-greenfield
+  [140/150] evo-x8z8ws → standard-vague
+  [141/150] evo-x8z8ws → standard-vague
+  [142/150] evo-x8z8ws → failure-ambiguous-noun
+  [143/150] evo-x8z8ws → failure-ambiguous-noun
+  [144/150] evo-x8z8ws → failure-ambiguous-noun
+  [145/150] evo-x8z8ws → failure-already-done
+  [146/150] evo-x8z8ws → failure-already-done
+  [147/150] evo-x8z8ws → failure-crosscut
+  [148/150] evo-x8z8ws → failure-crosscut
+  [149/150] evo-x8z8ws → failure-already-done
+  [150/150] evo-x8z8ws → failure-crosscut
+| variant | gen | gmean | parse | schema | content | cost | speed |
+|---------|-----|-------|-------|--------|---------|------|-------|
+| evo-eccvjn  |   1 |  91.3 |   100 |    100 |     100 |   72 |    88 |
+| evo-x8z8ws  |   3 |  87.5 |   100 |    100 |      97 |   62 |    85 |
+| standard    |   0 |  87.4 |   100 |    100 |      86 |   68 |    87 |
+| evo-qphxk8  |   3 |  83.5 |   100 |    100 |      99 |   52 |    79 |
+| evo-f14681  |   1 |  82.8 |   100 |    100 |      99 |   50 |    78 |
+
+Per-case breakdown:
+  evo-eccvjn (gen 1):
+    ✓ tight-bugfix: gmean=91% notes=ok
+    ✓ tight-typo: gmean=91% notes=ok
+    ✓ standard-feature: gmean=91% notes=ok
+    ✓ standard-audit: gmean=91% notes=ok
+    ✓ large-refactor: gmean=92% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ✓ standard-vague: gmean=91% notes=ok
+    ✓ failure-ambiguous-noun: gmean=91% notes=ok
+    ✓ failure-already-done: gmean=91% notes=ok
+    ✓ failure-crosscut: gmean=92% notes=ok
+  evo-x8z8ws (gen 3):
+    ✓ tight-bugfix: gmean=88% notes=ok
+    ✓ tight-typo: gmean=88% notes=ok
+    ✓ standard-feature: gmean=88% notes=ok
+    ✓ standard-audit: gmean=88% notes=ok
+    ✓ large-refactor: gmean=88% notes=ok
+    ✓ large-greenfield: gmean=87% notes=ok
+    ✓ standard-vague: gmean=88% notes=ok
+    ✓ failure-ambiguous-noun: gmean=87% notes=ok
+    ⚠ failure-already-done: gmean=86% notes=1 task(s) appear to have dependencies; 1 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=87% notes=1 task(s) lack file/function specificity
+  standard (gen 0):
+    ⚠ tight-bugfix: gmean=84% notes=5 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=84% notes=5 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=90% notes=ok
+    ✓ standard-audit: gmean=89% notes=ok
+    ✓ large-refactor: gmean=90% notes=ok
+    ✓ large-greenfield: gmean=90% notes=ok
+    ✓ standard-vague: gmean=89% notes=ok
+    ✓ failure-ambiguous-noun: gmean=91% notes=ok
+    ⚠ failure-already-done: gmean=83% notes=5 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=82% notes=4 task(s) lack file/function specificity
+  evo-qphxk8 (gen 3):
+    ⚠ tight-bugfix: gmean=84% notes=1 task(s) appear to have dependencies
+    ✓ tight-typo: gmean=83% notes=ok
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=83% notes=ok
+    ✓ large-refactor: gmean=83% notes=ok
+    ✓ large-greenfield: gmean=85% notes=ok
+    ✓ standard-vague: gmean=83% notes=ok
+    ✓ failure-ambiguous-noun: gmean=83% notes=ok
+    ✓ failure-already-done: gmean=84% notes=ok
+    ✓ failure-crosscut: gmean=84% notes=ok
+  evo-f14681 (gen 1):
+    ✓ tight-bugfix: gmean=83% notes=ok
+    ✓ tight-typo: gmean=82% notes=ok
+    ✓ standard-feature: gmean=83% notes=ok
+    ✓ standard-audit: gmean=84% notes=ok
+    ✓ large-refactor: gmean=83% notes=ok
+    ✓ large-greenfield: gmean=81% notes=ok
+    ✓ standard-vague: gmean=82% notes=ok
+    ✓ failure-ambiguous-noun: gmean=83% notes=ok
+    ✓ failure-already-done: gmean=84% notes=ok
+    ✓ failure-crosscut: gmean=84% notes=ok
+Curator: promoted=[evo-eccvjn] kept=[evo-eccvjn, standard, evo-f14681] quarantined=[evo-x8z8ws, evo-qphxk8]
+Generating 2 mutant(s)...
+  Mutant evo-35nio6 ← evo-f14681: Removed contradictory instructions that encouraged multiple tasks on the same files/areas to prevent merge conflicts, and borrowed Sibling 2's instruction to give agents a "MISSION" rather than step-by-step details to ensure tasks are substantial and autonomous.
+  Mutant evo-n50mqx ← standard: Replaced the anti-specificity rule with a requirement to mention exact file paths/folders in every task to fix specificity penalties, while explicitly maintaining the emphasis on agent scope and autonomy.
+
+=== Generation 5/10 | Population: 5 ===
+  [1/150] evo-eccvjn → tight-bugfix
+  [2/150] evo-eccvjn → tight-typo
+  [3/150] evo-eccvjn → tight-bugfix
+  [4/150] evo-eccvjn → standard-feature
+  [5/150] evo-eccvjn → tight-typo
+  [6/150] evo-eccvjn → tight-typo
+  [7/150] evo-eccvjn → tight-bugfix
+  [8/150] evo-eccvjn → standard-feature
+  [9/150] evo-eccvjn → standard-feature
+  [10/150] evo-eccvjn → standard-audit
+  [11/150] evo-eccvjn → standard-audit
+  [12/150] evo-eccvjn → large-refactor
+  [13/150] evo-eccvjn → large-refactor
+  [14/150] evo-eccvjn → standard-audit
+  [15/150] evo-eccvjn → large-refactor
+  [16/150] evo-eccvjn → large-greenfield
+  [17/150] evo-eccvjn → large-greenfield
+  [18/150] evo-eccvjn → large-greenfield
+  [19/150] evo-eccvjn → failure-ambiguous-noun
+  [20/150] evo-eccvjn → standard-vague
+  [21/150] evo-eccvjn → standard-vague
+  [22/150] evo-eccvjn → failure-ambiguous-noun
+  [23/150] evo-eccvjn → failure-ambiguous-noun
+  [24/150] evo-eccvjn → standard-vague
+  [25/150] evo-eccvjn → failure-already-done
+  [26/150] evo-eccvjn → failure-already-done
+  [27/150] evo-eccvjn → failure-crosscut
+  [28/150] evo-eccvjn → failure-crosscut
+  [29/150] evo-eccvjn → failure-crosscut
+  [30/150] standard → tight-bugfix
+  [31/150] standard → tight-bugfix
+  [32/150] standard → tight-typo
+  [33/150] standard → tight-bugfix
+  [34/150] standard → tight-typo
+  [35/150] standard → tight-typo
+  [36/150] standard → standard-feature
+  [37/150] standard → standard-feature
+  [38/150] standard → standard-feature
+  [39/150] standard → standard-audit
+  [40/150] standard → standard-audit
+  [41/150] standard → standard-audit
+  [42/150] standard → large-refactor
+  [43/150] standard → large-refactor
+  [44/150] standard → large-refactor
+  [45/150] standard → large-greenfield
+  [46/150] standard → large-greenfield
+  [47/150] standard → standard-vague
+  [48/150] standard → large-greenfield
+  [49/150] standard → standard-vague
+  [50/150] standard → standard-vague
+  [51/150] standard → failure-ambiguous-noun
+  [52/150] standard → failure-ambiguous-noun
+  [53/150] standard → failure-ambiguous-noun
+  [54/150] standard → failure-already-done
+  [55/150] standard → failure-already-done
+  [56/150] standard → failure-already-done
+  [57/150] standard → failure-crosscut
+  [58/150] standard → failure-crosscut
+  [59/150] standard → failure-crosscut
+  [60/150] evo-f14681 → tight-bugfix
+  [61/150] evo-f14681 → tight-bugfix
+  [62/150] evo-f14681 → tight-bugfix
+  [63/150] evo-f14681 → tight-typo
+  [64/150] evo-f14681 → tight-typo
+  [65/150] evo-f14681 → tight-typo
+  [66/150] evo-f14681 → standard-feature
+  [67/150] evo-f14681 → standard-feature
+  [68/150] evo-f14681 → standard-feature
+  [69/150] evo-eccvjn → failure-already-done
+  [70/150] evo-f14681 → standard-audit
+  [71/150] evo-f14681 → standard-audit
+  [72/150] evo-f14681 → standard-audit
+  [73/150] evo-f14681 → large-refactor
+  [74/150] evo-f14681 → large-refactor
+  [75/150] evo-f14681 → large-refactor
+  [76/150] evo-f14681 → large-greenfield
+  [77/150] evo-f14681 → large-greenfield
+  [78/150] evo-f14681 → standard-vague
+  [79/150] evo-f14681 → failure-ambiguous-noun
+  [80/150] evo-f14681 → large-greenfield
+  [81/150] evo-f14681 → standard-vague
+  [82/150] evo-f14681 → standard-vague
+  [83/150] evo-f14681 → failure-already-done
+  [84/150] evo-f14681 → failure-ambiguous-noun
+  [85/150] evo-f14681 → failure-ambiguous-noun
+  [86/150] evo-f14681 → failure-crosscut
+  [87/150] evo-f14681 → failure-already-done
+  [88/150] evo-f14681 → failure-already-done
+  [89/150] evo-f14681 → failure-crosscut
+  [90/150] evo-f14681 → failure-crosscut
+  [91/150] evo-35nio6 → tight-bugfix
+  [92/150] evo-35nio6 → tight-bugfix
+  [93/150] evo-35nio6 → tight-bugfix
+  [94/150] evo-35nio6 → tight-typo
+  [95/150] evo-35nio6 → tight-typo
+  [96/150] evo-35nio6 → standard-feature
+  [97/150] evo-35nio6 → tight-typo
+  [98/150] evo-35nio6 → standard-feature
+  [99/150] evo-35nio6 → standard-feature
+  [100/150] evo-35nio6 → standard-audit
+  [101/150] evo-35nio6 → standard-audit
+  [102/150] evo-35nio6 → standard-audit
+  [103/150] evo-35nio6 → large-refactor
+  [104/150] evo-35nio6 → large-greenfield
+  [105/150] evo-35nio6 → large-refactor
+  [106/150] evo-35nio6 → large-refactor
+  [107/150] evo-35nio6 → large-greenfield
+  [108/150] evo-35nio6 → large-greenfield
+  [109/150] evo-35nio6 → standard-vague
+  [110/150] evo-35nio6 → standard-vague
+  [111/150] evo-35nio6 → standard-vague
+  [112/150] evo-35nio6 → failure-ambiguous-noun
+  [113/150] evo-35nio6 → failure-ambiguous-noun
+  [114/150] evo-35nio6 → failure-ambiguous-noun
+  [115/150] evo-35nio6 → failure-already-done
+  [116/150] evo-35nio6 → failure-already-done
+  [117/150] evo-35nio6 → failure-already-done
+  [118/150] evo-35nio6 → failure-crosscut
+  [119/150] evo-35nio6 → failure-crosscut
+  [120/150] evo-n50mqx → tight-bugfix
+  [121/150] evo-35nio6 → failure-crosscut
+  [122/150] evo-n50mqx → tight-bugfix
+  [123/150] evo-n50mqx → tight-typo
+  [124/150] evo-n50mqx → tight-bugfix
+  [125/150] evo-n50mqx → tight-typo
+  [126/150] evo-n50mqx → tight-typo
+  [127/150] evo-n50mqx → standard-feature
+  [128/150] evo-n50mqx → standard-feature
+  [129/150] evo-n50mqx → standard-feature
+  [130/150] evo-n50mqx → standard-audit
+  [131/150] evo-n50mqx → standard-audit
+  [132/150] evo-n50mqx → standard-audit
+  [133/150] evo-n50mqx → large-refactor
+  [134/150] evo-n50mqx → large-refactor
+  [135/150] evo-n50mqx → large-refactor
+  [136/150] evo-n50mqx → large-greenfield
+  [137/150] evo-n50mqx → large-greenfield
+  [138/150] evo-n50mqx → large-greenfield
+  [139/150] evo-n50mqx → standard-vague
+  [140/150] evo-n50mqx → standard-vague
+  [141/150] evo-n50mqx → failure-ambiguous-noun
+  [142/150] evo-n50mqx → failure-ambiguous-noun
+  [143/150] evo-n50mqx → standard-vague
+  [144/150] evo-n50mqx → failure-already-done
+  [145/150] evo-n50mqx → failure-ambiguous-noun
+  [146/150] evo-n50mqx → failure-already-done
+  [147/150] evo-n50mqx → failure-already-done
+  [148/150] evo-n50mqx → failure-crosscut
+  [149/150] evo-n50mqx → failure-crosscut
+  [150/150] evo-n50mqx → failure-crosscut
+| variant | gen | gmean | parse | schema | content | cost | speed |
+|---------|-----|-------|-------|--------|---------|------|-------|
+| evo-eccvjn  |   1 |  90.9 |   100 |    100 |      99 |   72 |    86 |
+| standard    |   0 |  88.0 |   100 |    100 |      88 |   69 |    87 |
+| evo-n50mqx  |   4 |  87.8 |   100 |    100 |      98 |   63 |    84 |
+| evo-35nio6  |   4 |  83.6 |   100 |    100 |      99 |   52 |    79 |
+| evo-f14681  |   1 |  83.2 |   100 |    100 |      99 |   51 |    79 |
+
+Per-case breakdown:
+  evo-eccvjn (gen 1):
+    ✓ tight-bugfix: gmean=91% notes=ok
+    ✓ tight-typo: gmean=91% notes=ok
+    ✓ standard-feature: gmean=91% notes=ok
+    ✓ standard-audit: gmean=91% notes=ok
+    ✓ large-refactor: gmean=92% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ✓ standard-vague: gmean=91% notes=ok
+    ✓ failure-ambiguous-noun: gmean=92% notes=ok
+    ✓ failure-already-done: gmean=88% notes=ok
+    ✓ failure-crosscut: gmean=91% notes=ok
+  standard (gen 0):
+    ⚠ tight-bugfix: gmean=87% notes=3 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=85% notes=4 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=90% notes=ok
+    ✓ standard-audit: gmean=90% notes=ok
+    ✓ large-refactor: gmean=90% notes=ok
+    ✓ large-greenfield: gmean=90% notes=ok
+    ✓ standard-vague: gmean=90% notes=ok
+    ✓ failure-ambiguous-noun: gmean=89% notes=ok
+    ⚠ failure-already-done: gmean=86% notes=4 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=82% notes=4 task(s) lack file/function specificity
+  evo-n50mqx (gen 4):
+    ✓ tight-bugfix: gmean=88% notes=ok
+    ⚠ tight-typo: gmean=87% notes=1 task(s) appear to have dependencies
+    ✓ standard-feature: gmean=89% notes=ok
+    ✓ standard-audit: gmean=89% notes=ok
+    ✓ large-refactor: gmean=88% notes=ok
+    ✓ large-greenfield: gmean=87% notes=ok
+    ✓ standard-vague: gmean=87% notes=ok
+    ✓ failure-ambiguous-noun: gmean=88% notes=ok
+    ✓ failure-already-done: gmean=86% notes=ok
+    ✓ failure-crosscut: gmean=88% notes=ok
+  evo-35nio6 (gen 4):
+    ✓ tight-bugfix: gmean=83% notes=ok
+    ⚠ tight-typo: gmean=83% notes=1 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=84% notes=ok
+    ✓ large-refactor: gmean=83% notes=ok
+    ✓ large-greenfield: gmean=84% notes=ok
+    ✓ standard-vague: gmean=84% notes=ok
+    ✓ failure-ambiguous-noun: gmean=84% notes=ok
+    ✓ failure-already-done: gmean=83% notes=ok
+    ⚠ failure-crosscut: gmean=83% notes=1 task(s) lack file/function specificity
+  evo-f14681 (gen 1):
+    ✓ tight-bugfix: gmean=83% notes=ok
+    ⚠ tight-typo: gmean=82% notes=1 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=83% notes=ok
+    ✓ large-refactor: gmean=83% notes=ok
+    ✓ large-greenfield: gmean=84% notes=ok
+    ✓ standard-vague: gmean=83% notes=ok
+    ✓ failure-ambiguous-noun: gmean=83% notes=ok
+    ✓ failure-already-done: gmean=83% notes=ok
+    ✓ failure-crosscut: gmean=83% notes=ok
+Curator: promoted=[evo-eccvjn] kept=[evo-eccvjn, standard, evo-f14681, evo-35nio6] quarantined=[evo-n50mqx]
+
+=== Early stop: no improvement for 3 generations ===
+
+=== Final evaluation (train) ===
+| variant | gen | gmean | parse | schema | content | cost | speed |
+|---------|-----|-------|-------|--------|---------|------|-------|
+| evo-eccvjn  |   1 |  91.3 |   100 |    100 |      99 |   72 |    88 |
+| standard    |   0 |  87.7 |   100 |    100 |      87 |   69 |    87 |
+| evo-n50mqx  |   4 |  87.3 |   100 |    100 |      97 |   62 |    84 |
+| evo-35nio6  |   4 |  83.5 |   100 |    100 |      99 |   52 |    78 |
+| evo-f14681  |   1 |  83.4 |   100 |    100 |      99 |   52 |    79 |
+
+Per-case breakdown:
+  evo-eccvjn (gen 1):
+    ✓ tight-bugfix: gmean=91% notes=ok
+    ✓ tight-typo: gmean=91% notes=ok
+    ✓ standard-feature: gmean=92% notes=ok
+    ✓ standard-audit: gmean=91% notes=ok
+    ✓ large-refactor: gmean=91% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ✓ standard-vague: gmean=91% notes=ok
+    ✓ failure-ambiguous-noun: gmean=92% notes=ok
+    ✓ failure-already-done: gmean=91% notes=ok
+    ✓ failure-crosscut: gmean=91% notes=ok
+  standard (gen 0):
+    ⚠ tight-bugfix: gmean=84% notes=6 task(s) lack file/function specificity
+    ⚠ tight-typo: gmean=84% notes=1 task(s) appear to have dependencies; 4 task(s) lack file/function specificity
+    ✓ standard-feature: gmean=90% notes=ok
+    ✓ standard-audit: gmean=90% notes=ok
+    ✓ large-refactor: gmean=89% notes=ok
+    ✓ large-greenfield: gmean=91% notes=ok
+    ✓ standard-vague: gmean=90% notes=ok
+    ✓ failure-ambiguous-noun: gmean=91% notes=ok
+    ⚠ failure-already-done: gmean=84% notes=5 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=82% notes=4 task(s) lack file/function specificity
+  evo-n50mqx (gen 4):
+    ✓ tight-bugfix: gmean=88% notes=ok
+    ✓ tight-typo: gmean=87% notes=ok
+    ✓ standard-feature: gmean=88% notes=ok
+    ✓ standard-audit: gmean=87% notes=ok
+    ✓ large-refactor: gmean=88% notes=ok
+    ✓ large-greenfield: gmean=87% notes=ok
+    ✓ standard-vague: gmean=88% notes=ok
+    ✓ failure-ambiguous-noun: gmean=88% notes=ok
+    ⚠ failure-already-done: gmean=86% notes=1 task(s) appear to have dependencies; 1 task(s) lack file/function specificity
+    ⚠ failure-crosscut: gmean=87% notes=1 task(s) lack file/function specificity
+  evo-35nio6 (gen 4):
+    ⚠ tight-bugfix: gmean=82% notes=1 task(s) lack file/function specificity
+    ✓ tight-typo: gmean=83% notes=ok
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=84% notes=ok
+    ✓ large-refactor: gmean=84% notes=ok
+    ✓ large-greenfield: gmean=84% notes=ok
+    ✓ standard-vague: gmean=83% notes=ok
+    ✓ failure-ambiguous-noun: gmean=83% notes=ok
+    ✓ failure-already-done: gmean=83% notes=ok
+    ✓ failure-crosscut: gmean=84% notes=ok
+  evo-f14681 (gen 1):
+    ⚠ tight-bugfix: gmean=84% notes=1 task(s) lack file/function specificity
+    ✓ tight-typo: gmean=83% notes=ok
+    ✓ standard-feature: gmean=84% notes=ok
+    ✓ standard-audit: gmean=84% notes=ok
+    ✓ large-refactor: gmean=83% notes=ok
+    ✓ large-greenfield: gmean=84% notes=ok
+    ✓ standard-vague: gmean=83% notes=ok
+    ✓ failure-ambiguous-noun: gmean=84% notes=ok
+    ✓ failure-already-done: gmean=82% notes=ok
+    ✓ failure-crosscut: gmean=84% notes=ok
+
+Report saved: /Users/francesco/.claude-overnight/prompt-evolution/run_moeuvadh_0bdj/report.md
+
+=== BEST VARIANT ===
+id:         evo-eccvjn
+generation: 1
+gmean:      91.5%
+parse:      100.0%
+schema:     100.0%
+content:    100.0%
+cost:       71.9%
+speed:      89.3%
+
+--- Prompt text ---
+```
+You are a task coordinator for a parallel agent system. Analyze this codebase and break the following objective into independent tasks.
+
+Objective: 
+
+Requirements:
+- Target exactly ~ tasks
+- Each task MUST be independent  -- no task depends on another
+- Each task should target specific files/areas to avoid merge conflicts
+- Be specific: mention exact file paths, function names, what to change
+- Keep tasks focused: one concrete change per task
+
+Respond with ONLY a JSON object (no markdown fences):
+{
+  "tasks": [
+    { "prompt": "In src/foo.ts, refactor the bar() function to..." },
+    { "prompt": "Add unit tests for the baz module in test/baz.test.ts..." }
+  ]

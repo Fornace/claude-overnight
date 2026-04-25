@@ -43,11 +43,10 @@ export async function judgeOutput(rawOutput, c, opts) {
     const headers = {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${authToken}`,
+        "User-Agent": "Claude-Code/0.1.0",
     };
     if (isAnthropic)
         headers["anthropic-version"] = "2023-06-01";
-    if (isKimi)
-        headers["User-Agent"] = "Kilo-Code/1.0";
     const res = await fetch(endpoint, {
         method: "POST",
         headers,
