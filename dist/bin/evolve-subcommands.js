@@ -44,6 +44,7 @@ export async function runDownload(runIdArg, ...rest) {
     let baseUrl;
     let token;
     let projectId;
+    let watch = false;
     for (let i = 0; i < rest.length; i++) {
         if (rest[i] === "--base-url" && rest[i + 1]) {
             baseUrl = rest[i + 1];
@@ -57,6 +58,9 @@ export async function runDownload(runIdArg, ...rest) {
             projectId = rest[i + 1];
             i++;
         }
+        else if (rest[i] === "--watch") {
+            watch = true;
+        }
     }
     if (!baseUrl) {
         console.error("--base-url is required (e.g. https://fornace.net or http://localhost:8787)");
@@ -68,15 +72,29 @@ export async function runDownload(runIdArg, ...rest) {
     const prefix = projectId
         ? `${baseUrl.replace(/\/$/, "")}/api/projects/${projectId}/prompt-evolution/${runId}`
         : `${baseUrl.replace(/\/$/, "")}/runs/${runId}`;
-    const metaRes = await fetch(prefix, { headers: authHeaders });
-    if (!metaRes.ok) {
-        console.error(`Failed to fetch run metadata: HTTP ${metaRes.status}`);
-        process.exit(1);
+    let remoteMeta = null;
+    let metaBody = null;
+    while (true) {
+        const metaRes = await fetch(prefix, { headers: authHeaders });
+        if (!metaRes.ok) {
+            console.error(`Failed to fetch run metadata: HTTP ${metaRes.status}`);
+            process.exit(1);
+        }
+        metaBody = (await metaRes.json());
+        remoteMeta = typeof metaBody.meta === "object" && metaBody.meta
+            ? metaBody.meta
+            : metaBody;
+        const status = remoteMeta.status;
+        if (watch && (status === "running" || status === "queued" || status === "pending" || !status)) {
+            process.stdout.write(`\r[${new Date().toLocaleTimeString()}] Run ${runId} is ${status || "running"}... waiting... `);
+            await new Promise(r => setTimeout(r, 10000));
+        }
+        else {
+            if (watch)
+                console.log(`\nRun finished with status: ${status}`);
+            break;
+        }
     }
-    const metaBody = (await metaRes.json());
-    const remoteMeta = typeof metaBody.meta === "object" && metaBody.meta
-        ? metaBody.meta
-        : metaBody;
     const { runDir } = await import("../prompt-evolution/persistence.js");
     const { mkdirSync, writeFileSync } = await import("node:fs");
     const { dirname, join } = await import("node:path");

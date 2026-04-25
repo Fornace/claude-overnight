@@ -72,11 +72,12 @@ Options:
 
 Subcommands:
   claude-overnight-evolve download <runId> --base-url <url> [--token <token>]
-                          [--project <id>]
+                          [--project <id>] [--watch]
                           Pull a remote run (fornace or self-host) into the local
                           ~/.claude-overnight/prompt-evolution/<runId>/ directory
                           so you can audit, diff, or promote it offline. Use
-                          --project for fornace; omit for self-host.
+                          --project for fornace; omit for self-host. If --watch
+                          is set, it will poll until the run finishes before downloading.
   claude-overnight-evolve promote <runId> [--variant <id>] [--into <block>]
                           Write a run's winning variant back into the source
                           prompt file's <!-- BLOCK --> marker. If --variant is

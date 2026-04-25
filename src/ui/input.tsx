@@ -17,7 +17,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import { Text, Box, useInput, useStdin } from "ink";
 import chalk from "chalk";
-import type { UiStore, HostCallbacks } from "./store.js";
+import type { UiStore, HostCallbacks, StreamViewMode } from "./store.js";
 import { visibleLen, wrap } from "./primitives.js";
 import {
   SETTINGS_FIELDS,
@@ -193,12 +193,35 @@ export function InputLayer({ store, callbacks, onToast }: Props): React.ReactEle
     const swarm = s.swarm;
     const lc = s.liveConfig;
 
-    if (key.rightArrow || key.downArrow) { callbacks.cycleAgent(1); return; }
-    if (key.upArrow) { callbacks.cycleAgent(-1); return; }
-    if (key.leftArrow) { callbacks.clearSelectedAgent(); return; }
+    if (key.rightArrow || key.downArrow) {
+      callbacks.cycleAgent(1);
+      const nextId = store.get().selectedAgentId;
+      if (nextId != null && s.viewMode.startsWith("stream:agent-")) {
+        store.patch({ viewMode: `stream:agent-${nextId}` });
+      }
+      return;
+    }
+    if (key.upArrow) {
+      callbacks.cycleAgent(-1);
+      const nextId = store.get().selectedAgentId;
+      if (nextId != null && s.viewMode.startsWith("stream:agent-")) {
+        store.patch({ viewMode: `stream:agent-${nextId}` });
+      }
+      return;
+    }
+    if (key.leftArrow) {
+      callbacks.clearSelectedAgent();
+      if (s.viewMode.startsWith("stream:agent-")) store.patch({ viewMode: "events" });
+      return;
+    }
 
     if (key.escape) {
-      if (s.selectedAgentId != null) { callbacks.clearSelectedAgent(); return; }
+      if (s.selectedAgentId != null) {
+        callbacks.clearSelectedAgent();
+        if (s.viewMode.startsWith("stream:agent-")) store.patch({ viewMode: "events" });
+        return;
+      }
+      if (s.viewMode !== "events") { store.patch({ viewMode: "events" }); return; }
       if (s.ask && !s.ask.streaming) { callbacks.clearAsk(); return; }
       return;
     }
@@ -213,9 +236,18 @@ export function InputLayer({ store, callbacks, onToast }: Props): React.ReactEle
       return;
     }
 
+    if (key.tab) {
+      const modes: StreamViewMode[] = ["stream:planner", "stream:steerer", "stream:verifier"];
+      const current = s.viewMode;
+      const idx = modes.indexOf(current);
+      const next = modes[(idx + 1) % modes.length];
+      store.patch({ viewMode: next });
+      return;
+    }
+
     if (!raw || raw.length !== 1) return;
     const code = raw.charCodeAt(0);
-    if (code < 0x20 || code > 0x7E) return;
+    if (code !== 9 && (code < 0x20 || code > 0x7E)) return;
     if (key.ctrl || key.meta) return;
 
     const toast = (msg: string) => onToast(msg);
@@ -272,7 +304,11 @@ export function InputLayer({ store, callbacks, onToast }: Props): React.ReactEle
     if (/^[0-9]$/.test(raw) && swarm) {
       const n = parseInt(raw, 10);
       const running = swarm.agents.filter(a => a.status === "running");
-      if (n < running.length) callbacks.selectAgent(running[n].id);
+      if (n < running.length) {
+        const id = running[n].id;
+        callbacks.selectAgent(id);
+        store.patch({ viewMode: `stream:agent-${id}` });
+      }
     }
   }, { isActive: !textEntry });
 

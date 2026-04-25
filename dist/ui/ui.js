@@ -8,7 +8,7 @@ import { UiStore, makeInitialState } from "./store.js";
 import { App } from "./shell.js";
 const MAX_STEERING_EVENTS = 60;
 const MAX_ASK_LINES = 40;
-const MAX_DEBRIEF_HISTORY = 20;
+const MAX_DEBRIEF_HISTORY = 50;
 function askDisplayCap() {
     return Math.max(3, Math.min(MAX_ASK_LINES, (process.stdout.rows || 40) - 20));
 }

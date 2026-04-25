@@ -20,7 +20,7 @@ export type { AskState, LiveConfig, RunInfo, SteeringContext, SteeringEvent } fr
 
 const MAX_STEERING_EVENTS = 60;
 const MAX_ASK_LINES = 40;
-const MAX_DEBRIEF_HISTORY = 20;
+const MAX_DEBRIEF_HISTORY = 50;
 
 function askDisplayCap(): number {
   return Math.max(3, Math.min(MAX_ASK_LINES, (process.stdout.rows || 40) - 20));
