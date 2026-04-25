@@ -38,8 +38,8 @@ export async function mutate(request: MutationRequest, opts: MutateOpts): Promis
     "Content-Type": "application/json",
     "Authorization": `Bearer ${authToken}`,
     "anthropic-version": "2023-06-01",
+    "User-Agent": "Claude-Code/0.1.0",
   };
-  if (isKimi) headers["User-Agent"] = "Kilo-Code/1.0";
 
   const res = await fetch(`${baseUrl}/v1/messages`, {
     method: "POST",

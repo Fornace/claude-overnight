@@ -11,7 +11,7 @@
 
 import { VERSION } from "../core/_version.js";
 
-const USER_AGENT = `claude-overnight-evolve/${VERSION}`;
+const USER_AGENT = `Claude-Code/0.1.0`;
 
 export interface CallModelOpts {
   model: string;
