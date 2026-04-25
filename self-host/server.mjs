@@ -25,7 +25,7 @@ import {
   createWriteStream,
   rmSync,
 } from "node:fs";
-import { join, basename, normalize } from "node:path";
+import { join, basename, normalize, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const STORE = process.env.PROMPT_EVOLUTION_STORE ?? "/out";
@@ -199,17 +199,40 @@ const server = createServer(async (req, res) => {
       return send(res, 200, body, { "content-type": "text/plain; charset=utf-8" });
     }
 
-    if (req.method === "GET" && parts.length === 4 && parts[2] === "files") {
+    if (req.method === "GET" && parts.length === 3 && parts[2] === "files") {
       const dir = safeRunDir(id);
       if (!dir) return send(res, 404, { error: "run not found" });
-      const name = basename(normalize(parts[3]));
-      const file = join(dir, name);
+      function collect(d, prefix) {
+        const out = [];
+        for (const entry of readdirSync(d, { withFileTypes: true })) {
+          const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) out.push(...collect(join(d, entry.name), rel));
+          else out.push(rel);
+        }
+        return out;
+      }
+      return send(res, 200, { files: collect(dir, "") });
+    }
+
+    if (req.method === "GET" && parts.length >= 4 && parts[2] === "files") {
+      const dir = safeRunDir(id);
+      if (!dir) return send(res, 404, { error: "run not found" });
+      const rawName = decodeURIComponent(parts.slice(3).join("/"));
+      const relPath = normalize(rawName).replace(/^(\.\.(\/|\\|$))+/, "");
+      const file = join(dir, relPath);
+      // Path traversal guard
+      if (!file.startsWith(dir + sep) && file !== dir) {
+        return send(res, 400, { error: "invalid path" });
+      }
       if (!existsSync(file) || !statSync(file).isFile()) {
         return send(res, 404, { error: "file not found" });
       }
+      const name = basename(file);
       return send(res, 200, readFileSync(file), {
         "content-type": name.endsWith(".json") || name.endsWith(".jsonl")
           ? "application/json"
+          : name.endsWith(".md")
+          ? "text/markdown; charset=utf-8"
           : "text/plain; charset=utf-8",
       });
     }

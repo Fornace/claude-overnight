@@ -20,6 +20,7 @@ import { evolvePrompt } from "../prompt-evolution/index.js";
 import { PLAN_CASES } from "../prompt-evolution/fixtures/plan-cases.js";
 import { harvestRealCases } from "../prompt-evolution/fixtures/harvest.js";
 import { generateCases } from "../prompt-evolution/fixtures/generate.js";
+import { runDiff, runDownload, runPromote } from "./evolve-subcommands.js";
 import {
   scenariosToCases,
   PLANNING_SCENARIOS,
@@ -70,6 +71,18 @@ Options:
   --gen-model <model>     Model used by the case generator (default: eval-model)
 
 Subcommands:
+  claude-overnight-evolve download <runId> --base-url <url> [--token <token>]
+                          [--project <id>]
+                          Pull a remote run (fornace or self-host) into the local
+                          ~/.claude-overnight/prompt-evolution/<runId>/ directory
+                          so you can audit, diff, or promote it offline. Use
+                          --project for fornace; omit for self-host.
+  claude-overnight-evolve promote <runId> [--variant <id>] [--into <block>]
+                          Write a run's winning variant back into the source
+                          prompt file's <!-- BLOCK --> marker. If --variant is
+                          omitted, uses the run's best variant. If the variant is
+                          a seed (tight/standard/large) --into defaults to its
+                          name; evo-* or default variants require --into.
   claude-overnight-evolve diff <runIdA> <runIdB>
                           Print a per-variant diff of two persisted runs
   --base-url <url>        API base URL override
@@ -175,6 +188,18 @@ function parseArgs(): Opts {
 }
 
 async function main(): Promise<void> {
+  // Subcommand: download a remote run for local audit/promote.
+  if (process.argv[2] === "download") {
+    await runDownload(process.argv[3], ...process.argv.slice(4));
+    return;
+  }
+
+  // Subcommand: promote a run variant back into the source prompt file.
+  if (process.argv[2] === "promote") {
+    await runPromote(process.argv[3], ...process.argv.slice(4));
+    return;
+  }
+
   // Subcommand: diff two persisted runs.
   if (process.argv[2] === "diff") {
     await runDiff(process.argv[3], process.argv[4]);
@@ -328,48 +353,6 @@ async function evolveOne(opts: Opts): Promise<{ runId: string; bestVariant: { gm
   console.log("\n--- Prompt text ---");
   console.log(result.bestVariant.text);
   return result;
-}
-
-async function runDiff(runIdA: string | undefined, runIdB: string | undefined): Promise<void> {
-  if (!runIdA || !runIdB) {
-    console.error("usage: claude-overnight-evolve diff <runIdA> <runIdB>");
-    process.exit(2);
-  }
-  const { loadRun } = await import("../prompt-evolution/persistence.js");
-  const a = loadRun(runIdA);
-  const b = loadRun(runIdB);
-
-  type Row = { generation: number; variantId: string; gmean: number };
-  const collect = (run: { matrix: unknown[] }): Map<string, Row> => {
-    const out = new Map<string, Row>();
-    for (const rec of run.matrix as Array<{ generation: number; variantId: string; gmean: number }>) {
-      // Keep the latest-generation row per variantId so diff compares final state.
-      const existing = out.get(rec.variantId);
-      if (!existing || rec.generation > existing.generation) {
-        out.set(rec.variantId, { generation: rec.generation, variantId: rec.variantId, gmean: rec.gmean });
-      }
-    }
-    return out;
-  };
-
-  const rowsA = collect(a);
-  const rowsB = collect(b);
-  const ids = new Set([...rowsA.keys(), ...rowsB.keys()]);
-
-  console.log(`# Diff: ${runIdA} → ${runIdB}`);
-  console.log("");
-  console.log(`|  Variant  |  A gmean  |  B gmean  |   Δ   |  note  |`);
-  console.log(`|-----------|-----------|-----------|-------|--------|`);
-  const sorted = [...ids].sort();
-  for (const id of sorted) {
-    const ra = rowsA.get(id);
-    const rb = rowsB.get(id);
-    const ga = ra ? (ra.gmean * 100).toFixed(1) : "—";
-    const gb = rb ? (rb.gmean * 100).toFixed(1) : "—";
-    const delta = ra && rb ? ((rb.gmean - ra.gmean) * 100).toFixed(1) : "—";
-    const note = !ra ? "new in B" : !rb ? "missing in B" : ra.gmean < rb.gmean ? "↑" : ra.gmean > rb.gmean ? "↓" : "=";
-    console.log(`| ${id.padEnd(10)}| ${ga.padStart(9)} | ${gb.padStart(9)} | ${delta.padStart(5)} | ${note} |`);
-  }
 }
 
 main().catch((err: unknown) => {

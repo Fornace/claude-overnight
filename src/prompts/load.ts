@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Resolve <pkg>/prompts whether running from dist/ (installed) or src/ (dev).
-const PROMPTS_ROOT = (() => {
+export const PROMPTS_ROOT = (() => {
   const here = dirname(fileURLToPath(import.meta.url));
   for (const depth of [2, 3, 4]) {
     const candidate = join(here, ...Array(depth).fill(".."), "prompts");

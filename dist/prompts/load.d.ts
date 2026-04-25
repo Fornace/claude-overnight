@@ -1,3 +1,4 @@
+export declare const PROMPTS_ROOT: string;
 export type PromptVars = Record<string, string | number | boolean | undefined | null>;
 export interface RenderOpts {
     variant?: string;
