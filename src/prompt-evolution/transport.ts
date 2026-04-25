@@ -73,16 +73,22 @@ export async function defaultCallModel(
     const messages: Array<{ role: string; content: string }> = [];
     if (systemText) messages.push({ role: "system", content: systemText });
     messages.push({ role: "user", content: userText });
-    // Platform.moonshot.ai marks max_tokens deprecated in favor of
-    // max_completion_tokens. Kimi's coding endpoint still accepts max_tokens.
-    // Sending both is safe — OpenAI, Moonshot, DeepSeek, and Kimi all tolerate
-    // the extra field, and we're future-proof against the deprecation.
-    body = JSON.stringify({
+    const payload: any = {
       model: opts.model,
-      max_tokens: maxOut,
-      max_completion_tokens: maxOut,
       messages,
-    });
+    };
+    
+    // Platform.moonshot.ai marks max_tokens deprecated in favor of max_completion_tokens.
+    // Kimi's coding endpoint accepts max_tokens.
+    // Gemini's OpenAI wrapper strictly rejects having BOTH set.
+    if (baseUrl.includes("generativelanguage")) {
+      payload.max_completion_tokens = maxOut;
+    } else {
+      payload.max_tokens = maxOut;
+      payload.max_completion_tokens = maxOut;
+    }
+    
+    body = JSON.stringify(payload);
   }
 
   const res = await fetch(endpoint, {

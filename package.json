@@ -14,6 +14,7 @@
     "test": "node --test dist/__tests__/*.test.js",
     "matrix:cursor-proxy": "node scripts/cursor-proxy-keychain-matrix.mjs",
     "evolve": "node dist/bin/evolve.js",
+    "evolve:favorite": "node dist/bin/evolve.js --prompt 10_planning/10-3_plan --eval-model gemini-3.1-flash-lite-preview --mutate-model gemini-3.1-pro-preview --generations 10 --population 8 --plateau 3 --reps 3",
     "prepublishOnly": "node scripts/sync-plugin-version.js"
   },
   "dependencies": {

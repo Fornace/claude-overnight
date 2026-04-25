@@ -28,11 +28,20 @@ export async function mutate(request: MutationRequest, opts: MutateOpts): Promis
   const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
   const isKimi = /kimi\.com/i.test(baseUrl);
 
-  const body = JSON.stringify({
-    model: opts.model,
-    max_tokens: opts.maxTokens ?? 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
+  let body: string;
+  if (baseUrl.includes("generativelanguage")) {
+    body = JSON.stringify({
+      model: opts.model,
+      max_completion_tokens: opts.maxTokens ?? 4096,
+      messages: [{ role: "user", content: prompt }],
+    });
+  } else {
+    body = JSON.stringify({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 4096,
+      messages: [{ role: "user", content: prompt }],
+    });
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -41,7 +50,15 @@ export async function mutate(request: MutationRequest, opts: MutateOpts): Promis
     "User-Agent": "Claude-Code/0.1.0",
   };
 
-  const res = await fetch(`${baseUrl}/v1/messages`, {
+  let endpoint = `${baseUrl}/v1/messages`;
+  if (baseUrl.includes("generativelanguage")) {
+    endpoint = `${baseUrl}/v1/chat/completions`;
+  } else if (!/^https?:\/\/(api\.)?anthropic\.com/i.test(baseUrl) && !baseUrl.includes("/v1/messages")) {
+     // A lot of OpenAI compatible endpoints use `/v1/chat/completions` natively
+     endpoint = `${baseUrl}/v1/chat/completions`;
+  }
+
+  const res = await fetch(endpoint, {
     method: "POST",
     headers,
     body,
@@ -54,7 +71,14 @@ export async function mutate(request: MutationRequest, opts: MutateOpts): Promis
   }
 
   const data = await res.json() as { content?: Array<{ text?: string }> };
-  const raw = data.content?.map((c) => c.text ?? "").join("") ?? "";
+  let raw = "";
+  if (endpoint.includes("chat/completions")) {
+    const chatData = data as { choices?: Array<{ message?: { content?: string } }> };
+    raw = chatData.choices?.[0]?.message?.content ?? "";
+  } else {
+    const msgData = data as { content?: Array<{ text?: string }> };
+    raw = msgData.content?.map((c) => c.text ?? "").join("") ?? "";
+  }
 
   return parseMutantOutput(raw, request);
 }
