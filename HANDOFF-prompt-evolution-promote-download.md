@@ -99,5 +99,7 @@ claude-overnight-evolve promote <runId> --variant evo-abc123 --into tight
 ## Open questions / next steps
 
 - **Generations=1 mystery**: audited MCP-Browser frontend/client code and found no caller overriding `generations`; only the backend route references it and defaults to `10`. If historical runs show `generations=1`, it likely came from an external/direct API caller.
-- **Optional enhancement**: a `--watch` flag on `download` that polls until the run finishes and then auto-downloads.
-- **Local note**: this handoff file is still untracked in `claude-overnight`; product code commits are already pushed.
+- **✓ DONE: Optional enhancement**: a `--watch` flag on `download` that polls until the run finishes and then auto-downloads.
+- **✓ DONE: Optimal Model Mix**: Settled on `gemini-3.1-flash-lite-preview` for eval loops (insanely fast, very cheap, strict JSON discipline) and `gemini-3.1-pro-preview` for mutations (deep reasoning, understands prompt patterns). Added `npm run evolve:favorite` as a shortcut.
+- **✓ DONE: Transport Patches**: Added full `generativelanguage.googleapis.com` OpenAI wrapper support in `transport.ts` and `mutator.ts` to accommodate the new optimal Google model mix.
+- **✓ DONE: First 10-gen loop applied**: `run_moeuvadh_0bdj` found an optimal planning prompt strategy, beating the baseline by 9.3 percentage points. Reduced `STANDARD` and `LARGE` down to the highly specific, zero-ambiguity `TIGHT` variation. Promoted and pushed.
