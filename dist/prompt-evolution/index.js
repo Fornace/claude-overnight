@@ -73,17 +73,10 @@ export async function evolvePrompt(opts) {
             concurrency: opts.concurrency ?? 8,
             repetitions: opts.repetitions,
             judge: opts.judge,
-            batch: opts.batch,
-            batchBaseUrl: opts.batchBaseUrl,
-            batchAuthToken: opts.batchAuthToken,
-            batchModel: opts.batchModel,
             adaptiveReps: opts.adaptiveReps,
-            runId,
-            generation: gen,
             onProgress: (done, total, caseName, variantId) => {
                 log(`  [${done}/${total}] ${variantId.slice(0, 16)} → ${caseName}`);
             },
-            onBatchProgress: (msg) => log(`  [batch] ${msg}`),
         };
         const matrix = await buildMatrix(population, trainCases, evalOpts);
         generationMatrices.push(matrix);
@@ -198,11 +191,7 @@ export async function evolvePrompt(opts) {
         concurrency: opts.concurrency ?? 8,
         repetitions: opts.repetitions,
         judge: opts.judge,
-        batch: opts.batch,
         adaptiveReps: opts.adaptiveReps,
-        runId,
-        generation: generations,
-        onBatchProgress: (msg) => log(`  [batch] ${msg}`),
     });
     generationMatrices.push(finalMatrix);
     snapshotPrompts(runId, finalMatrix);
@@ -222,14 +211,7 @@ export async function evolvePrompt(opts) {
             authToken: opts.authToken,
             concurrency: opts.concurrency ?? 8,
             repetitions: opts.repetitions,
-            batch: opts.batch,
-            batchBaseUrl: opts.batchBaseUrl,
-            batchAuthToken: opts.batchAuthToken,
-            batchModel: opts.batchModel,
             adaptiveReps: opts.adaptiveReps,
-            runId,
-            generation: generations + 1,
-            onBatchProgress: (msg) => log(`  [batch-test] ${msg}`),
         });
         log(formatMatrix(testMatrix, testCases.map((c) => c.name)));
     }

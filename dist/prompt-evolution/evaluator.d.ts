@@ -17,7 +17,6 @@
  */
 import { type JudgeOpts } from "./llm-judge.js";
 import { type CallModel } from "./transport.js";
-import { batchCallModel } from "./transport-batch.js";
 import type { BenchmarkCase, VariantRow, PromptVars } from "./types.js";
 export interface EvalOpts {
     /** Primary generator model (retained for single-model compat). */
@@ -51,29 +50,8 @@ export interface EvalOpts {
     };
     /** Transport override for tests. */
     callModel?: CallModel;
-    /** Use provider batch API instead of online calls (50% cheaper, slower wall-clock). */
-    batch?: boolean;
-    /**
-     * Override base URL for batch submissions only — lets batch hit a
-     * different endpoint than online. Key use-case: Kimi users whose online
-     * traffic runs through api.kimi.com/coding (which has no batch) but
-     * whose batch traffic should go to api.moonshot.ai/v1.
-     */
-    batchBaseUrl?: string;
-    /** Override auth token for batch when batchBaseUrl needs a different key. */
-    batchAuthToken?: string;
-    /** Override model for batch submissions (e.g., kimi-k2.6 when online uses kimi-for-coding). */
-    batchModel?: string;
-    /** Run id — required when batch=true so state is crash-resumable. */
-    runId?: string;
-    /** Current generation number — used to key batch state. */
-    generation?: number;
-    /** Batch-transport override for tests. Same return shape as transport-batch.batchCallModel. */
-    batchCallModel?: typeof batchCallModel;
     /** Optional callback for progress */
     onProgress?: (done: number, total: number, caseName: string, variantId: string) => void;
-    /** Progress callback specific to batch-phase transitions. */
-    onBatchProgress?: (msg: string) => void;
 }
 export declare function buildMatrix(variants: Array<{
     id: string;

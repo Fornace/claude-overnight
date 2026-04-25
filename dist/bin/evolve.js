@@ -39,12 +39,6 @@ Options:
   --plateau <n>           Stop early if no improvement for N generations (default: 3)
   --reps <n>              Repetitions per (variant, case, model) for noise floor (default: 1)
   --concurrency <n>       Max in-flight eval calls (default: 8; bump for slow endpoints)
-  --batch                 Use provider batch API (50% cheaper, slower wall-clock)
-  --batch-base-url <url>  Override base URL for batch only (e.g. api.moonshot.ai/v1
-                          when online uses api.kimi.com/coding)
-  --batch-auth-token <t>  Override auth token for batch only
-  --batch-model <model>   Override model for batch only (e.g. "kimi-k2.6" for
-                          Moonshot platform when online uses "kimi-for-coding")
   --adaptive-cap <n>      Adaptive sampling: extend reps up to N when σ > threshold (default: off)
   --adaptive-threshold <x> σ threshold that triggers an extra rep (default: 0.1)
   --judge                 Use llm-judge for content scoring (costs extra API calls)
@@ -85,7 +79,6 @@ function parseArgs() {
         population: 8,
         plateau: 3,
         reps: 1,
-        batch: false,
         useJudge: false,
         judgeTopN: 4,
         cases: "",
@@ -141,21 +134,6 @@ function parseArgs() {
                 break;
             case "--concurrency":
                 opts.concurrency = parseInt(v, 10);
-                i++;
-                break;
-            case "--batch":
-                opts.batch = true;
-                break;
-            case "--batch-base-url":
-                opts.batchBaseUrl = v;
-                i++;
-                break;
-            case "--batch-auth-token":
-                opts.batchAuthToken = v;
-                i++;
-                break;
-            case "--batch-model":
-                opts.batchModel = v;
                 i++;
                 break;
             case "--adaptive-cap":
@@ -347,10 +325,6 @@ async function evolveOne(opts) {
         plateauGenerations: opts.plateau,
         repetitions: opts.reps > 1 ? opts.reps : undefined,
         concurrency: opts.concurrency,
-        batch: opts.batch || undefined,
-        batchBaseUrl: opts.batchBaseUrl,
-        batchAuthToken: opts.batchAuthToken,
-        batchModel: opts.batchModel,
         adaptiveReps: opts.adaptiveCap
             ? { cap: opts.adaptiveCap, threshold: opts.adaptiveThreshold }
             : undefined,

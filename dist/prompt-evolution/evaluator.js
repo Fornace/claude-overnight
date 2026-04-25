@@ -18,8 +18,6 @@
 import { renderPrompt } from "../prompts/load.js";
 import { scoreOutput, gmean, aggregateReps, bootstrapCI, kendallTau } from "./scorer.js";
 import { defaultCallModel, attemptJsonParse, } from "./transport.js";
-import { batchCallModel, detectBatchProvider, } from "./transport-batch.js";
-import { saveBatchState, loadBatchState, markBatchFinished } from "./persistence.js";
 import { averageDimensions } from "./evaluator-utils.js";
 import { runJudge } from "./evaluator-judge.js";
 export async function buildMatrix(variants, cases, opts) {
@@ -38,53 +36,30 @@ export async function buildMatrix(variants, cases, opts) {
             }
         }
     }
-    // Two execution paths:
-    //   batch=true  — submit every job to the provider batch API, poll, score
-    //                 results as they arrive. 50% cheaper, slower wall-clock.
-    //   batch=false — work-stealing pool: keep `concurrency` jobs in flight so
-    //                 a slow call doesn't block the others in its slice.
+    // Work-stealing pool: keep `concurrency` jobs in flight so a slow call
+    // doesn't block the others in its slice.
     const rawByKey = new Map();
-    const runOnlinePool = async () => {
-        let done = 0;
-        let next = 0;
-        const worker = async () => {
-            while (true) {
-                const i = next++;
-                if (i >= jobs.length)
-                    return;
-                const r = await runSingle(jobs[i], opts, transport);
-                const key = `${r.variantId}:${r.caseHash}:${r.model ?? ""}`;
-                const arr = rawByKey.get(key) ?? [];
-                arr.push(r);
-                rawByKey.set(key, arr);
-                done++;
-                opts.onProgress?.(done, jobs.length, r.caseName, r.variantId);
-            }
-        };
-        await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
+    let done = 0;
+    let next = 0;
+    const worker = async () => {
+        while (true) {
+            const i = next++;
+            if (i >= jobs.length)
+                return;
+            const r = await runSingle(jobs[i], opts, transport);
+            const key = `${r.variantId}:${r.caseHash}:${r.model ?? ""}`;
+            const arr = rawByKey.get(key) ?? [];
+            arr.push(r);
+            rawByKey.set(key, arr);
+            done++;
+            opts.onProgress?.(done, jobs.length, r.caseName, r.variantId);
+        }
     };
-    if (opts.batch) {
-        try {
-            await runBatchPath(jobs, opts, rawByKey);
-        }
-        catch (err) {
-            // Batch submission failed (Kimi's /v1/files doesn't match OpenAI,
-            // OpenRouter has no batch at all, transient provider error, etc.).
-            // Fall back to the online pool so the whole run doesn't die — losing
-            // the 50% batch discount is better than losing the run.
-            const msg = err instanceof Error ? err.message : String(err);
-            opts.onBatchProgress?.(`batch path failed, falling back to online: ${msg.slice(0, 200)}`);
-            rawByKey.clear(); // discard any partial state
-            await runOnlinePool();
-        }
-    }
-    else {
-        await runOnlinePool();
-    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
     // Adaptive sampling: for cells where any score-dim σ exceeds threshold,
     // add one more rep and rerun — up to `cap` total reps. Converges on a
     // stable estimate without wasting reps on already-stable cells.
-    if (!opts.batch && opts.adaptiveReps) {
+    if (opts.adaptiveReps) {
         const cap = opts.adaptiveReps.cap;
         const threshold = opts.adaptiveReps.threshold ?? 0.1;
         for (let round = 0; round < cap - reps; round++) {
@@ -131,7 +106,7 @@ export async function buildMatrix(variants, cases, opts) {
     }
     // Optional llm-judge pass on top-N variants (by current heuristic content).
     if (opts.judge)
-        await runJudge(variants, cases, models, aggregated, opts.judge, opts);
+        await runJudge(variants, cases, models, aggregated, opts.judge);
     // Assemble rows: per-variant aggregate across all cases and models.
     const rows = [];
     for (const v of variants) {
@@ -243,81 +218,6 @@ function halfSplitMatrix(variants, cases, models, rawByKey, side) {
     }
     scored.sort((a, b) => b.g - a.g);
     return scored.map((s) => s.id);
-}
-async function runBatchPath(jobs, opts, rawByKey) {
-    const provider = detectBatchProvider(opts.baseUrl);
-    if (provider === "unsupported") {
-        throw new Error(`Batch API not supported for baseUrl=${opts.baseUrl}; rerun without --batch or point at an Anthropic / OpenAI-compatible endpoint.`);
-    }
-    // Build custom_ids that route results back to the right cell. Index is
-    // included so reps of the same (variant, case, model) don't collide.
-    const keyed = jobs.map((job, i) => ({
-        job,
-        index: i,
-        customId: `v:${job.variantId}|h:${job.case.hash}|m:${job.model}|r:${job.rep}|i:${i}`,
-    }));
-    const batchJobs = keyed.map((k) => ({
-        customId: k.customId,
-        userText: k.job.text,
-        systemText: k.job.systemText,
-        model: k.job.model,
-    }));
-    const started = Date.now();
-    const existing = opts.runId != null && opts.generation != null
-        ? loadBatchState(opts.runId, opts.generation, "eval")
-        : null;
-    const transport = opts.batchCallModel ?? batchCallModel;
-    const results = await transport(batchJobs, {
-        baseUrl: opts.batchBaseUrl ?? opts.baseUrl,
-        authToken: opts.batchAuthToken ?? opts.authToken,
-        modelOverride: opts.batchModel,
-        maxTokens: opts.maxTokens,
-        resumeBatchId: existing?.batchId,
-        onSubmitted: (batchId, p) => {
-            if (opts.runId != null && opts.generation != null && !existing) {
-                saveBatchState(opts.runId, {
-                    generation: opts.generation,
-                    phase: "eval",
-                    batchId,
-                    provider: p,
-                    submittedAt: new Date().toISOString(),
-                });
-            }
-            opts.onBatchProgress?.(`batch submitted: ${batchId} (${p})`);
-        },
-        onProgress: (p) => {
-            if (p.phase === "polling") {
-                const ok = p.succeeded ?? 0;
-                const failed = p.failed ?? 0;
-                const total = p.total ?? batchJobs.length;
-                opts.onBatchProgress?.(`batch ${p.batchId} polling: ${ok}/${total} done${failed ? `, ${failed} failed` : ""}`);
-            }
-            else {
-                opts.onBatchProgress?.(`batch ${p.batchId} ${p.phase}`);
-            }
-        },
-    });
-    // Mark the state entry as finished so a crash after this point doesn't
-    // cause the next run to try resuming an already-consumed batch.
-    if (opts.runId != null && existing)
-        markBatchFinished(opts.runId, existing.batchId);
-    // Score each result and populate rawByKey the same way runSingle does.
-    const durationMs = Math.round((Date.now() - started) / Math.max(1, jobs.length));
-    let done = 0;
-    for (const k of keyed) {
-        const r = results.get(k.customId);
-        const raw = r?.raw ?? "batch returned no result for this custom_id";
-        const costUsd = r?.costUsd ?? 0;
-        const parsed = attemptJsonParse(raw);
-        const scored = scoreOutput(raw, parsed, costUsd, durationMs, k.job.case, { model: k.job.model });
-        scored.variantId = k.job.variantId;
-        const mapKey = `${scored.variantId}:${scored.caseHash}:${scored.model ?? ""}`;
-        const arr = rawByKey.get(mapKey) ?? [];
-        arr.push(scored);
-        rawByKey.set(mapKey, arr);
-        done++;
-        opts.onProgress?.(done, jobs.length, k.job.case.name, k.job.variantId);
-    }
 }
 async function runSingle(job, opts, transport) {
     const started = Date.now();

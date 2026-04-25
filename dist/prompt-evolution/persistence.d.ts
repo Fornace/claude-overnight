@@ -37,26 +37,6 @@ export declare function appendLearning(runId: string, entries: LearningEntry[]):
 export declare function snapshotPrompts(runId: string, rows: VariantRow[]): void;
 /** Finalise the run: write best.md and update meta.json. */
 export declare function finalizeRun(runId: string, result: EvolutionResult, metaPartial?: Partial<RunMeta>): void;
-/**
- * Persist batch submission state so a crashed or restarted run can resume
- * polling instead of resubmitting (which would duplicate the bill).
- *
- * Keyed by (generation, phase) so multi-generation runs and eval-vs-judge
- * submissions don't collide. Written append-only — the latest entry wins
- * on load.
- */
-export interface BatchStateEntry {
-    generation: number;
-    phase: "eval" | "judge";
-    batchId: string;
-    provider: "anthropic" | "openai-compatible";
-    submittedAt: string;
-    /** If set, we've already collected results for this entry — ignore on resume. */
-    finishedAt?: string;
-}
-export declare function saveBatchState(runId: string, entry: BatchStateEntry): void;
-export declare function loadBatchState(runId: string, generation: number, phase: "eval" | "judge"): BatchStateEntry | null;
-export declare function markBatchFinished(runId: string, batchId: string): void;
 /** List all runs, newest first. */
 export declare function listRuns(): Array<{
     runId: string;
