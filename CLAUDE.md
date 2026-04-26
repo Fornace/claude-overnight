@@ -22,3 +22,22 @@ fornace consumes **this** package server-side: the platform route
 Full fornace service inventory (for reference if you need to reason
 about that integration):
 [`../MCP-Browser/docs/integration.md`](../MCP-Browser/docs/integration.md).
+
+## Running Prompt Evolution
+
+To evolve a prompt against a benchmark suite, we use a Darwinian loop.
+The optimal models are:
+- `--eval-model gemini-3.1-flash-lite-preview` (Blisteringly fast, cheap, perfect JSON schema discipline).
+- `--mutate-model gemini-3.1-pro-preview` (Deep reasoning, structural rewriting).
+
+**Run locally:**
+```bash
+# Uses the preferred model mix defined in package.json
+npm run evolve:favorite
+```
+
+**Run remote (on fornace.net):**
+We have a massive multi-day optimization suite covering the three core brains (`10-3_plan`, `30-1_steer`, `00-1_coach`).
+1. Launch it: `./scripts/evolve-all-prompts.sh <PROJECT_ID> <FNC_TOKEN> <GOOGLE_API_KEY>`
+2. Monitor it: `claude-overnight-evolve download <runId> --base-url https://fornace.net --token <FNC_TOKEN> --project <PROJECT_ID> --watch`
+3. Promote winner: `claude-overnight-evolve promote <runId>`
