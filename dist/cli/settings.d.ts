@@ -15,6 +15,13 @@ interface EditSettingsOptions {
 }
 /** Interactively edit all mutable run settings. Mutates `options.current` in place. */
 export declare function editRunSettings(options: EditSettingsOptions): Promise<MutableRunSettings>;
+/** Print the planner/worker/fast/concur/usage/extra block.
+ *  When `header` is set, the block gets a "Resume settings" / ─── header.
+ *  When `remaining` is set, a `remaining N sessions` line is inserted before concur. */
+export declare function printRunSettings(s: MutableRunSettings, opts?: {
+    header?: string;
+    remaining?: number;
+}): void;
 /** Format a MutableRunSettings as a compact summary line for the terminal. */
 export declare function formatSettingsSummary(s: MutableRunSettings): string;
 export {};

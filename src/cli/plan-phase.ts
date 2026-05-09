@@ -10,7 +10,10 @@ import { isCursorProxyProvider } from "../providers/index.js";
 import type { ProviderConfig, EnvResolver } from "../providers/index.js";
 import { readMdDir, saveRunState } from "../state/state.js";
 import { computeRepoFingerprint } from "../skills/scribe.js";
-import { selectKey, ask, showPlan, makeProgressLog, isJWTAuthError } from "./cli.js";
+import { selectKey, ask } from "./prompts.js";
+import { showPlan, makeProgressLog, numberedLine } from "./display.js";
+import { isJWTAuthError } from "./cli.js";
+import { tasksJsonPath, themesMdPath } from "./run-paths.js";
 import type { Task, MergeStrategy, WaveSummary } from "../core/types.js";
 import { renderPrompt } from "../prompts/load.js";
 
@@ -108,7 +111,7 @@ export async function runPlanPhase(input: PlanPhaseInput): Promise<PlanPhaseResu
       const saveThemesMd = (list: string[]) => {
         try {
           writeFileSync(
-            join(runDir, "themes.md"),
+            themesMdPath(runDir),
             `# Themes\n\n**Objective:** ${objective}\n\n${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n`,
             "utf-8",
           );
@@ -120,7 +123,7 @@ export async function runPlanPhase(input: PlanPhaseInput): Promise<PlanPhaseResu
       planRestore();
       let reviewing = true;
       while (reviewing) {
-        for (let i = 0; i < themes.length; i++) console.log(chalk.dim(`  ${String(i + 1).padStart(3)}.`) + ` ${themes[i]}`);
+        for (let i = 0; i < themes.length; i++) console.log(numberedLine(i, themes[i]));
         console.log(chalk.dim(`\n  ${thinkingCount} thinking agents → orchestrate → ${(budget ?? 10) - thinkingCount} execution sessions\n`));
         const action = await selectKey(`${chalk.white(`${themes.length} themes`)} ${chalk.dim(`· ${thinkingCount} thinking · ${concurrency} concurrent`)}`, [{ key: "r", desc: "un" }, { key: "e", desc: "dit" }, { key: "c", desc: "hat" }, { key: "q", desc: "uit" }]);
         if (action === "r") { reviewing = false; break; }
@@ -227,7 +230,7 @@ export async function runPlanPhase(input: PlanPhaseInput): Promise<PlanPhaseResu
       }
 
       const designs = readMdDir(designDir);
-      const taskFile = join(runDir, "tasks.json");
+      const taskFile = tasksJsonPath(runDir);
       if (designs) {
         const orchBudget = Math.min(50, Math.max(concurrency, Math.ceil(((budget ?? 10) - thinkingUsed) * 0.5)));
         const flexNote = renderPrompt("_shared/flex-note", { vars: { remainingBudget: (budget ?? 10) - thinkingUsed } });
