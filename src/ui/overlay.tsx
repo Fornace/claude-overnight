@@ -5,14 +5,12 @@ import React from "react";
 import { Text, Box } from "ink";
 import chalk from "chalk";
 import type { AskState } from "./types.js";
-import { wrap } from "./primitives.js";
+import { terminalWidth, wrap } from "./primitives.js";
 
 interface Props {
   ask?: AskState;
   debrief?: { text: string; label?: string };
 }
-
-function terminalWidth(): number { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
 
 const ASK_BODY_LINES = 8;
 const DEBRIEF_BODY_LINES = 6;

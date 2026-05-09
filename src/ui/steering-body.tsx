@@ -7,9 +7,7 @@ import chalk from "chalk";
 import type { WaveSummary, RLGetter } from "../core/types.js";
 import type { SteeringContext, SteeringEvent, RunInfo } from "./types.js";
 import { modelDisplayName } from "../core/models.js";
-import { colorEvent, renderWaitingIndicator, truncate, wrap } from "./primitives.js";
-
-function terminalWidth(): number { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
+import { colorEvent, renderWaitingIndicator, terminalWidth, truncate, wrap } from "./primitives.js";
 
 function divider(w: number, title: string): string {
   const inner = ` ${title} `;
