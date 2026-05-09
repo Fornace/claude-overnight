@@ -1,6 +1,5 @@
 import { mkdirSync, writeFileSync } from "fs";
 import { readMdEntries } from "../core/fs-helpers.js";
-import { join } from "path";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "../swarm/swarm.js";

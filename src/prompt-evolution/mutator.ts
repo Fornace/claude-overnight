@@ -11,8 +11,7 @@
  * Output: a revised prompt + summary of what changed.
  */
 
-import { renderPrompt } from "../prompts/load.js";
-import type { MutationRequest, Mutant, FailureTrace, LearningEntry } from "./types.js";
+import type { MutationRequest, Mutant } from "./types.js";
 
 export interface MutateOpts {
   model: string;

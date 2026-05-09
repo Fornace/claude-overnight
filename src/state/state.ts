@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync, symlin
 import { execSync } from "child_process";
 import { join } from "path";
 import chalk from "chalk";
-import type { Task, RunState, BranchRecord, AgentState, RunMemory, WaveSummary } from "../core/types.js";
+import type { RunState, BranchRecord, AgentState, RunMemory, WaveSummary } from "../core/types.js";
 import { forceMergeOverlay } from "../swarm/merge.js";
 import { FALLBACK_MODEL } from "../core/models.js";
 import { selectKey } from "../cli/cli.js";
