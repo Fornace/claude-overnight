@@ -1,4 +1,5 @@
-import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { readFileOrEmpty } from "../core/fs-helpers.js";
 import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
@@ -217,15 +218,11 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
     waveNum: state.waveNum, remaining: state.remaining,
   });
 
-  const buildSteeringContext = (): SteeringContext => {
-    let status: string | undefined;
-    try { status = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
-    return {
-      objective: objective || undefined,
-      status,
-      lastWave: state.waveHistory[state.waveHistory.length - 1],
-    };
-  };
+  const buildSteeringContext = (): SteeringContext => ({
+    objective: objective || undefined,
+    status: readFileOrEmpty(join(runDir, "status.md")) || undefined,
+    lastWave: state.waveHistory[state.waveHistory.length - 1],
+  });
   const steeringLog: PlannerLog = (text, kind) => {
     if (kind === "event") display.appendSteeringEvent(text);
     else display.updateSteeringStatus(text);
@@ -445,10 +442,8 @@ export async function executeRun(cfg: RunConfig): Promise<void> {
         // Second: minimal-prompt planner query
         display.appendSteeringEvent("Decomposer: minimal planner query…");
         try {
-          let statusText = "";
-          try { statusText = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
           const minimalPrompt = renderPrompt("30_wave/30-4_decomposer-minimal", {
-            vars: { objective, status: statusText || "(none)" },
+            vars: { objective, status: readFileOrEmpty(join(runDir, "status.md")) || "(none)" },
           });
           const minimalText = await runPlannerQuery(minimalPrompt, { cwd, model: state.plannerModel, outputFormat: STEER_SCHEMA, transcriptName: "decomposer-minimal", maxTurns: 40 }, () => {});
           const parsed = attemptJsonParse(minimalText);
