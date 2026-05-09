@@ -1,25 +1,16 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
+import { readJsonOrNull, writeJson } from "./fs-helpers.js";
 
 const CONFIG_FILE = "config.json";
 
 /** Resolve proxy port (reads from config, or allocates and persists a new one). */
 export function getProxyPort(projectRoot: string): number {
-  const dir = join(projectRoot, ".claude-overnight");
-  const file = join(dir, CONFIG_FILE);
-  try {
-    const cfg = JSON.parse(readFileSync(file, "utf-8"));
-    if (typeof cfg.proxyPort === "number" && cfg.proxyPort >= 1024 && cfg.proxyPort <= 65535) {
-      return cfg.proxyPort;
-    }
-  } catch { /* not found or malformed */ }
+  const file = join(projectRoot, ".claude-overnight", CONFIG_FILE);
+  const cfg = readJsonOrNull<{ proxyPort?: number }>(file);
+  if (cfg?.proxyPort && cfg.proxyPort >= 1024 && cfg.proxyPort <= 65535) return cfg.proxyPort;
 
   const port = 61000 + Math.floor(Math.random() * 4536);
-  try {
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const existing = existsSync(file) ? JSON.parse(readFileSync(file, "utf-8")) : {};
-    writeFileSync(file, JSON.stringify({ ...existing, proxyPort: port }, null, 2));
-  } catch { /* best effort */ }
+  try { writeJson(file, { ...(cfg ?? {}), proxyPort: port }); } catch { /* best effort */ }
   return port;
 }
 

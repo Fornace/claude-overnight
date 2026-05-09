@@ -1,7 +1,8 @@
 /** Secure file-based store for raw API keys, indexed by provider ID. */
-import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readJsonOrNull, writeJson } from "./fs-helpers.js";
 
 const VAULT_PATH = join(homedir(), ".claude", "claude-overnight", "key-vault.json");
 
@@ -11,24 +12,20 @@ let loaded = false;
 /** Load the vault from disk if not already loaded. */
 function ensureLoaded(): void {
   if (loaded) return;
-  try {
-    const raw = readFileSync(VAULT_PATH, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === "string") store.set(k, v);
-      }
+  const parsed = readJsonOrNull<Record<string, unknown>>(VAULT_PATH);
+  if (parsed) {
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string") store.set(k, v);
     }
-  } catch {}
+  }
   loaded = true;
 }
 
 /** Persist the vault to disk with restricted permissions. */
 function flush(): void {
-  mkdirSync(join(homedir(), ".claude", "claude-overnight"), { recursive: true });
   const obj: Record<string, string> = {};
   for (const [k, v] of store) obj[k] = v;
-  writeFileSync(VAULT_PATH, JSON.stringify(obj), "utf-8");
+  writeJson(VAULT_PATH, obj);
   try { chmodSync(VAULT_PATH, 0o600); } catch {}
 }
 
