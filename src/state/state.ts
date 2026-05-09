@@ -6,35 +6,29 @@ import type { Task, RunState, BranchRecord, AgentState, RunMemory, WaveSummary }
 import { forceMergeOverlay } from "../swarm/merge.js";
 import { FALLBACK_MODEL } from "../core/models.js";
 import { selectKey } from "../cli/cli.js";
+import { readFileOrEmpty, readMdEntries, readJsonOrNull, writeJson } from "../core/fs-helpers.js";
 
 // ── File I/O helpers ──
 
+/** Concatenate every `.md` in `dir` as `### name\n<body>` blocks. Empty if missing. */
 export function readMdDir(dir: string): string {
-  try {
-    const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
-    return files.map(f => {
-      const content = readFileSync(join(dir, f), "utf-8");
-      return `### ${f}\n${content}`;
-    }).join("\n\n");
-  } catch { return ""; }
+  return readMdEntries(dir).map(({ name, body }) => `### ${name}\n${body}`).join("\n\n");
 }
 
 function hasMdFiles(dir: string): boolean {
-  try {
-    return readdirSync(dir).some(f => f.endsWith(".md"));
-  } catch { return false; }
+  try { return readdirSync(dir).some(f => f.endsWith(".md")); }
+  catch { return false; }
 }
 
 export function readRunMemory(runDir: string, previousRuns?: string): RunMemory {
-  let goal = "", status = "";
-  try { goal = readFileSync(join(runDir, "goal.md"), "utf-8"); } catch {}
-  try { status = readFileSync(join(runDir, "status.md"), "utf-8"); } catch {}
   return {
     designs: readMdDir(join(runDir, "designs")),
     reflections: readMdDir(join(runDir, "reflections")),
     verifications: readMdDir(join(runDir, "verifications")),
     milestones: readMdDir(join(runDir, "milestones")),
-    status, goal, previousRuns,
+    status: readFileOrEmpty(join(runDir, "status.md")),
+    goal: readFileOrEmpty(join(runDir, "goal.md")),
+    previousRuns,
     userGuidance: readSteerInbox(runDir),
   };
 }
@@ -43,13 +37,10 @@ export function readRunMemory(runDir: string, previousRuns?: string): RunMemory 
 
 /** Read pending .md files in steer-inbox/ (top-level only, not processed/). */
 export function readSteerInbox(runDir: string): string {
-  const dir = join(runDir, "steer-inbox");
-  try {
-    const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
-    return files.map(f => {
-      try { return readFileSync(join(dir, f), "utf-8").trim(); } catch { return ""; }
-    }).filter(Boolean).join("\n\n---\n\n");
-  } catch { return ""; }
+  return readMdEntries(join(runDir, "steer-inbox"))
+    .map(({ body }) => body.trim())
+    .filter(Boolean)
+    .join("\n\n---\n\n");
 }
 
 /** Count pending steer files without reading them. */
@@ -91,11 +82,8 @@ export function writeStatus(baseDir: string, status: string): void {
 
 export function writeGoalUpdate(baseDir: string, update: string): void {
   const goalPath = join(baseDir, "goal.md");
-  let existing = "";
-  try { existing = readFileSync(goalPath, "utf-8"); } catch {}
   const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
-  const entry = `\n\n## Update  -- ${ts}\n${update}`;
-  const full = existing + entry;
+  const full = readFileOrEmpty(goalPath) + `\n\n## Update  -- ${ts}\n${update}`;
   const trimmed = full.length > 4000 ? full.slice(0, 1000) + "\n\n...\n\n" + full.slice(-3000) : full;
   writeFileSync(goalPath, trimmed, "utf-8");
 }
@@ -142,16 +130,15 @@ export function appendOvernightLogStart(cwd: string, runId: string, meta: Overni
     "",
     "",
   ].join("\n");
-  let existing = "";
-  try { existing = readFileSync(path, "utf-8"); } catch {}
+  const existing = readFileOrEmpty(path);
   const header = existing ? "" : "# claude-overnight  -- run history\n\n";
   writeFileSync(path, header + existing + block, "utf-8");
 }
 
 export function updateOvernightLogEnd(cwd: string, runId: string, meta: OvernightLogEnd): void {
   const path = join(cwd, "claude-overnight.log.md");
-  let existing = "";
-  try { existing = readFileSync(path, "utf-8"); } catch { return; }
+  if (!existsSync(path)) return;
+  const existing = readFileOrEmpty(path);
   const finishedAt = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
   const sec = meta.elapsedSec;
   const elapsed = sec < 60 ? `${sec}s` : sec < 3600 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
@@ -189,17 +176,15 @@ export function saveRunState(runDir: string, state: RunState): void {
   if (missing.length) {
     throw new Error(`saveRunState: refusing to persist truncated state, missing fields: ${missing.join(", ")}`);
   }
-  mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, "run.json"), JSON.stringify(state, null, 2), "utf-8");
+  writeJson(join(runDir, "run.json"), state);
 }
 
 export function loadRunState(runDir: string): RunState | null {
-  try {
-    const state = JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8"));
-    if (state && !Array.isArray(state.branches)) state.branches = [];
-    if (state && !Array.isArray(state.currentTasks)) state.currentTasks = [];
-    return state;
-  } catch { return null; }
+  const state = readJsonOrNull<RunState>(join(runDir, "run.json"));
+  if (!state) return null;
+  if (!Array.isArray(state.branches)) state.branches = [];
+  if (!Array.isArray((state as unknown as { currentTasks: unknown }).currentTasks)) state.currentTasks = [];
+  return state;
 }
 
 export function findIncompleteRuns(rootDir: string, filterCwd: string): { dir: string; state: RunState }[] {
@@ -262,14 +247,9 @@ export function backfillOrphanedPlans(rootDir: string, filterCwd: string): numbe
       const runDir = join(runsDir, d);
       if (existsSync(join(runDir, "run.json"))) continue;
       const tasksFile = join(runDir, "tasks.json");
-      if (!existsSync(tasksFile)) continue;
-      let taskCount = 0;
-      try {
-        const parsed = JSON.parse(readFileSync(tasksFile, "utf-8"));
-        if (!Array.isArray(parsed?.tasks)) continue;
-        taskCount = parsed.tasks.length;
-      } catch { continue; }
-      if (taskCount === 0) continue;
+      const parsed = readJsonOrNull<{ tasks?: unknown[] }>(tasksFile);
+      if (!parsed || !Array.isArray(parsed.tasks) || parsed.tasks.length === 0) continue;
+      const taskCount = parsed.tasks.length;
 
       // Dir name format: 2026-04-12T13-03-57 (UTC). Convert to ISO.
       const m = d.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/);
@@ -333,8 +313,7 @@ export async function showRunHistory(allRuns: { dir: string; state: RunState }[]
       const icon = s.phase === "done" ? chalk.green("✓") : chalk.dim("·");
       console.log(`  ${icon} ${chalk.dim(date)} · ${s.phase} · ${s.accCompleted}/${s.budget}${cost}${merged ? ` · ${merged} merged` : ""}`);
       console.log(`      ${obj}${obj.length >= 50 ? "…" : ""}`);
-      let status = "";
-      try { status = readFileSync(join(run.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 70); } catch {}
+      const status = readFileOrEmpty(join(run.dir, "status.md")).trim().split("\n")[0].slice(0, 70);
       if (status) console.log(chalk.dim(`      ${status}`));
       console.log("");
     }
@@ -359,10 +338,8 @@ export function readPreviousRunKnowledge(rootDir: string): string {
       if (summaries.length >= 5) break;
       const state = loadRunState(join(runsDir, d));
       if (!state || state.phase !== "done") continue;
-      let status = "";
-      try { status = readFileSync(join(runsDir, d, "status.md"), "utf-8"); } catch {}
-      let goal = "";
-      try { goal = readFileSync(join(runsDir, d, "goal.md"), "utf-8"); } catch {}
+      const status = readFileOrEmpty(join(runsDir, d, "status.md"));
+      const goal = readFileOrEmpty(join(runsDir, d, "goal.md"));
       const date = d.replace("T", " ").slice(0, 19);
       const cost = state.accCost > 0 ? ` · $${state.accCost.toFixed(2)}` : "";
       summaries.push(`### Run ${date} (${state.accCompleted} tasks${cost})\n${status || "(no status recorded)"}\n${goal ? `Goal: ${goal.slice(0, 500)}` : ""}`);
@@ -397,9 +374,7 @@ export function saveWaveSession(
   baseDir: string, waveNum: number,
   agents: AgentState[], totalCost: number,
 ): void {
-  const dir = join(baseDir, "sessions");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `wave-${waveNum}.json`), JSON.stringify({
+  writeJson(join(baseDir, "sessions", `wave-${waveNum}.json`), {
     wave: waveNum,
     agents: agents.map(a => ({
       id: a.id, prompt: a.task.prompt, status: a.status, error: a.error,
@@ -408,29 +383,27 @@ export function saveWaveSession(
       branch: a.branch,
     })),
     totalCost,
-  }, null, 2), "utf-8");
+  });
 }
 
 export function loadWaveHistory(runDir: string): WaveSummary[] {
   const dir = join(runDir, "sessions");
-  try {
-    return readdirSync(dir)
-      .filter(f => f.startsWith("wave-") && f.endsWith(".json"))
-      .sort((a, b) => {
-        const numA = parseInt(a.replace("wave-", "").replace(".json", ""));
-        const numB = parseInt(b.replace("wave-", "").replace(".json", ""));
-        return numA - numB;
-      })
-      .map(f => {
-        const data = JSON.parse(readFileSync(join(dir, f), "utf-8"));
-        return {
-          wave: data.wave,
-          tasks: (data.agents || []).map((a: any) => ({
-            prompt: a.prompt, status: a.status, filesChanged: a.filesChanged, error: a.error,
-          })),
-        } as WaveSummary;
-      });
-  } catch { return []; }
+  let names: string[];
+  try { names = readdirSync(dir).filter(f => f.startsWith("wave-") && f.endsWith(".json")); }
+  catch { return []; }
+  names.sort((a, b) => parseInt(a.slice(5)) - parseInt(b.slice(5)));
+  const out: WaveSummary[] = [];
+  for (const f of names) {
+    const data = readJsonOrNull<{ wave: number; agents?: { prompt: string; status: string; filesChanged: number; error?: string }[] }>(join(dir, f));
+    if (!data) continue;
+    out.push({
+      wave: data.wave,
+      tasks: (data.agents ?? []).map(a => ({
+        prompt: a.prompt, status: a.status as WaveSummary["tasks"][number]["status"], filesChanged: a.filesChanged, error: a.error,
+      })),
+    });
+  }
+  return out;
 }
 
 // ── Branch management ──
