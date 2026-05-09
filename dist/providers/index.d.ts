@@ -1,37 +1,15 @@
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-export { PROXY_DEFAULT_URL, isCursorProxyProvider, bundledComposerProxyShellCommand, readCursorProxyLogTail, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, getCursorAgentToken, } from "./cursor-env.js";
-export { healthCheckCursorProxy, ensureCursorProxyRunning } from "./cursor-proxy.js";
-export type { EnsureProxyOptions } from "./cursor-proxy.js";
-/**
- * A non-Anthropic model provider reachable via an Anthropic-compatible endpoint
- * (e.g. DashScope for Qwen, OpenRouter, a local proxy). Stored user-level.
- */
-export interface ProviderConfig {
-    id: string;
-    displayName: string;
-    baseURL: string;
-    model: string;
-    /** Env var name holding the key — preferred over inline `key` (nothing on disk). */
-    keyEnv?: string;
-    /** Inline API key. Stored plaintext in providers.json (mode 0600). */
-    key?: string;
-    /** When true, use JWT token auth instead of raw API keys. */
-    useJWT?: boolean;
-    /** When true, this provider routes through cursor-composer-in-claude. */
-    cursorProxy?: boolean;
-    /** API key for cursor-composer-in-claude (fallback when CURSOR_BRIDGE_API_KEY unset). */
-    cursorApiKey?: string;
-}
+import type { ProviderConfig } from "./store.js";
+export type { ProviderConfig } from "./store.js";
+export { loadProviders, saveProvider, deleteProvider, getStorePath, } from "./store.js";
+export { PROXY_DEFAULT_URL, isCursorProxyProvider, bundledComposerProxyShellCommand, readCursorProxyLogTail, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, getCursorAgentToken, healthCheckCursorProxy, ensureCursorProxyRunning, } from "./cursor/index.js";
+export type { EnsureProxyOptions } from "./cursor/index.js";
 export interface ModelPick {
     model: string;
     providerId?: string;
     provider?: ProviderConfig;
 }
 export type EnvResolver = (model?: string) => Record<string, string> | undefined;
-export declare function getStorePath(): string;
-export declare function loadProviders(): ProviderConfig[];
-export declare function saveProvider(p: ProviderConfig): void;
-export declare function deleteProvider(id: string): void;
 export declare function resolveKey(p: ProviderConfig): string | null;
 /**
  * Build the env overrides for a custom provider. Returns a merged env

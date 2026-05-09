@@ -1,15 +1,16 @@
 // Cursor model picker and setup wizard.
 import { execSync } from "child_process";
 import chalk from "chalk";
-import { ask, select, selectKey } from "../cli/cli.js";
+import { ask, select, selectKey } from "../../cli/cli.js";
 import {
   CURSOR_PRIORITY_MODELS,
   CURSOR_KNOWN_MODELS,
   KNOWN_CURSOR_MODEL_IDS,
   cursorModelHint,
-} from "../core/cursor-models.js";
-import { loadProviders, saveProvider } from "./index.js";
-import type { ProviderConfig, ModelPick } from "./index.js";
+} from "../../core/cursor-models.js";
+import { loadProviders, saveProvider } from "../store.js";
+import type { ProviderConfig } from "../store.js";
+import type { ModelPick } from "../index.js";
 import {
   PROXY_DEFAULT_URL,
   bundledComposerProxyShellCommand,
@@ -17,8 +18,8 @@ import {
   resolveCursorAgentToken,
   getClaudeOvernightInstallRoot,
   resolveCursorComposerCli,
-} from "./cursor-env.js";
-import { healthCheckCursorProxy, ensureCursorProxyRunning } from "./cursor-proxy.js";
+} from "./env.js";
+import { healthCheckCursorProxy, ensureCursorProxyRunning } from "./proxy.js";
 
 interface SetupStep {
   label: string;
@@ -76,31 +77,30 @@ function saveCursorApiKey(key: string): void {
     const p = existing[0];
     p.cursorApiKey = key;
     saveProvider(p);
-  } else {
-    const sentinel: ProviderConfig = {
-      id: CURSOR_KEY_PROVIDER_ID,
-      displayName: "Cursor (API key)",
-      baseURL: PROXY_DEFAULT_URL,
-      model: "auto",
-      cursorProxy: true,
-      cursorApiKey: key,
-    };
-    saveProvider(sentinel);
+    return;
   }
+  saveProvider({
+    id: CURSOR_KEY_PROVIDER_ID,
+    displayName: "Cursor (API key)",
+    baseURL: PROXY_DEFAULT_URL,
+    model: "auto",
+    cursorProxy: true,
+    cursorApiKey: key,
+  });
 }
 
 async function promptAndSaveCursorKey(): Promise<boolean> {
   console.log(chalk.dim(`  Get your API key from https://cursor.com/dashboard/integrations`));
   console.log(chalk.dim(`  (Scroll to the "API Keys" section at the bottom of the page)\n`));
   const key = await ask(`  ${chalk.cyan("API key")}: `);
-  if (key && key.trim()) {
-    const trimmed = key.trim();
-    process.env.CURSOR_BRIDGE_API_KEY = trimmed;
-    saveCursorApiKey(trimmed);
-    return true;
+  const trimmed = key?.trim();
+  if (!trimmed) {
+    console.log(chalk.yellow("  No key provided — skipped"));
+    return false;
   }
-  console.log(chalk.yellow("  No key provided — skipped"));
-  return false;
+  process.env.CURSOR_BRIDGE_API_KEY = trimmed;
+  saveCursorApiKey(trimmed);
+  return true;
 }
 
 /**
@@ -206,15 +206,12 @@ export async function setupCursorProxy(): Promise<boolean> {
       { key: "r", desc: "etry (re-attempt auto-start + kill stale)" },
       { key: "c", desc: "ancel" },
     ]);
-    if (choice === "r") {
-      if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { forceRestart: true })) {
-        console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
-        return true;
-      }
-      console.log(chalk.yellow(`  Still not reachable at ${PROXY_DEFAULT_URL}`));
-    } else {
-      return false;
+    if (choice !== "r") return false;
+    if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { forceRestart: true })) {
+      console.log(chalk.green("\n  ✓ Proxy is running and healthy"));
+      return true;
     }
+    console.log(chalk.yellow(`  Still not reachable at ${PROXY_DEFAULT_URL}`));
   }
 }
 
@@ -264,33 +261,7 @@ export async function pickCursorModel(): Promise<ModelPick | null> {
   clearInterval(spinner);
   process.stdout.write("\x1B[2K\r");
 
-  if (!healthy) {
-    const autoStarted = await ensureCursorProxyRunning();
-    if (!autoStarted) {
-      console.log(chalk.yellow("  Proxy is not running at " + PROXY_DEFAULT_URL));
-      for (;;) {
-        const choice = await selectKey(`  How to proceed?`, [
-          { key: "r", desc: "etry (re-attempt auto-start + kill stale)" },
-          { key: "i", desc: "nstall + configure (CLI, API key, server)" },
-          { key: "c", desc: "ancel" },
-        ]);
-        if (choice === "r") {
-          if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { forceRestart: true })) {
-            console.log(chalk.green("  ✓ Proxy started"));
-            break;
-          }
-          console.log(chalk.yellow(`  Still not reachable at ${PROXY_DEFAULT_URL}`));
-        } else if (choice === "i") {
-          const ok = await setupCursorProxy();
-          if (!ok) return null;
-          if (await healthCheckCursorProxy()) break;
-          return null;
-        } else {
-          return null;
-        }
-      }
-    }
-  }
+  if (!healthy && !(await ensureCursorProxyRunning()) && !(await recoverCursorProxy())) return null;
 
   const { top, more } = await buildCursorPicker();
 
@@ -300,8 +271,7 @@ export async function pickCursorModel(): Promise<ModelPick | null> {
     hint: m.hint,
   }));
 
-  const hasMore = more.length > 0;
-  if (hasMore) {
+  if (more.length > 0) {
     items.push({ name: chalk.gray("more…"), value: "__more__", hint: `${more.length} additional models` });
   }
 
@@ -309,11 +279,35 @@ export async function pickCursorModel(): Promise<ModelPick | null> {
 
   if (picked === "__more__") {
     const moreItems = more.map(m => ({ name: m.name, value: m.id, hint: m.hint }));
-    const morePicked = await select("  More Cursor models:", moreItems, 0);
-    return saveCursorPick(morePicked);
+    return saveCursorPick(await select("  More Cursor models:", moreItems, 0));
   }
 
   return saveCursorPick(picked);
+}
+
+/** Interactive recovery loop after auto-start fails — retry, full setup, or cancel. */
+async function recoverCursorProxy(): Promise<boolean> {
+  console.log(chalk.yellow("  Proxy is not running at " + PROXY_DEFAULT_URL));
+  for (;;) {
+    const choice = await selectKey(`  How to proceed?`, [
+      { key: "r", desc: "etry (re-attempt auto-start + kill stale)" },
+      { key: "i", desc: "nstall + configure (CLI, API key, server)" },
+      { key: "c", desc: "ancel" },
+    ]);
+    if (choice === "r") {
+      if (await ensureCursorProxyRunning(PROXY_DEFAULT_URL, { forceRestart: true })) {
+        console.log(chalk.green("  ✓ Proxy started"));
+        return true;
+      }
+      console.log(chalk.yellow(`  Still not reachable at ${PROXY_DEFAULT_URL}`));
+    } else if (choice === "i") {
+      if (!(await setupCursorProxy())) return false;
+      if (await healthCheckCursorProxy()) return true;
+      return false;
+    } else {
+      return false;
+    }
+  }
 }
 
 function saveCursorPick(modelId: string): ModelPick {

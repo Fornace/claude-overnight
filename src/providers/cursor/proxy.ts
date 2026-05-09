@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "path";
 import { execSync, spawn } from "child_process";
 import chalk from "chalk";
-import { VERSION } from "../core/_version.js";
-import { getProxyPort, buildProxyUrl } from "../core/proxy-port.js";
-import { loadProviders } from "./index.js";
+import { VERSION } from "../../core/_version.js";
+import { getProxyPort, buildProxyUrl } from "../../core/proxy-port.js";
+import { loadProviders } from "../store.js";
 import {
   PROXY_DEFAULT_URL,
   cursorProxyOutLogPath,
@@ -18,73 +18,63 @@ import {
   resolveCursorProxyKey,
   ensureCursorAccountPool,
   warnMacCursorAgentShellPatchIfNeeded,
-} from "./cursor-env.js";
-import { cursorProxyRateLimiter, apiEndpointLimiter } from "../core/rate-limiter.js";
+} from "./env.js";
+import { cursorProxyRateLimiter, apiEndpointLimiter } from "../../core/rate-limiter.js";
 
 // Shared rate limiter for all proxy HTTP calls (health checks, preflight, probes).
-// Uses the singleton so planner direct-fetch calls share the same budget.
 const _proxyRl = cursorProxyRateLimiter;
 
 // ── Health check ──
 
-export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
-  const url = `${baseUrl.replace(/\/$/, "")}/health`;
-  try {
-    await _proxyRl.waitIfNeeded();
-    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000), ...cursorProxyFetchOpts() });
-    _proxyRl.record();
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-/** GET /health JSON — used to detect stale `npx` proxies older than this package's dependency. */
-async function getCursorProxyHealthInfo(baseUrl = PROXY_DEFAULT_URL): Promise<{ version?: string; ok?: boolean } | null> {
-  try {
-    const url = `${baseUrl.replace(/\/$/, "")}/health`;
-    await _proxyRl.waitIfNeeded();
-    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3_000), ...cursorProxyFetchOpts() });
-    if (!res.ok) return null;
-    _proxyRl.record();
-    const json = (await res.json()) as { ok?: boolean; version?: string };
-    return {
-      ok: json.ok,
-      version: typeof json.version === "string" ? json.version : undefined,
-    };
-  } catch {
-    return null;
-  }
+interface ProxyHealth {
+  /** /health responded ok. */
+  ok: boolean;
+  /** Version reported by /health JSON, if any. */
+  version?: string;
+  /** Verified to be cursor-composer-in-claude (either /health ok or /v1/models has a `data` array). */
+  verified: boolean;
 }
 
 /**
- * Verify something is actually cursor-composer-in-claude (not just any HTTP service on the port).
- * Tries /health first, falls back to /v1/models shape check.
+ * Single round-trip probe: tries /health first, falls back to /v1/models shape check.
+ * Returns flags so callers can choose between "is it healthy?", "what version?", and
+ * "is it actually cursor-composer-in-claude vs. some other listener?" without re-fetching.
  */
-async function verifyCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
+async function probeProxyHealth(baseUrl = PROXY_DEFAULT_URL): Promise<ProxyHealth> {
   const url = baseUrl.replace(/\/$/, "");
-  const opts = cursorProxyFetchOpts();
-  await _proxyRl.waitIfNeeded();
+  const fetchOpts = { method: "GET" as const, signal: AbortSignal.timeout(3_000), ...cursorProxyFetchOpts() };
+
   try {
-    const res = await fetch(`${url}/health`, { method: "GET", signal: AbortSignal.timeout(3_000), ...opts });
-    if (res.ok) { _proxyRl.record(); return true; }
+    await _proxyRl.waitIfNeeded();
+    const res = await fetch(`${url}/health`, fetchOpts);
+    if (res.ok) {
+      _proxyRl.record();
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; version?: string };
+      return { ok: true, verified: true, version: typeof json.version === "string" ? json.version : undefined };
+    }
   } catch {}
+
   try {
-    const res = await fetch(`${url}/v1/models`, { method: "GET", signal: AbortSignal.timeout(3_000), ...opts });
-    if (!res.ok) return false;
+    await _proxyRl.waitIfNeeded();
+    const res = await fetch(`${url}/v1/models`, fetchOpts);
+    if (!res.ok) return { ok: false, verified: false };
     _proxyRl.record();
-    const json = (await res.json()) as Record<string, unknown>;
-    return Array.isArray(json["data"]);
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    return { ok: false, verified: Array.isArray(json["data"]) };
   } catch {
-    return false;
+    return { ok: false, verified: false };
   }
+}
+
+export async function healthCheckCursorProxy(baseUrl = PROXY_DEFAULT_URL): Promise<boolean> {
+  return (await probeProxyHealth(baseUrl)).ok;
 }
 
 /**
  * Kill whatever process is listening on the given port.
  * Uses TCP LISTEN only — plain `lsof -ti :PORT` also matches *clients*.
  */
-function killProcessOnPort(port: number, _host = "127.0.0.1"): number | null {
+function killProcessOnPort(port: number): number | null {
   try {
     const pid = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null`, {
       timeout: 5_000, encoding: "utf-8",
@@ -115,8 +105,7 @@ async function isPortInUse(port: number, host = "127.0.0.1"): Promise<boolean> {
  */
 async function maybeRestartStaleProxy(baseUrl: string, url: URL, port: number): Promise<boolean> {
   const embedded = getEmbeddedComposerProxyVersion();
-  const info = await getCursorProxyHealthInfo(baseUrl);
-  const runningV = info?.version;
+  const { version: runningV, ok: healthOk } = await probeProxyHealth(baseUrl);
 
   if (!embedded) {
     console.log(chalk.dim(JSON.stringify({
@@ -127,8 +116,7 @@ async function maybeRestartStaleProxy(baseUrl: string, url: URL, port: number): 
     return true;
   }
 
-  const trusted = Boolean(runningV && runningV === embedded);
-  if (trusted) {
+  if (runningV && runningV === embedded) {
     console.log(chalk.dim(JSON.stringify({
       claudeOvernight: VERSION,
       cursorComposerExpected: embedded,
@@ -137,12 +125,12 @@ async function maybeRestartStaleProxy(baseUrl: string, url: URL, port: number): 
     return true;
   }
 
-  if (process.env.CURSOR_OVERNIGHT_ALLOW_EXTERNAL_PROXY === "1" && info?.ok) {
+  if (process.env.CURSOR_OVERNIGHT_ALLOW_EXTERNAL_PROXY === "1" && healthOk) {
     console.log(chalk.yellow(`  ⚠ External proxy detected (v${runningV ?? "unknown"}) on port ${port} — trusting it (CURSOR_OVERNIGHT_ALLOW_EXTERNAL_PROXY=1)`));
     return true;
   }
 
-  if (process.env.CURSOR_OVERNIGHT_NO_PROXY_RESTART === "1" && info?.ok && runningV) {
+  if (process.env.CURSOR_OVERNIGHT_NO_PROXY_RESTART === "1" && healthOk && runningV) {
     console.log(chalk.yellow(`  ⚠ External proxy v${runningV} on port ${port} — skipping restart (CURSOR_OVERNIGHT_NO_PROXY_RESTART=1)`));
     return true;
   }
@@ -151,7 +139,7 @@ async function maybeRestartStaleProxy(baseUrl: string, url: URL, port: number): 
     ? `proxy does not report a version in /health — replacing with bundled v${embedded}`
     : `running proxy is v${runningV} but this install bundles cursor-composer-in-claude v${embedded}`;
   console.log(chalk.yellow(`  ⚠ ${reason} — restarting…`));
-  killProcessOnPort(port, url.hostname);
+  killProcessOnPort(port);
   await new Promise(r => setTimeout(r, 500));
   return startProxyProcess(baseUrl, url, port);
 }
@@ -185,26 +173,24 @@ export async function ensureCursorProxyRunning(baseUrl = PROXY_DEFAULT_URL, opts
 
   if (effectiveForce && resolveCursorComposerCli()) {
     console.log(chalk.dim(`  Replacing listener on port ${port} with bundled cursor-composer-in-claude…`));
-    killProcessOnPort(port, url.hostname);
+    killProcessOnPort(port);
     await new Promise(r => setTimeout(r, 500));
     return startProxyProcess(baseUrl, url, port);
   }
 
-  if (await healthCheckCursorProxy(baseUrl)) {
-    return await maybeRestartStaleProxy(baseUrl, url, port);
-  }
+  const initial = await probeProxyHealth(baseUrl);
+  if (initial.ok) return maybeRestartStaleProxy(baseUrl, url, port);
 
   if (await isPortInUse(port, url.hostname)) {
-    const isProxy = await verifyCursorProxy(baseUrl);
-    if (isProxy) {
+    if (initial.verified) {
       console.log(chalk.dim(`  Proxy verified at port ${port}`));
-      return await maybeRestartStaleProxy(baseUrl, url, port);
+      return maybeRestartStaleProxy(baseUrl, url, port);
     }
 
     if (!forceRestart) {
       console.log(chalk.yellow(`  ⚠ Something is on port ${port} but it's not cursor-composer-in-claude — killing stale process…`));
     }
-    const killedPid = killProcessOnPort(port, url.hostname);
+    const killedPid = killProcessOnPort(port);
     if (killedPid) {
       console.log(chalk.green(`  ✓ Killed stale process PID ${killedPid} on port ${port}`));
       await new Promise(r => setTimeout(r, 500));
@@ -344,11 +330,12 @@ async function startProxyProcess(baseUrl: string, _url: URL, port: number): Prom
     for (let i = 0; i < HEALTH_MAX_POLLS; i++) {
       await new Promise(r => setTimeout(r, HEALTH_POLL_MS));
       const elapsed = ((i + 1) * HEALTH_POLL_MS / 1000).toFixed(1);
-      if (await healthCheckCursorProxy(baseUrl)) {
-        if (await verifyCursorProxy(baseUrl)) {
-          console.log(chalk.green(`  ✓ Proxy started (PID ${child.pid}) and healthy after ${elapsed}s`));
-          return true;
-        }
+      const { ok, verified } = await probeProxyHealth(baseUrl);
+      if (ok && verified) {
+        console.log(chalk.green(`  ✓ Proxy started (PID ${child.pid}) and healthy after ${elapsed}s`));
+        return true;
+      }
+      if (ok) {
         console.log(chalk.yellow(`  ⚠ /health ok but /v1/models failed — agent subprocess broken, continuing to retry…`));
       }
       if ((i + 1) % 4 === 0) {
@@ -385,14 +372,34 @@ export async function preflightCursorProxyViaHttp(
   const overallDeadlineAt = Date.now() + timeoutMs;
   const remaining = () => Math.max(1_000, overallDeadlineAt - Date.now());
   const authBudget = Math.max(5_000, Math.floor(timeoutMs / 2));
+
+  const authErr = await postProxyMessages(baseURL, headers, p.model, "ok", authBudget, opts, "still waiting");
+  if (authErr) return { ok: false, error: authErr };
+
+  opts?.onProgress?.(`probing write capability…`);
+  const probeErr = await probeCursorWriteCapability(baseURL, headers, p.model, remaining(), opts);
+  if (probeErr) return { ok: false, error: probeErr };
+  return { ok: true };
+}
+
+/** POST /v1/messages with shared rate-limiter waits, AbortController timeout, periodic onProgress. */
+async function postProxyMessages(
+  baseURL: string,
+  headers: Record<string, string>,
+  model: string,
+  userContent: string,
+  timeoutMs: number,
+  opts: { onProgress?: (msg: string) => void } | undefined,
+  progressLabel: string,
+): Promise<string | null> {
   const controller = new AbortController();
   let elapsed = 0;
   const PROGRESS_INTERVAL_MS = 3_000;
   const progressTimer = setInterval(() => {
     elapsed += PROGRESS_INTERVAL_MS;
-    opts?.onProgress?.(`still waiting… (${(elapsed / 1000).toFixed(1)}s)`);
+    opts?.onProgress?.(`${progressLabel}… (${(elapsed / 1000).toFixed(1)}s)`);
   }, PROGRESS_INTERVAL_MS);
-  const deadline = setTimeout(() => controller.abort(), authBudget);
+  const deadline = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     // Wait out both window budgets — preflight runs auth+write back-to-back, so
@@ -404,34 +411,24 @@ export async function preflightCursorProxyViaHttp(
     const res = await fetch(`${baseURL}/v1/messages`, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        model: p.model,
-        max_tokens: 4096,
-        messages: [{ role: "user", content: "ok" }],
-      }),
+      body: JSON.stringify({ model, max_tokens: 4096, messages: [{ role: "user", content: userContent }] }),
       signal: controller.signal,
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
+      return `HTTP ${res.status}: ${text.slice(0, 200)}`;
     }
     await res.text().catch(() => "");
     _proxyRl.record();
     apiEndpointLimiter.record();
+    return null;
   } catch (err: any) {
-    if (err?.name === "AbortError") {
-      return { ok: false, error: `timeout after ${Math.round(timeoutMs / 1000)}s` };
-    }
-    return { ok: false, error: String(err?.message || err).slice(0, 200) };
+    if (err?.name === "AbortError") return `timeout after ${Math.round(timeoutMs / 1000)}s`;
+    return String(err?.message || err).slice(0, 200);
   } finally {
     clearTimeout(deadline);
     clearInterval(progressTimer);
   }
-
-  opts?.onProgress?.(`probing write capability…`);
-  const probeErr = await probeCursorWriteCapability(baseURL, key, p.model, remaining(), opts);
-  if (probeErr) return { ok: false, error: probeErr };
-  return { ok: true };
 }
 
 /**
@@ -441,7 +438,7 @@ export async function preflightCursorProxyViaHttp(
  */
 async function probeCursorWriteCapability(
   baseURL: string,
-  key: string | null | undefined,
+  headers: Record<string, string>,
   model: string,
   timeoutMs: number,
   opts?: { onProgress?: (msg: string) => void },
@@ -453,47 +450,8 @@ async function probeCursorWriteCapability(
     `Run this exact shell command via your Bash tool, then reply with only the word DONE:\n` +
     `printf 'ok' > ${probeFile}`;
 
-  const controller = new AbortController();
-  let elapsed = 0;
-  const PROGRESS_INTERVAL_MS = 3_000;
-  const progressTimer = setInterval(() => {
-    elapsed += PROGRESS_INTERVAL_MS;
-    opts?.onProgress?.(`write probe… (${(elapsed / 1000).toFixed(1)}s)`);
-  }, PROGRESS_INTERVAL_MS);
-  const deadline = setTimeout(() => controller.abort(), timeoutMs);
-
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (key) headers["authorization"] = `Bearer ${key}`;
-
-  try {
-    // Wait out both window budgets — the auth probe just recorded and the 1s
-    // min interval on apiEndpointLimiter would otherwise trip here.
-    await apiEndpointLimiter.waitIfNeeded();
-    await _proxyRl.waitIfNeeded();
-    const res = await fetch(`${baseURL}/v1/messages`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return `write probe: HTTP ${res.status}: ${text.slice(0, 200)}`;
-    }
-    await res.text().catch(() => "");
-    _proxyRl.record();
-    apiEndpointLimiter.record();
-  } catch (err: any) {
-    if (err?.name === "AbortError") return `write probe: timeout after ${Math.round(timeoutMs / 1000)}s`;
-    return `write probe: ${String(err?.message || err).slice(0, 200)}`;
-  } finally {
-    clearTimeout(deadline);
-    clearInterval(progressTimer);
-  }
+  const err = await postProxyMessages(baseURL, headers, model, prompt, timeoutMs, opts, "write probe");
+  if (err) return `write probe: ${err}`;
 
   if (!existsSync(probeFile)) {
     return (
