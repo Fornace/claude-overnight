@@ -10,10 +10,8 @@ import type { Swarm } from "../swarm/swarm.js";
 import type { RLGetter } from "../core/types.js";
 import type { RunInfo } from "./types.js";
 import type { Phase } from "./store.js";
-import { fmtDur, fmtTokens, visibleLen } from "./primitives.js";
+import { fmtDur, fmtTokens, terminalWidth, visibleLen } from "./primitives.js";
 import { UsageBars, SteeringBars } from "./bars.js";
-
-function terminalWidth(): number { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
 
 // Scales with terminal width so narrow panes get a short bar and wide ones
 // don't waste the right half of the screen.

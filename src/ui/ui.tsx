@@ -68,22 +68,8 @@ export class RunDisplay {
   start(): void {
     if (this.started) return;
     this.started = true;
-    if (this.isTTY) {
-      const callbacks: HostCallbacks = {
-        onSteer: (t) => this.onSteer?.(t),
-        onAsk: (t) => this.onAsk?.(t),
-        clearAsk: () => this.clearAskState(),
-        openAskTempFile: () => this.openAskTempFile(),
-        cycleAgent: (dir) => this.cycleSelectedAgent(dir),
-        selectAgent: (id) => this.selectAgent(id),
-        clearSelectedAgent: () => this.clearSelectedAgent(),
-        settingsTick: () => this.nudge(),
-        requestQuit: () => this.onQuit?.(),
-      };
-      this.ink = inkRender(<App store={this.store} callbacks={callbacks} />);
-    } else {
-      this.plainInterval = setInterval(() => this.plainTick(), 500);
-    }
+    if (this.isTTY) this.mountInk();
+    else this.plainInterval = setInterval(() => this.plainTick(), 500);
   }
 
   pause(): void {
@@ -99,23 +85,27 @@ export class RunDisplay {
   resume(): void {
     if (!this.started) return;
     if (this.isTTY && !this.ink) {
-      const callbacks: HostCallbacks = {
-        onSteer: (t) => this.onSteer?.(t),
-        onAsk: (t) => this.onAsk?.(t),
-        clearAsk: () => this.clearAskState(),
-        openAskTempFile: () => this.openAskTempFile(),
-        cycleAgent: (dir) => this.cycleSelectedAgent(dir),
-        selectAgent: (id) => this.selectAgent(id),
-        clearSelectedAgent: () => this.clearSelectedAgent(),
-        settingsTick: () => this.nudge(),
-        requestQuit: () => this.onQuit?.(),
-      };
-      this.ink = inkRender(<App store={this.store} callbacks={callbacks} />);
+      this.mountInk();
       return;
     }
     if (!this.isTTY && !this.plainInterval) {
       this.plainInterval = setInterval(() => this.plainTick(), 500);
     }
+  }
+
+  private mountInk(): void {
+    const callbacks: HostCallbacks = {
+      onSteer: (t) => this.onSteer?.(t),
+      onAsk: (t) => this.onAsk?.(t),
+      clearAsk: () => this.clearAskState(),
+      openAskTempFile: () => this.openAskTempFile(),
+      cycleAgent: (dir) => this.cycleSelectedAgent(dir),
+      selectAgent: (id) => this.selectAgent(id),
+      clearSelectedAgent: () => this.clearSelectedAgent(),
+      settingsTick: () => this.nudge(),
+      requestQuit: () => this.onQuit?.(),
+    };
+    this.ink = inkRender(<App store={this.store} callbacks={callbacks} />);
   }
 
   stop(): void {

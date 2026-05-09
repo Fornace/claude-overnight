@@ -12,7 +12,7 @@ import { deriveFooter } from "./footer-state.js";
 import type { Action } from "./footer-state.js";
 import type { InputMode, UiState } from "./store.js";
 import type { RunInfo } from "./types.js";
-import { visibleLen } from "./primitives.js";
+import { terminalWidth, visibleLen } from "./primitives.js";
 
 function renderAction(a: Action): string {
   const keyTag = `[${a.key}]`;
@@ -21,8 +21,6 @@ function renderAction(a: Action): string {
   // surfaced only via the toast when pressed.
   return chalk.dim(`${keyTag} ${a.label}`);
 }
-
-function terminalWidth(): number { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
 
 /** Join rendered actions into one line, or two evenly-split lines if a single
  *  line would overflow the terminal. Keeps the canonical slot order. */

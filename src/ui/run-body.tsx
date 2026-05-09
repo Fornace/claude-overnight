@@ -4,16 +4,43 @@ import React from "react";
 import { Text, Box } from "ink";
 import chalk from "chalk";
 import type { Swarm } from "../swarm/swarm.js";
-import type { AgentState } from "../core/types.js";
+import type { AgentState, AgentStatus } from "../core/types.js";
 import { getModelCapability, modelDisplayName } from "../core/models.js";
-import { contextFillInfo, colorEvent, fmtDur, fmtTokens, padVisible, renderWaitingIndicator, spinnerFrame, truncate } from "./primitives.js";
+import { contextFillInfo, colorEvent, fmtDur, fmtTokens, padVisible, renderWaitingIndicator, spinnerFrame, terminalWidth, truncate } from "./primitives.js";
 import { StreamPane, type StreamViewMode } from "./widgets/stream-pane.js";
 
 const COL_ID_W = 3;
 const COL_MODEL_W = 18;
 const COL_STATUS_W = 12;
 
-function terminalWidth(): number { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
+// Status \u2192 icon cell. `running` is dynamic (blocked-state + elapsed), the rest
+// are constant. `pending` falls through to the error glyph for backwards
+// compatibility with the old ternary chain \u2014 it is rare and short-lived.
+const STATUS_ICON: Record<AgentStatus, (a: AgentState) => string> = {
+  running: (a) => {
+    const dot = spinnerFrame("dots");
+    const elapsed = a.startedAt ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt)) : "";
+    return (a.blockedAt ? chalk.yellow(`${dot} blk`) : chalk.blue(`${dot} run`)) + elapsed;
+  },
+  paused: () => chalk.yellow("\u23F8 paused"),
+  done: () => chalk.green("\u2713 done"),
+  error: () => chalk.red("\u2717 err"),
+  pending: () => chalk.red("\u2717 err"),
+};
+
+// Status \u2192 terminal action cell (after `blockedAt` and `currentTool` overrides).
+const STATUS_ACTION: Record<AgentStatus, (a: AgentState) => string> = {
+  running: (a) => chalk.dim(truncate(a.lastText || "...", 24)),
+  paused: (a) => chalk.yellow(`paused ${fmtDur(Date.now() - (a.startedAt || Date.now()))}`),
+  done: (a) => {
+    const dur = fmtDur((a.finishedAt || Date.now()) - (a.startedAt || Date.now()));
+    const cost = a.costUsd != null ? ` $${a.costUsd.toFixed(3)}` : "";
+    const files = a.filesChanged != null && a.filesChanged > 0 ? chalk.dim(` ${a.filesChanged}f`) : "";
+    return chalk.dim(`${dur}${cost}${files}`);
+  },
+  error: (a) => chalk.red(truncate(a.error || "error", 24)),
+  pending: (a) => chalk.red(truncate(a.error || "error", 24)),
+};
 
 function divider(w: number, title = ""): string {
   if (title) {
@@ -32,34 +59,14 @@ function fmtRow(a: AgentState, w: number, selected: boolean, fallbackModel?: str
   const id = selected ? chalk.cyan.bold(String(a.id).padStart(COL_ID_W)) : String(a.id).padStart(COL_ID_W);
   const mdl = modelDisplayName(a.model || a.task.model || fallbackModel || "unknown");
   const modelStr = truncate(mdl, COL_MODEL_W).padEnd(COL_MODEL_W);
-  const elapsed = a.status === "running" && a.startedAt ? " " + chalk.dim(fmtDur(Date.now() - a.startedAt)) : "";
-  const dot = spinnerFrame("dots");
-  const rawIcon = a.status === "running"
-    ? (a.blockedAt ? chalk.yellow(`${dot} blk`) : chalk.blue(`${dot} run`)) + elapsed
-    : a.status === "paused" ? chalk.yellow("\u23F8 paused")
-    : a.status === "done" ? chalk.green("\u2713 done") : chalk.red("\u2717 err");
-  const icon = padVisible(rawIcon, COL_STATUS_W);
+  const icon = padVisible(STATUS_ICON[a.status](a), COL_STATUS_W);
   const taskW = taskColumnWidth(w);
   const task = truncate(a.task.prompt, taskW).padEnd(taskW);
 
-  let action: string;
-  if (a.blockedAt) {
-    action = chalk.yellow(`rate-limited ${fmtDur(Date.now() - a.blockedAt)}`);
-  } else if (a.currentTool) {
-    action = chalk.yellow(a.currentTool);
-  } else if (a.status === "running") {
-    action = chalk.dim(truncate(a.lastText || "...", 24));
-  } else if (a.status === "paused") {
-    const dur = fmtDur(Date.now() - (a.startedAt || Date.now()));
-    action = chalk.yellow(`paused ${dur}`);
-  } else if (a.status === "done") {
-    const dur = fmtDur((a.finishedAt || Date.now()) - (a.startedAt || Date.now()));
-    const cost = a.costUsd != null ? ` $${a.costUsd.toFixed(3)}` : "";
-    const files = a.filesChanged != null && a.filesChanged > 0 ? chalk.dim(` ${a.filesChanged}f`) : "";
-    action = chalk.dim(`${dur}${cost}${files}`);
-  } else {
-    action = chalk.red(truncate(a.error || "error", 24));
-  }
+  const action = a.blockedAt ? chalk.yellow(`rate-limited ${fmtDur(Date.now() - a.blockedAt)}`)
+    : a.currentTool ? chalk.yellow(a.currentTool)
+    : STATUS_ACTION[a.status](a);
+
   return `  ${id}  ${modelStr}  ${icon}  ${task}  ${action}`;
 }
 
