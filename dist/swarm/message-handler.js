@@ -74,41 +74,39 @@ export function handleMsg(host, agent, msg) {
             break;
         }
         case "stream_event": {
-            const s = msg;
-            const ev = s.event;
+            const ev = msg.event;
             if (ev.type === "content_block_start") {
                 const cb = ev.content_block;
-                if (cb?.type === "tool_use") {
+                if (cb.type === "tool_use" && typeof cb.name === "string") {
                     markStreamContent(agent);
                     agent.currentTool = cb.name;
                     agent.toolCalls++;
-                    const input = (cb.input ?? {});
+                    const input = cb.input ?? {};
                     const hasInput = Object.keys(input).length > 0;
                     host.pendingTools.set(agent, { name: cb.name, input, buf: "", logged: hasInput });
                     if (hasInput)
                         logToolUse(host, agent, cb.name, input);
                 }
-                else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
+                else if (cb.type === "thinking" || cb.type === "redacted_thinking") {
                     markStreamContent(agent);
                     agent.lastText = "thinking…";
                 }
-                else if (cb?.type === "text") {
+                else if (cb.type === "text") {
                     markStreamContent(agent);
                 }
             }
             else if (ev.type === "content_block_delta") {
                 const delta = ev.delta;
                 const pending = host.pendingTools.get(agent);
-                if (delta?.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
+                if (delta.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
                     markStreamContent(agent);
                     pending.buf += delta.partial_json;
                     break;
                 }
-                // thinking_delta: `delta.thinking`; text_delta: `delta.text`.
-                const raw = delta?.type === "text_delta" ? delta.text
-                    : delta?.type === "thinking_delta" ? delta.thinking
+                const raw = delta.type === "text_delta" ? delta.text
+                    : delta.type === "thinking_delta" ? delta.thinking
                         : undefined;
-                if (typeof raw === "string") {
+                if (raw) {
                     markStreamContent(agent);
                     const t = raw.trim();
                     if (t)
@@ -190,8 +188,7 @@ export function handleMsg(host, agent, msg) {
             break;
         }
         case "rate_limit_event": {
-            const rl = msg;
-            const info = rl.rate_limit_info;
+            const info = msg.rate_limit_info;
             host.rateLimitUtilization = info.utilization ?? 0;
             if (info.resetsAt)
                 host.rateLimitResetsAt = info.resetsAt;

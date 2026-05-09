@@ -6,6 +6,22 @@ export function gitExec(cmd: string, cwd: string): string {
 }
 
 /**
+ * Run a git command and swallow failure. Returns the trimmed output, or
+ * `undefined` if the command failed. Use for cleanup ops where "best effort"
+ * is the contract — replaces the dozens of `try { gitExec(...) } catch {}`
+ * blocks that the merge pipeline used to be peppered with.
+ */
+export function silentGit(cmd: string, cwd: string): string | undefined {
+  try { return gitExec(cmd, cwd); } catch { return undefined; }
+}
+
+/** Truncated stringification of an unknown error. Shared by the swarm's
+ *  `try { gitExec(...) } catch (e) { log("op failed: " + ...) }` pattern. */
+export function gitErrMsg(err: unknown, max = 120): string {
+  return String((err as { message?: string })?.message ?? err).slice(0, max);
+}
+
+/**
  * Last-resort merge: overlay the branch's file state onto HEAD without a real
  * 3-way merge. Walks `git diff --name-status base..branch` and for each entry
  * either checks out the branch's version (add/modify/rename) or removes the
@@ -19,16 +35,14 @@ export function forceMergeOverlay(branch: string, cwd: string): boolean {
     const diff = gitExec(`git diff --name-status ${base} "${branch}"`, cwd);
     for (const line of diff.split("\n")) {
       if (!line) continue;
-      const fields = line.split("\t");
-      const status = fields[0];
+      const [status, from, to] = line.split("\t");
       if (status.startsWith("R") || status.startsWith("C")) {
-        const from = fields[1]; const to = fields[2];
-        if (status.startsWith("R")) { try { gitExec(`git rm -f -- "${from}"`, cwd); } catch {} }
-        try { gitExec(`git checkout "${branch}" -- "${to}"`, cwd); gitExec(`git add -- "${to}"`, cwd); } catch {}
+        if (status.startsWith("R")) silentGit(`git rm -f -- "${from}"`, cwd);
+        if (silentGit(`git checkout "${branch}" -- "${to}"`, cwd)) silentGit(`git add -- "${to}"`, cwd);
       } else if (status.startsWith("D")) {
-        try { gitExec(`git rm -f -- "${fields[1]}"`, cwd); } catch {}
+        silentGit(`git rm -f -- "${from}"`, cwd);
       } else {
-        try { gitExec(`git checkout "${branch}" -- "${fields[1]}"`, cwd); gitExec(`git add -- "${fields[1]}"`, cwd); } catch {}
+        if (silentGit(`git checkout "${branch}" -- "${from}"`, cwd)) silentGit(`git add -- "${from}"`, cwd);
       }
     }
     const dirty = gitExec("git status --porcelain", cwd).trim();
@@ -36,8 +50,8 @@ export function forceMergeOverlay(branch: string, cwd: string): boolean {
     gitExec(`git commit -m 'swarm: force-merge ${branch}'`, cwd);
     return true;
   } catch {
-    try { gitExec("git merge --abort", cwd); } catch {}
-    try { gitExec("git reset --hard HEAD", cwd); } catch {}
+    silentGit("git merge --abort", cwd);
+    silentGit("git reset --hard HEAD", cwd);
     return false;
   }
 }
@@ -82,16 +96,25 @@ export function cleanStaleWorktrees(cwd: string, log: (id: number, msg: string) 
     // Merge orphaned branches before deletion. Tiers: safe-delete (already
     // merged) → 3-tier merge → force-delete if merge fails. No branch survives
     // — the user doesn't want manual merges.
+    const tryMerge = (cmd: string, b: string): boolean => {
+      if (silentGit(cmd, cwd) === undefined) { silentGit("git merge --abort", cwd); return false; }
+      silentGit(`git branch -d "${b}"`, cwd);
+      result.recovered++;
+      return true;
+    };
     for (const b of branches) {
       // Already-merged: fast forward delete
-      try { gitExec(`git branch -d "${b}"`, cwd); continue; } catch {}
-      // Attempt 3-tier merge into HEAD so the work lands
-      try { gitExec(`git merge --no-edit "${b}"`, cwd); gitExec(`git branch -d "${b}"`, cwd); result.recovered++; continue; } catch { try { gitExec("git merge --abort", cwd); } catch {} }
-      try { gitExec(`git merge --no-edit -X theirs "${b}"`, cwd); gitExec(`git branch -d "${b}"`, cwd); result.recovered++; continue; } catch { try { gitExec("git merge --abort", cwd); } catch {} }
-      if (forceMergeOverlay(b, cwd)) { try { gitExec(`git branch -d "${b}"`, cwd); } catch { gitExec(`git branch -D "${b}"`, cwd); } result.recovered++; continue; }
+      if (silentGit(`git branch -d "${b}"`, cwd) !== undefined) continue;
+      if (tryMerge(`git merge --no-edit "${b}"`, b)) continue;
+      if (tryMerge(`git merge --no-edit -X theirs "${b}"`, b)) continue;
+      if (forceMergeOverlay(b, cwd)) {
+        if (silentGit(`git branch -d "${b}"`, cwd) === undefined) silentGit(`git branch -D "${b}"`, cwd);
+        result.recovered++;
+        continue;
+      }
       // All tiers failed — force-delete to avoid permanent orphans
       log(-1, `  ⚠ ${b} unmergeable, discarding`);
-      try { gitExec(`git branch -D "${b}"`, cwd); } catch {}
+      silentGit(`git branch -D "${b}"`, cwd);
       result.forceDeleted++;
     }
     if (result.recovered > 0) log(-1, `[prior-wave] Recovered ${result.recovered} orphaned swarm branch(es)`);

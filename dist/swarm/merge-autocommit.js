@@ -1,24 +1,18 @@
 import { existsSync } from "fs";
-import { gitExec } from "./merge-helpers.js";
+import { gitExec, silentGit, gitErrMsg } from "./merge-helpers.js";
 /** Total files the agent touched vs base  -- tracked changes + untracked. */
 function measureWork(worktreeCwd, baseRef) {
     const seen = new Set();
-    try {
-        // Tracked: committed + staged + unstaged, all vs the worktree's base.
-        const diff = gitExec(`git diff --name-only ${baseRef} --`, worktreeCwd);
-        for (const p of diff.split("\n"))
-            if (p)
-                seen.add(p);
-    }
-    catch { }
-    try {
-        // Untracked files don't show in `git diff`; count them separately.
-        const untracked = gitExec("git ls-files --others --exclude-standard", worktreeCwd);
-        for (const p of untracked.split("\n"))
-            if (p)
-                seen.add(p);
-    }
-    catch { }
+    // Tracked: committed + staged + unstaged, all vs the worktree's base.
+    // Untracked: don't show in diff, so list separately.
+    const diff = silentGit(`git diff --name-only ${baseRef} --`, worktreeCwd) ?? "";
+    const untracked = silentGit("git ls-files --others --exclude-standard", worktreeCwd) ?? "";
+    for (const p of diff.split("\n"))
+        if (p)
+            seen.add(p);
+    for (const p of untracked.split("\n"))
+        if (p)
+            seen.add(p);
     return seen.size;
 }
 export function autoCommit(agentId, taskPrompt, worktreeCwd, baseRef, log) {
@@ -37,7 +31,7 @@ export function autoCommit(agentId, taskPrompt, worktreeCwd, baseRef, log) {
         status = gitExec("git status --porcelain", worktreeCwd);
     }
     catch (err) {
-        log(agentId, `git status failed: ${String(err.message || err).slice(0, 120)}`);
+        log(agentId, `git status failed: ${gitErrMsg(err)}`);
         return preCount;
     }
     if (status.trim()) {
@@ -45,14 +39,14 @@ export function autoCommit(agentId, taskPrompt, worktreeCwd, baseRef, log) {
             gitExec("git add -A", worktreeCwd);
         }
         catch (err) {
-            log(agentId, `git add failed: ${String(err.message || err).slice(0, 120)}`);
+            log(agentId, `git add failed: ${gitErrMsg(err)}`);
         }
         const msg = taskPrompt.slice(0, 72).replace(/'/g, "'\''");
         try {
             gitExec(`git commit -m 'swarm: ${msg}'`, worktreeCwd);
         }
         catch (err) {
-            const m = String(err.message || err);
+            const m = gitErrMsg(err, Number.MAX_SAFE_INTEGER);
             if (!m.includes("nothing to commit")) {
                 // Hook-gated project: the user's pre-commit hooks rejected a
                 // potentially work-in-progress commit (lint errors, type errors,
@@ -65,7 +59,7 @@ export function autoCommit(agentId, taskPrompt, worktreeCwd, baseRef, log) {
                     log(agentId, `Commit hooks bypassed (rejected swarm WIP commit)`);
                 }
                 catch (err2) {
-                    log(agentId, `git commit failed even with --no-verify: ${String(err2.message || err2).slice(0, 120)}`);
+                    log(agentId, `git commit failed even with --no-verify: ${gitErrMsg(err2)}`);
                 }
             }
         }
@@ -78,7 +72,7 @@ export function autoCommit(agentId, taskPrompt, worktreeCwd, baseRef, log) {
         landed = diff.trim().split("\n").filter(Boolean).length;
     }
     catch (err) {
-        log(agentId, `diff vs base failed: ${String(err.message || err).slice(0, 120)}`);
+        log(agentId, `diff vs base failed: ${gitErrMsg(err)}`);
     }
     // Red-flag: work existed before the commit attempt but didn't land on the
     // branch. Surfaces silent data loss (stuck hooks, writes outside the

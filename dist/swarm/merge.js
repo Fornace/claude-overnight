@@ -1,8 +1,8 @@
 import { existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { gitExec, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees, } from "./merge-helpers.js";
-export { gitExec, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees };
+import { gitExec, silentGit, gitErrMsg, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees, } from "./merge-helpers.js";
+export { gitExec, silentGit, gitErrMsg, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees };
 export { autoCommit } from "./merge-autocommit.js";
 export async function mergeAllBranches(agents, cwd, strategy, log, evalErroredBranch) {
     const mergeResults = [];
@@ -12,35 +12,26 @@ export async function mergeAllBranches(agents, cwd, strategy, log, evalErroredBr
         return { mergeResults };
     }
     let originalRef;
-    try {
-        const branch = gitExec("git rev-parse --abbrev-ref HEAD", cwd).trim();
-        originalRef = branch === "HEAD" ? gitExec("git rev-parse HEAD", cwd).trim() : branch;
-    }
-    catch { }
+    const head = silentGit("git rev-parse --abbrev-ref HEAD", cwd)?.trim();
+    if (head)
+        originalRef = head === "HEAD" ? silentGit("git rev-parse HEAD", cwd)?.trim() : head;
     let stashed = false;
     try {
-        const status = gitExec("git status --porcelain", cwd);
-        if (status.trim()) {
+        if (gitExec("git status --porcelain", cwd).trim()) {
             gitExec("git stash push -m 'claude-overnight: pre-merge stash'", cwd);
             stashed = true;
             log(-1, "Stashed dirty working tree");
         }
     }
     catch (e) {
-        log(-1, `Stash failed: ${String(e.message || e).slice(0, 80)}`);
+        log(-1, `Stash failed: ${gitErrMsg(e, 80)}`);
     }
     try {
         if (strategy === "branch") {
             const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
             let candidate = `swarm/run-${ts}`;
-            for (let i = 2;; i++) {
-                try {
-                    gitExec(`git rev-parse --verify "${candidate}"`, cwd);
-                    candidate = `swarm/run-${ts}-${i}`;
-                }
-                catch {
-                    break;
-                }
+            for (let i = 2; silentGit(`git rev-parse --verify "${candidate}"`, cwd) !== undefined; i++) {
+                candidate = `swarm/run-${ts}-${i}`;
             }
             mergeBranch = candidate;
             gitExec(`git checkout -b "${mergeBranch}"`, cwd);
@@ -60,16 +51,13 @@ export async function mergeAllBranches(agents, cwd, strategy, log, evalErroredBr
                 }
                 catch (evalErr) {
                     // Eval itself failed — default to keep (never lose paid work)
-                    log(agent.id, `Errored branch eval failed, keeping by default: ${String(evalErr?.message || evalErr).slice(0, 120)}`);
+                    log(agent.id, `Errored branch eval failed, keeping by default: ${gitErrMsg(evalErr)}`);
                     evalResult = { keep: true, reason: "eval error, keeping by default" };
                 }
                 if (!evalResult.keep) {
                     result.discarded = true;
                     result.evalReason = `Discarded: ${evalResult.reason}`;
-                    try {
-                        gitExec(`git branch -D "${agent.branch}"`, cwd);
-                    }
-                    catch { }
+                    silentGit(`git branch -D "${agent.branch}"`, cwd);
                     log(agent.id, result.evalReason);
                     mergeResults.push(result);
                     continue;
@@ -77,27 +65,22 @@ export async function mergeAllBranches(agents, cwd, strategy, log, evalErroredBr
                 result.evalReason = `Recovered: ${evalResult.reason}`;
                 log(agent.id, result.evalReason);
             }
+            let firstErr;
             try {
                 gitExec(`git merge --no-edit "${agent.branch}"`, cwd);
                 result.ok = true;
                 log(agent.id, `Merged ${agent.branch}`);
             }
             catch (e) {
-                try {
-                    gitExec("git merge --abort", cwd);
-                }
-                catch { }
-                try {
-                    gitExec(`git merge --no-edit -X theirs "${agent.branch}"`, cwd);
+                firstErr = e;
+                silentGit("git merge --abort", cwd);
+                if (silentGit(`git merge --no-edit -X theirs "${agent.branch}"`, cwd) !== undefined) {
                     result.ok = true;
                     result.autoResolved = true;
                     log(agent.id, `Auto-resolved conflict: ${agent.branch}`);
                 }
-                catch {
-                    try {
-                        gitExec("git merge --abort", cwd);
-                    }
-                    catch { }
+                else {
+                    silentGit("git merge --abort", cwd);
                     // 3rd tier: brute-force overlay. Handles rename/rename, rename/delete
                     // and other tree-level conflicts that `-X theirs` can't resolve.
                     if (forceMergeOverlay(agent.branch, cwd)) {
@@ -106,7 +89,7 @@ export async function mergeAllBranches(agents, cwd, strategy, log, evalErroredBr
                         log(agent.id, `Force-merged ${agent.branch} (overlay)`);
                     }
                     else {
-                        result.error = e.message?.slice(0, 80);
+                        result.error = gitErrMsg(firstErr, 80);
                         log(agent.id, `Merge conflict: ${agent.branch}`);
                     }
                 }
@@ -115,38 +98,22 @@ export async function mergeAllBranches(agents, cwd, strategy, log, evalErroredBr
         }
         if (existsSync(join(cwd, ".git", "MERGE_HEAD"))) {
             log(-1, "Partial merge detected  -- aborting");
-            try {
-                gitExec("git merge --abort", cwd);
-            }
-            catch { }
+            silentGit("git merge --abort", cwd);
         }
         const merged = mergeResults.filter(r => r.ok);
         const failed = mergeResults.filter(r => !r.ok);
-        for (const r of merged) {
-            try {
-                gitExec(`git branch -d "${r.branch}"`, cwd);
-            }
-            catch { }
-        }
+        for (const r of merged)
+            silentGit(`git branch -d "${r.branch}"`, cwd);
         const totalFilesChanged = mergeResults.reduce((sum, r) => sum + (r.ok ? r.filesChanged : 0), 0);
         log(-1, `Merged ${merged.length}/${agents.length} branches, ${totalFilesChanged} files changed${failed.length > 0 ? ` (${failed.length} unresolved)` : ""}`);
         if (strategy === "branch" && mergeBranch && originalRef) {
-            try {
-                gitExec(`git checkout "${originalRef}"`, cwd);
-            }
-            catch { }
+            silentGit(`git checkout "${originalRef}"`, cwd);
         }
     }
     finally {
-        if (stashed) {
-            try {
-                const stashList = gitExec("git stash list", cwd).trim();
-                if (stashList) {
-                    gitExec("git stash pop", cwd);
-                    log(-1, "Restored stashed changes");
-                }
-            }
-            catch { }
+        if (stashed && silentGit("git stash list", cwd)?.trim()) {
+            if (silentGit("git stash pop", cwd) !== undefined)
+                log(-1, "Restored stashed changes");
         }
     }
     return { mergeResults, mergeBranch };

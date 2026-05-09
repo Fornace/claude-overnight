@@ -18,6 +18,30 @@ import { RATE_LIMIT_WINDOW_SHORT, extractToolTarget, sumUsageTokens } from "../c
 import { getModelCapability } from "../core/models.js";
 import { updateTurn } from "../core/turns.js";
 
+// ── Local stream-event types ──
+//
+// The SDK's `SDKPartialAssistantMessage.event` is a union of typed
+// `BetaRaw…Event` shapes from @anthropic-ai/sdk. Re-deriving the narrow slice
+// we actually consume keeps the handler readable without dragging the giant
+// upstream union into call-site narrowing — and removes the `(ev as any)` and
+// `(cb as any)` casts that used to obscure the contract.
+
+/** Content block we observe on `content_block_start`. Optional fields capture
+ *  "depends on `type`" — the runtime check on `type` gates the reads, so this
+ *  is honest about what's known without leaking `as any` to callers. */
+interface StreamStartBlock {
+  type: "tool_use" | "text" | "thinking" | "redacted_thinking" | (string & {});
+  name?: string;
+  input?: Record<string, unknown>;
+}
+
+interface StreamDelta {
+  type: "input_json_delta" | "text_delta" | "thinking_delta" | (string & {});
+  partial_json?: string;
+  text?: string;
+  thinking?: string;
+}
+
 /** Default: no assistant content for this long means the SDK stream is stuck.
  *  Measured from the last server-streamed delta OR the last tool_result (which
  *  marks the end of a local tool run), to the next server-streamed byte. Local
@@ -114,36 +138,34 @@ export function handleMsg(host: MessageHandlerHost, agent: AgentState, msg: SDKM
       break;
     }
     case "stream_event": {
-      const s = msg as SDKPartialAssistantMessage;
-      const ev = s.event;
+      const ev = (msg as SDKPartialAssistantMessage).event;
       if (ev.type === "content_block_start") {
-        const cb = (ev as any).content_block;
-        if (cb?.type === "tool_use") {
+        const cb = ev.content_block as StreamStartBlock;
+        if (cb.type === "tool_use" && typeof cb.name === "string") {
           markStreamContent(agent);
           agent.currentTool = cb.name; agent.toolCalls++;
-          const input = (cb.input ?? {}) as Record<string, unknown>;
+          const input = cb.input ?? {};
           const hasInput = Object.keys(input).length > 0;
           host.pendingTools.set(agent, { name: cb.name, input, buf: "", logged: hasInput });
           if (hasInput) logToolUse(host, agent, cb.name, input);
-        } else if (cb?.type === "thinking" || cb?.type === "redacted_thinking") {
+        } else if (cb.type === "thinking" || cb.type === "redacted_thinking") {
           markStreamContent(agent);
           agent.lastText = "thinking…";
-        } else if (cb?.type === "text") {
+        } else if (cb.type === "text") {
           markStreamContent(agent);
         }
       } else if (ev.type === "content_block_delta") {
-        const delta = (ev as any).delta;
+        const delta = ev.delta as StreamDelta;
         const pending = host.pendingTools.get(agent);
-        if (delta?.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
+        if (delta.type === "input_json_delta" && pending && typeof delta.partial_json === "string") {
           markStreamContent(agent);
           pending.buf += delta.partial_json;
           break;
         }
-        // thinking_delta: `delta.thinking`; text_delta: `delta.text`.
-        const raw = delta?.type === "text_delta" ? delta.text
-          : delta?.type === "thinking_delta" ? delta.thinking
+        const raw = delta.type === "text_delta" ? delta.text
+          : delta.type === "thinking_delta" ? delta.thinking
           : undefined;
-        if (typeof raw === "string") {
+        if (raw) {
           markStreamContent(agent);
           const t = raw.trim();
           if (t) agent.lastText = t.slice(-80);
@@ -214,13 +236,12 @@ export function handleMsg(host: MessageHandlerHost, agent: AgentState, msg: SDKM
       break;
     }
     case "rate_limit_event": {
-      const rl = msg as SDKRateLimitEvent;
-      const info = rl.rate_limit_info;
+      const info = (msg as SDKRateLimitEvent).rate_limit_info;
       host.rateLimitUtilization = info.utilization ?? 0;
       if (info.resetsAt) host.rateLimitResetsAt = info.resetsAt;
       else if (info.status !== "rejected") host.rateLimitResetsAt = undefined;
-      if ((info as any).isUsingOverage) host.isUsingOverage = true;
-      const windowType = (info as any).rateLimitType as string | undefined;
+      if (info.isUsingOverage) host.isUsingOverage = true;
+      const windowType = info.rateLimitType;
       if (windowType) {
         host.rateLimitWindows.set(windowType, {
           type: windowType, utilization: info.utilization ?? 0, status: info.status, resetsAt: info.resetsAt,
