@@ -1,7 +1,9 @@
 import chalk from "chalk";
 import type { MutableRunSettings } from "../core/types.js";
 import { modelDisplayName, formatContextWindow } from "../core/models.js";
-import { fetchModels, ask, select, BRAILLE } from "./cli.js";
+import { ask, select } from "./prompts.js";
+import { BRAILLE } from "./display.js";
+import { fetchModels } from "./cli.js";
 import { pickModel } from "../providers/index.js";
 
 interface EditSettingsOptions {
@@ -101,23 +103,38 @@ export async function editRunSettings(options: EditSettingsOptions): Promise<Mut
     s.extraUsageBudget = undefined;
   }
 
+  printRunSettings(s);
+
+  return s;
+}
+
+/** Print the planner/worker/fast/concur/usage/extra block.
+ *  When `header` is set, the block gets a "Resume settings" / ─── header.
+ *  When `remaining` is set, a `remaining N sessions` line is inserted before concur. */
+export function printRunSettings(s: MutableRunSettings, opts: { header?: string; remaining?: number } = {}): void {
   const modelLine = (label: string, m: string | undefined) =>
-    m ? `${chalk.dim(label.padEnd(11))}${chalk.white(m)} ${chalk.dim(`(${formatContextWindow(m)} context)`)}` : null;
+    m ? `  ${chalk.dim(label.padEnd(11))}${chalk.white(m)} ${chalk.dim(`(${formatContextWindow(m)} context)`)}` : null;
   const lines = [
     modelLine("planner", s.plannerModel),
     modelLine("worker", s.workerModel),
     modelLine("fast", s.fastModel),
   ].filter(Boolean) as string[];
-  console.log();
-  for (const l of lines) console.log(l);
   const capStr = s.usageCap != null ? `${Math.round(s.usageCap * 100)}%` : "unlimited";
   const extraStr = s.allowExtraUsage ? (s.extraUsageBudget ? `$${s.extraUsageBudget}` : "unlimited") : "off";
+
+  console.log();
+  if (opts.header) {
+    console.log(`  ${chalk.dim(opts.header)}`);
+    console.log(`  ${chalk.dim("─".repeat(40))}`);
+  }
+  for (const l of lines) console.log(l);
+  if (opts.remaining != null) {
+    console.log(`  ${chalk.dim("remaining  ")}${chalk.white(String(Math.max(1, opts.remaining)))} ${chalk.dim("sessions")}`);
+  }
   console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(s.concurrency))}`);
   console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
   console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
-  console.log();
-
-  return s;
+  if (!opts.header) console.log();
 }
 
 /** Format a MutableRunSettings as a compact summary line for the terminal. */

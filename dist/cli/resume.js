@@ -1,13 +1,13 @@
 import { readFileSync } from "fs";
-import { join } from "path";
 import chalk from "chalk";
-import { formatContextWindow } from "../core/models.js";
 import { saveRunState, findIncompleteRuns, showRunHistory, formatTimeAgo, autoMergeBranches, readMdDir, } from "../state/state.js";
 import { orchestrate, salvageFromFile } from "../planner/planner.js";
 import { setTranscriptRunDir } from "../core/transcripts.js";
 import { wrap } from "../ui/primitives.js";
-import { makeProgressLog, selectKey } from "./cli.js";
-import { editRunSettings } from "./settings.js";
+import { selectKey } from "./prompts.js";
+import { makeProgressLog } from "./display.js";
+import { editRunSettings, printRunSettings } from "./settings.js";
+import { tasksJsonPath, designsDir, statusMdPath } from "./run-paths.js";
 import { renderPrompt } from "../prompts/load.js";
 export function countTasksInFile(path) {
     try {
@@ -16,6 +16,16 @@ export function countTasksInFile(path) {
     }
     catch {
         return 0;
+    }
+}
+/** Read the first line / preview of a run's status.md. Returns "" if missing. */
+function readStatusPreview(runDir, maxLen, firstLineOnly = false) {
+    try {
+        const raw = readFileSync(statusMdPath(runDir), "utf-8").trim();
+        return (firstLineOnly ? raw.split("\n")[0] : raw).slice(0, maxLen);
+    }
+    catch {
+        return "";
     }
 }
 export async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir) {
@@ -56,29 +66,8 @@ export async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir
         return;
     }
     // ── Interactive review ──
-    const fmtSummary = () => {
-        const remaining = Math.max(1, state.remaining);
-        const capStr = state.usageCap != null ? `${Math.round(state.usageCap * 100)}%` : "unlimited";
-        const extraStr = state.allowExtraUsage
-            ? (state.extraUsageBudget ? `$${state.extraUsageBudget}` : "unlimited")
-            : "off";
-        const modelLine = (label, m) => m ? `  ${chalk.dim(label.padEnd(11))}${chalk.white(m)} ${chalk.dim(`(${formatContextWindow(m)} context)`)}` : null;
-        console.log();
-        console.log(`  ${chalk.dim("Resume settings")}`);
-        console.log(`  ${chalk.dim("─".repeat(40))}`);
-        const lines = [
-            modelLine("planner", state.plannerModel),
-            modelLine("worker", state.workerModel),
-            modelLine("fast", state.fastModel),
-        ].filter(Boolean);
-        for (const l of lines)
-            console.log(l);
-        console.log(`  ${chalk.dim("remaining  ")}${chalk.white(String(remaining))} ${chalk.dim("sessions")}`);
-        console.log(`  ${chalk.dim("concur     ")}${chalk.white(String(state.concurrency))}`);
-        console.log(`  ${chalk.dim("usage cap  ")}${chalk.white(capStr)}`);
-        console.log(`  ${chalk.dim("extra      ")}${chalk.white(extraStr)}`);
-    };
-    fmtSummary();
+    const showSummary = () => printRunSettings(state, { header: "Resume settings", remaining: state.remaining });
+    showSummary();
     const action = await selectKey("", [
         { key: "r", desc: "esume" },
         { key: "e", desc: "dit" },
@@ -110,7 +99,7 @@ export async function promptResumeOverrides(state, cliFlags, argv, noTTY, runDir
     }
     catch { }
     console.log(chalk.green("\n  ✓ Settings updated"));
-    fmtSummary();
+    showSummary();
     console.log();
 }
 export async function detectResume(input) {
@@ -151,12 +140,8 @@ export async function detectResume(input) {
                 const failed = prev.branches.filter(b => b.status === "failed" || b.status === "merge-failed").length;
                 const obj = prev.objective?.slice(0, 50) || "";
                 const ago = formatTimeAgo(prev.startedAt);
-                let lastStatus = "";
-                try {
-                    lastStatus = readFileSync(join(run.dir, "status.md"), "utf-8").trim().slice(0, 200);
-                }
-                catch { }
-                const planTaskCount = prev.phase === "planning" ? countTasksInFile(join(run.dir, "tasks.json")) : 0;
+                const lastStatus = readStatusPreview(run.dir, 200);
+                const planTaskCount = prev.phase === "planning" ? countTasksInFile(tasksJsonPath(run.dir)) : 0;
                 console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
                 const termW = Math.max(process.stdout.columns ?? 80, 60);
                 const statusMaxW = Math.min(termW - 8, 80);
@@ -209,14 +194,10 @@ export async function detectResume(input) {
                     const ago = formatTimeAgo(s.startedAt);
                     const obj = s.objective?.slice(0, 50) || "";
                     const merged = s.branches.filter(b => b.status === "merged").length;
-                    let lastStatus = "";
-                    try {
-                        lastStatus = readFileSync(join(shown[i].dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 120);
-                    }
-                    catch { }
+                    const lastStatus = readStatusPreview(shown[i].dir, 120, true);
                     console.log(chalk.cyan(`  ${i + 1}`) + `  ${obj}${obj.length >= 50 ? "…" : ""}`);
                     if (s.phase === "planning") {
-                        const n = countTasksInFile(join(shown[i].dir, "tasks.json"));
+                        const n = countTasksInFile(tasksJsonPath(shown[i].dir));
                         console.log(chalk.dim(`     plan ready · ${n} tasks · budget ${s.budget} · ${ago} · not yet executing`));
                     }
                     else {
@@ -257,7 +238,7 @@ export async function detectResume(input) {
             // already persisted the leftover work — resume executes those directly.
             // Otherwise fall back to tasks.json (planning-phase + legacy stopped runs).
             if (resumeState.currentTasks.length === 0) {
-                const loaded = salvageFromFile(join(resumeRunDir, "tasks.json"), resumeState.budget, () => { }, "resume");
+                const loaded = salvageFromFile(tasksJsonPath(resumeRunDir), resumeState.budget, () => { }, "resume");
                 if (loaded) {
                     resumeState.currentTasks = loaded;
                     const label = resumeState.phase === "planning" ? "Resuming plan" : `Resuming ${resumeState.phase} run`;
@@ -267,7 +248,7 @@ export async function detectResume(input) {
                     // No tasks.json  -- the thinking wave got killed before orchestrate ran.
                     // If design docs survived, re-orchestrate from them (salvages the
                     // thinking spend instead of throwing it away).
-                    const designs = readMdDir(join(resumeRunDir, "designs"));
+                    const designs = readMdDir(designsDir(resumeRunDir));
                     if (!designs || !resumeState.objective) {
                         // Planning died before producing anything — re-run planning from
                         // scratch while keeping all saved settings (model, budget, etc.).
@@ -284,7 +265,7 @@ export async function detectResume(input) {
                         // land alongside the prior run's planning trail.
                         setTranscriptRunDir(resumeRunDir);
                         try {
-                            const orchTasks = await orchestrate(resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel, orchBudget, resumeState.concurrency, makeProgressLog(), flexNote, join(resumeRunDir, "tasks.json"), "orchestrate-resume");
+                            const orchTasks = await orchestrate(resumeState.objective, designs, cwd, resumeState.plannerModel, resumeState.workerModel, orchBudget, resumeState.concurrency, makeProgressLog(), flexNote, tasksJsonPath(resumeRunDir), "orchestrate-resume");
                             resumeState.currentTasks = orchTasks;
                             process.stdout.write(`\x1B[2K\r  ${chalk.green(`✓ ${orchTasks.length} tasks`)}\n`);
                         }
