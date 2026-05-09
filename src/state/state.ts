@@ -7,6 +7,7 @@ import { forceMergeOverlay } from "../swarm/merge.js";
 import { FALLBACK_MODEL } from "../core/models.js";
 import { selectKey } from "../cli/cli.js";
 import { readFileOrEmpty, readMdEntries, readJsonOrNull, writeJson } from "../core/fs-helpers.js";
+import { terminalWidth } from "../ui/primitives.js";
 
 // ── File I/O helpers ──
 
@@ -301,7 +302,7 @@ export async function showRunHistory(allRuns: { dir: string; state: RunState }[]
   const pages = Math.ceil(runs.length / PAGE);
   let page = 0;
   while (true) {
-    const w = Math.min((process.stdout.columns ?? 80) - 6, 50);
+    const w = Math.min(terminalWidth() - 6, 50);
     const pageLabel = pages > 1 ? ` (${page + 1}/${pages})` : "";
     console.log(chalk.dim(`\n  ── Run History${pageLabel} ${"─".repeat(Math.max(0, w - 16 - pageLabel.length))}\n`));
     for (const run of runs.slice(page * PAGE, (page + 1) * PAGE)) {

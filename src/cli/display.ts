@@ -2,10 +2,11 @@
 
 import chalk from "chalk";
 import type { Task } from "../core/types.js";
+import { terminalWidth } from "../ui/primitives.js";
 
 export const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
-const termWidth = (margin = 6): number => Math.max((process.stdout.columns ?? 80) - margin, 40);
+const termWidth = (margin = 6): number => Math.max(terminalWidth() - margin, 40);
 
 export function showPlan(tasks: Task[]): void {
   const w = termWidth();
