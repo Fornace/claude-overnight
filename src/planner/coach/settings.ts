@@ -1,9 +1,9 @@
-import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
+import { chmodSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { readJsonOrNull, writeJson } from "../../core/fs-helpers.js";
 
-const SETTINGS_DIR = join(homedir(), ".claude", "claude-overnight");
-const SETTINGS_PATH = join(SETTINGS_DIR, "settings.json");
+const SETTINGS_PATH = join(homedir(), ".claude", "claude-overnight", "settings.json");
 
 export interface UserSettings {
   skipCoach?: boolean;
@@ -13,13 +13,12 @@ export interface UserSettings {
 }
 
 export function loadUserSettings(): UserSettings {
-  try { return JSON.parse(readFileSync(SETTINGS_PATH, "utf-8")); } catch { return {}; }
+  return readJsonOrNull<UserSettings>(SETTINGS_PATH) ?? {};
 }
 
 export function saveUserSettings(s: UserSettings): void {
   try {
-    mkdirSync(SETTINGS_DIR, { recursive: true });
-    writeFileSync(SETTINGS_PATH, JSON.stringify(s, null, 2), "utf-8");
+    writeJson(SETTINGS_PATH, s);
     try { chmodSync(SETTINGS_PATH, 0o600); } catch {}
   } catch {}
 }

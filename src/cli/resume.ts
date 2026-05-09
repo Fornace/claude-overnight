@@ -1,5 +1,5 @@
-import { readFileSync } from "fs";
 import chalk from "chalk";
+import { readFileOrEmpty, readJsonOrNull } from "../core/fs-helpers.js";
 import {
   saveRunState, findIncompleteRuns, showRunHistory, formatTimeAgo,
   autoMergeBranches, readMdDir,
@@ -15,18 +15,14 @@ import type { RunState, MutableRunSettings, Task } from "../core/types.js";
 import { renderPrompt } from "../prompts/load.js";
 
 export function countTasksInFile(path: string): number {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8"));
-    return Array.isArray(parsed?.tasks) ? parsed.tasks.length : 0;
-  } catch { return 0; }
+  const parsed = readJsonOrNull<{ tasks?: unknown[] }>(path);
+  return parsed && Array.isArray(parsed.tasks) ? parsed.tasks.length : 0;
 }
 
 /** Read the first line / preview of a run's status.md. Returns "" if missing. */
 function readStatusPreview(runDir: string, maxLen: number, firstLineOnly = false): string {
-  try {
-    const raw = readFileSync(statusMdPath(runDir), "utf-8").trim();
-    return (firstLineOnly ? raw.split("\n")[0] : raw).slice(0, maxLen);
-  } catch { return ""; }
+  const raw = readFileOrEmpty(statusMdPath(runDir)).trim();
+  return (firstLineOnly ? raw.split("\n")[0] : raw).slice(0, maxLen);
 }
 
 export async function promptResumeOverrides(
