@@ -7,10 +7,21 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "child_process";
 import chalk from "chalk";
-import type { ProviderConfig } from "./index.js";
-import { loadProviders } from "./index.js";
+import type { ProviderConfig } from "../store.js";
+import { loadProviders } from "../store.js";
 
 export const PROXY_DEFAULT_URL = "http://127.0.0.1:8765";
+
+/** `command -v agent || command -v cursor-agent` — used by path resolution, model fetch, shell warning. */
+function findAgentBinary(timeoutMs = 3_000): string {
+  try {
+    return execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
+      timeout: timeoutMs, encoding: "utf-8", shell: "bash",
+    }).trim();
+  } catch {
+    return "";
+  }
+}
 
 /** Cached system Node.js and agent script paths — resolved once, reused across envFor calls. */
 let _cachedAgentNode: string | null = null;
@@ -22,12 +33,9 @@ export function resolveAgentPaths(timeoutMs = 2_000): [string | null, string | n
   let agentJs: string | null = null;
   try {
     nodePath = execSync("which node 2>/dev/null", { timeout: timeoutMs, encoding: "utf-8", shell: "bash" }).trim() || null;
-    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
-      timeout: timeoutMs, encoding: "utf-8", shell: "bash",
-    }).trim();
+    const agentPath = findAgentBinary(timeoutMs);
     if (agentPath) {
-      const agentDir = dirname(realpathSync(agentPath));
-      const indexPath = `${agentDir}/index.js`;
+      const indexPath = `${dirname(realpathSync(agentPath))}/index.js`;
       if (existsSync(indexPath)) agentJs = indexPath;
     }
   } catch {}
@@ -49,8 +57,7 @@ export function resolveCursorComposerCli(): string | null {
   try {
     const require = createRequire(import.meta.url);
     const pkgJson = require.resolve("cursor-composer-in-claude/package.json");
-    const root = dirname(pkgJson);
-    const cli = join(root, "dist", "cli.js");
+    const cli = join(dirname(pkgJson), "dist", "cli.js");
     return existsSync(cli) ? cli : null;
   } catch {
     return null;
@@ -71,14 +78,14 @@ export function getEmbeddedComposerProxyVersion(): string | null {
 
 /** Directory containing this package's `package.json` (works for global and local installs). */
 export function getClaudeOvernightInstallRoot(): string {
-  return dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+  // ../../.. — three levels up from src/providers/cursor/env.ts
+  return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 }
 
 /** Shell command to run the same bundled proxy CLI we spawn in-process (never `npx`/global). */
 export function bundledComposerProxyShellCommand(): string | null {
   const cli = resolveCursorComposerCli();
-  if (!cli) return null;
-  return `node "${cli}"`;
+  return cli ? `node "${cli}"` : null;
 }
 
 /** Check if a provider routes through cursor-composer-in-claude. */
@@ -102,8 +109,7 @@ export function cursorProxySessionsLogPath(): string {
 
 function tailFile(path: string, maxLines: number, maxBytes = 32_768): string | null {
   try {
-    const st = statSync(path);
-    const size = st.size;
+    const size = statSync(path).size;
     const start = size > maxBytes ? size - maxBytes : 0;
     const buf = Buffer.alloc(size - start);
     const fd = openSync(path, "r");
@@ -112,9 +118,7 @@ function tailFile(path: string, maxLines: number, maxBytes = 32_768): string | n
     } finally {
       try { closeSync(fd); } catch {}
     }
-    const text = buf.toString("utf8");
-    const lines = text.split("\n").filter(Boolean);
-    return lines.slice(-maxLines).join("\n");
+    return buf.toString("utf8").split("\n").filter(Boolean).slice(-maxLines).join("\n");
   } catch {
     return null;
   }
@@ -122,13 +126,11 @@ function tailFile(path: string, maxLines: number, maxBytes = 32_768): string | n
 
 /** Read the tail of both proxy logs for diagnostics. */
 export function readCursorProxyLogTail(linesPerFile = 20): string | null {
-  const out = cursorProxyOutLogPath();
-  const sess = cursorProxySessionsLogPath();
   const parts: string[] = [];
-  const outTail = tailFile(out, linesPerFile);
-  if (outTail) parts.push(`── ${out} (last ${linesPerFile} lines) ──\n${outTail}`);
-  const sessTail = tailFile(sess, linesPerFile);
-  if (sessTail) parts.push(`── ${sess} (last ${linesPerFile} lines) ──\n${sessTail}`);
+  for (const path of [cursorProxyOutLogPath(), cursorProxySessionsLogPath()]) {
+    const tail = tailFile(path, linesPerFile);
+    if (tail) parts.push(`── ${path} (last ${linesPerFile} lines) ──\n${tail}`);
+  }
   return parts.length ? parts.join("\n\n") : null;
 }
 
@@ -138,8 +140,7 @@ export function readCursorProxyLogTail(linesPerFile = 20): string | null {
 export function resolveCursorProxyKey(): string | null {
   if (process.env.CURSOR_BRIDGE_API_KEY?.trim()) return process.env.CURSOR_BRIDGE_API_KEY.trim();
   const saved = loadProviders().find(p => p.cursorProxy);
-  if (saved?.cursorApiKey?.trim()) return saved.cursorApiKey.trim();
-  return null;
+  return saved?.cursorApiKey?.trim() || null;
 }
 
 /**
@@ -217,18 +218,7 @@ let warnedMacCursorAgentPatch = false;
 /** On macOS, warn once if the Cursor agent CLI is installed but the zsh workaround is missing. */
 export function warnMacCursorAgentShellPatchIfNeeded(): void {
   if (warnedMacCursorAgentPatch || process.platform !== "darwin") return;
-  let agentPath = "";
-  try {
-    agentPath = execSync("command -v cursor-agent 2>/dev/null || command -v agent 2>/dev/null", {
-      encoding: "utf8",
-      shell: "bash",
-      timeout: 3_000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    return;
-  }
-  if (!agentPath) return;
+  if (!findAgentBinary()) return;
   if (hasCursorMacAgentZshPatch()) return;
   warnedMacCursorAgentPatch = true;
   console.warn(chalk.yellow("\n  ⚠ macOS: Cursor's `agent` CLI is unreliable with its bundled Node.js."));
@@ -262,14 +252,10 @@ export async function fetchLiveCursorModels(): Promise<string[]> {
   const proxyModels = await fetchCursorModels();
   if (proxyModels.length > 0) return proxyModels;
 
+  const agentPath = findAgentBinary();
+  if (!agentPath) return [];
   try {
-    const agentPath = execSync("command -v agent 2>/dev/null || command -v cursor-agent 2>/dev/null", {
-      timeout: 3_000, encoding: "utf-8", shell: "bash",
-    }).trim();
-    if (!agentPath) return [];
-
-    const dir = dirname(realpathSync(agentPath));
-    const indexPath = `${dir}/index.js`;
+    const indexPath = `${dirname(realpathSync(agentPath))}/index.js`;
     const raw = execSync(`node "${indexPath}" --list-models 2>/dev/null`, {
       timeout: 10_000, encoding: "utf-8",
     });
@@ -280,6 +266,7 @@ export async function fetchLiveCursorModels(): Promise<string[]> {
       if (match) ids.push(match[1]);
     }
     return ids;
-  } catch {}
-  return [];
+  } catch {
+    return [];
+  }
 }

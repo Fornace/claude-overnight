@@ -1,59 +1,16 @@
-// Core provider management: CRUD, env building, model picker, preflight, env resolver.
-// Cursor-specific concerns live in ./cursor-env, ./cursor-proxy, ./cursor-picker.
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+// Public surface of the provider system: env-building, model picker, preflight, env resolver.
+// Persistence lives in ./store.ts; cursor-composer specifics live in ./cursor/.
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { ask, select } from "../cli/cli.js";
-import { getBearerToken, clearTokenCache } from "../core/auth.js";
+import { getBearerToken } from "../core/auth.js";
 import { DEFAULT_MODEL } from "../core/models.js";
-import { isCursorProxyProvider, resolveCursorAgentToken, cachedAgentPaths, } from "./cursor-env.js";
-import { preflightCursorProxyViaHttp } from "./cursor-proxy.js";
-import { pickCursorModel } from "./cursor-picker.js";
 import { sdkQueryRateLimiter, acquireSdkQueryRateLimit } from "../core/rate-limiter.js";
-// Re-export Cursor utilities so callers can keep a single import point.
-export { PROXY_DEFAULT_URL, isCursorProxyProvider, bundledComposerProxyShellCommand, readCursorProxyLogTail, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, getCursorAgentToken, } from "./cursor-env.js";
-export { healthCheckCursorProxy, ensureCursorProxyRunning } from "./cursor-proxy.js";
-// ── Store ──
-const STORE_PATH = join(homedir(), ".claude", "claude-overnight", "providers.json");
-export function getStorePath() { return STORE_PATH; }
-export function loadProviders() {
-    try {
-        const raw = readFileSync(STORE_PATH, "utf-8");
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed?.providers))
-            return parsed.providers.filter(isValidProvider);
-    }
-    catch { }
-    return [];
-}
-export function saveProvider(p) {
-    const all = loadProviders().filter(x => x.id !== p.id);
-    all.push(p);
-    mkdirSync(join(homedir(), ".claude", "claude-overnight"), { recursive: true });
-    writeFileSync(STORE_PATH, JSON.stringify({ providers: all }, null, 2), "utf-8");
-    try {
-        chmodSync(STORE_PATH, 0o600);
-    }
-    catch { }
-    clearTokenCache();
-}
-export function deleteProvider(id) {
-    const all = loadProviders().filter(x => x.id !== id);
-    if (!existsSync(STORE_PATH))
-        return;
-    writeFileSync(STORE_PATH, JSON.stringify({ providers: all }, null, 2), "utf-8");
-    try {
-        chmodSync(STORE_PATH, 0o600);
-    }
-    catch { }
-    clearTokenCache();
-}
-function isValidProvider(p) {
-    return p && typeof p.id === "string" && typeof p.baseURL === "string"
-        && typeof p.model === "string" && typeof p.displayName === "string";
-}
+import { isCursorProxyProvider, resolveCursorAgentToken, cachedAgentPaths, preflightCursorProxyViaHttp, pickCursorModel, } from "./cursor/index.js";
+import { loadProviders, saveProvider } from "./store.js";
+export { loadProviders, saveProvider, deleteProvider, getStorePath, } from "./store.js";
+// Re-export the public cursor surface so callers keep a single import point.
+export { PROXY_DEFAULT_URL, isCursorProxyProvider, bundledComposerProxyShellCommand, readCursorProxyLogTail, warnMacCursorAgentShellPatchIfNeeded, hasCursorAgentToken, getCursorAgentToken, healthCheckCursorProxy, ensureCursorProxyRunning, } from "./cursor/index.js";
 // ── Key resolution & env building ──
 export function resolveKey(p) {
     if (p.keyEnv) {
@@ -68,18 +25,15 @@ export function resolveKey(p) {
  * you pass `options.env`.
  */
 export function envFor(p) {
-    const base = {};
-    for (const [k, v] of Object.entries(process.env))
-        if (v !== undefined)
-            base[k] = v;
+    const base = inheritedProcessEnv();
     if (p.cursorProxy) {
         base.ANTHROPIC_BASE_URL = p.baseURL;
         const agentTok = resolveCursorAgentToken();
-        const bridgeBearer = process.env.CURSOR_BRIDGE_API_KEY?.trim() ||
-            p.cursorApiKey?.trim() ||
-            agentTok?.trim() ||
-            "";
-        base.ANTHROPIC_AUTH_TOKEN = bridgeBearer || "unused";
+        base.ANTHROPIC_AUTH_TOKEN =
+            process.env.CURSOR_BRIDGE_API_KEY?.trim() ||
+                p.cursorApiKey?.trim() ||
+                agentTok?.trim() ||
+                "unused";
         delete base.ANTHROPIC_API_KEY;
         if (agentTok) {
             base.CURSOR_API_KEY = agentTok;
@@ -102,16 +56,20 @@ export function envFor(p) {
     if (!key)
         throw new Error(`Provider "${p.id}" has no API key (${p.keyEnv ? `env ${p.keyEnv} is empty` : "inline key missing"})`);
     base.ANTHROPIC_BASE_URL = p.baseURL;
-    if (p.useJWT) {
-        base.ANTHROPIC_AUTH_TOKEN = getBearerToken(p.id, p.model, key, p.baseURL);
-    }
-    else {
-        base.ANTHROPIC_AUTH_TOKEN = key;
-    }
+    base.ANTHROPIC_AUTH_TOKEN = p.useJWT
+        ? getBearerToken(p.id, p.model, key, p.baseURL)
+        : key;
     delete base.ANTHROPIC_API_KEY;
     delete base.CURSOR_API_KEY;
     delete base.CURSOR_AUTH_TOKEN;
     return base;
+}
+function inheritedProcessEnv() {
+    const out = {};
+    for (const [k, v] of Object.entries(process.env))
+        if (v !== undefined)
+            out[k] = v;
+    return out;
 }
 /**
  * Show a unified picker: Anthropic models, saved custom providers, Cursor,
@@ -189,6 +147,10 @@ async function promptNewProvider() {
         { name: "Paste key now", value: "inline", hint: "stored plaintext in ~/.claude/claude-overnight/providers.json (0600)" },
         { name: "Read from env var", value: "env", hint: "nothing written to disk" },
     ]);
+    const useJWT = (await select(`  ${chalk.cyan("Auth method")}:`, [
+        { name: "JWT tokens", value: "jwt", hint: "short-lived tokens, raw keys never passed to agents" },
+        { name: "Raw API key", value: "raw", hint: "key sent directly with every request" },
+    ])) === "jwt";
     if (keyMode === "env") {
         const envName = await ask(`\n  ${chalk.cyan("Env var name")} ${chalk.dim(`(e.g. CO_KEY_${id.toUpperCase()}):`)} `);
         if (!envName)
@@ -196,28 +158,18 @@ async function promptNewProvider() {
         if (!process.env[envName]) {
             console.log(chalk.yellow(`\n  ⚠ ${envName} is not set in the current shell  -- you'll need to export it before running.`));
         }
-        const useJWT = await select(`  ${chalk.cyan("Auth method")}:`, [
-            { name: "JWT tokens", value: "jwt", hint: "short-lived tokens, raw keys never passed to agents" },
-            { name: "Raw API key", value: "raw", hint: "key sent directly with every request" },
-        ]);
-        return { id, displayName, baseURL, model, keyEnv: envName, useJWT: useJWT === "jwt" };
+        return { id, displayName, baseURL, model, keyEnv: envName, useJWT };
     }
     const key = await ask(`\n  ${chalk.cyan("API key")}: `);
     if (!key)
         return null;
-    const useJWT = await select(`  ${chalk.cyan("Auth method")}:`, [
-        { name: "JWT tokens", value: "jwt", hint: "short-lived tokens, raw keys never passed to agents" },
-        { name: "Raw API key", value: "raw", hint: "key sent directly with every request" },
-    ]);
-    return { id, displayName, baseURL, model, key, useJWT: useJWT === "jwt" };
+    return { id, displayName, baseURL, model, key, useJWT };
 }
 function slugify(s) {
     return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "provider";
 }
 function normalizeBaseURL(raw) {
-    let url = raw.trim().replace(/\/+$/, "");
-    url = url.replace(/\/v1\/messages$/i, "").replace(/\/messages$/i, "");
-    return url;
+    return raw.trim().replace(/\/+$/, "").replace(/\/v1\/messages$/i, "").replace(/\/messages$/i, "");
 }
 // ── Pre-flight validation ──
 /**
