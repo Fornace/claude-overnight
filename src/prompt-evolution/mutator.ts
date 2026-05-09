@@ -26,7 +26,6 @@ export async function mutate(request: MutationRequest, opts: MutateOpts): Promis
   const prompt = buildMutatorPrompt(request);
   const baseUrl = (opts.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
   const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
-  const isKimi = /kimi\.com/i.test(baseUrl);
 
   let body: string;
   if (baseUrl.includes("generativelanguage")) {

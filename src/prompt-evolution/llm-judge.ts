@@ -15,6 +15,7 @@
  */
 
 import type { BenchmarkCase, ScoreDimensions } from "./types.js";
+import { attemptJsonParse } from "./transport.js";
 
 export interface JudgeOpts {
   model: string;
@@ -61,7 +62,6 @@ export async function judgeOutput(
 ): Promise<JudgeResult> {
   const baseUrl = (opts.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
   const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
-  const isKimi = /kimi\.com/i.test(baseUrl);
 
   const prompt = buildJudgePrompt(rawOutput, c);
 
@@ -144,27 +144,11 @@ Respond ONLY with a JSON object in this exact shape (no markdown fences, no extr
 }
 
 export function parseJudgeOutput(raw: string): JudgeResult {
-  // Strip fences
-  const cleaned = raw
-    .replace(/^\`\`\`(?:json)?\s*\n?/i, "")
-    .replace(/\n?\`\`\`\s*$/i, "")
-    .trim();
-
-  let obj: Record<string, unknown>;
-  try {
-    obj = JSON.parse(cleaned);
-  } catch {
-    // Try to extract first JSON object
-    const m = cleaned.match(/\{[\s\S]*\}/);
-    if (!m) {
-      return { score: 0.5, dimensions: {}, justification: "Judge returned unparseable JSON. Falling back to neutral." };
-    }
-    try {
-      obj = JSON.parse(m[0]);
-    } catch {
-      return { score: 0.5, dimensions: {}, justification: "Judge returned unparseable JSON. Falling back to neutral." };
-    }
+  const parsed = attemptJsonParse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { score: 0.5, dimensions: {}, justification: "Judge returned unparseable JSON. Falling back to neutral." };
   }
+  const obj = parsed as Record<string, unknown>;
 
   const getNum = (k: string): number => {
     const v = obj[k];

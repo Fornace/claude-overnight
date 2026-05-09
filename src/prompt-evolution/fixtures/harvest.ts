@@ -15,9 +15,10 @@
  * heuristic that the run actually finished.
  */
 
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { BenchmarkCase } from "../types.js";
+import { readFileOrEmpty, readJsonOrNull } from "../../core/fs-helpers.js";
 
 export interface HarvestOpts {
   /** Repo root — harvest looks under <cwd>/.claude-overnight/runs/ */
@@ -45,29 +46,19 @@ export function harvestRealCases(opts: HarvestOpts): BenchmarkCase[] {
 
   for (const id of readdirSync(runsDir)) {
     const runDir = join(runsDir, id);
-    const goalPath = join(runDir, "goal.md");
-    const statePath = join(runDir, "state.json");
-    if (!existsSync(goalPath) || !existsSync(statePath)) continue;
-
-    try {
-      const state = JSON.parse(readFileSync(statePath, "utf-8")) as {
-        phase?: string;
-        budget?: number;
-        startedAt?: string;
-        accCompleted?: number;
-      };
-      if (state.phase && !allow.has(state.phase as "done" | "capped" | "stopped" | "planning")) continue;
-      const objective = extractObjective(readFileSync(goalPath, "utf-8"));
-      if (!objective) continue;
-      entries.push({
-        id,
-        objective,
-        budget: typeof state.budget === "number" && state.budget > 0 ? state.budget : 8,
-        startedAt: state.startedAt ?? "",
-      });
-    } catch {
-      // Skip unreadable runs.
-    }
+    const state = readJsonOrNull<{
+      phase?: string; budget?: number; startedAt?: string; accCompleted?: number;
+    }>(join(runDir, "state.json"));
+    if (!state) continue;
+    if (state.phase && !allow.has(state.phase as "done" | "capped" | "stopped" | "planning")) continue;
+    const objective = extractObjective(readFileOrEmpty(join(runDir, "goal.md")));
+    if (!objective) continue;
+    entries.push({
+      id,
+      objective,
+      budget: typeof state.budget === "number" && state.budget > 0 ? state.budget : 8,
+      startedAt: state.startedAt ?? "",
+    });
   }
 
   entries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
