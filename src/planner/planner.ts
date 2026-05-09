@@ -1,5 +1,5 @@
 import { readFileSync } from "fs";
-import type { Task } from "../core/types.js";
+import type { AITurn, Task } from "../core/types.js";
 import { runPlannerQuery, extractTaskJson, attemptJsonParse, postProcess } from "./query.js";
 import { contextConstraintNote } from "../core/models.js";
 import { createTurn, beginTurn, endTurn } from "../core/turns.js";
@@ -77,6 +77,76 @@ function plannerPrompt(objective: string, workerModel: string, budget?: number, 
   });
 }
 
+// ── Shared structured-planning pipeline ──
+//
+// `planTasks`, `orchestrate`, and `refinePlan` all follow the same shape:
+// run a structured-output planner query, salvage from disk if it crashes
+// mid-write, retry the JSON parse with a `_shared/retry-json` wrapper, then
+// shape into Task[] and postProcess. This helper folds that boilerplate.
+//
+// `mainPrompt` is what the model sees on the first attempt; `retryPrompt`
+// is wrapped by the retry-json template if the first parse fails. They differ
+// only when callers append per-call file instructions to the main run that
+// they don't want carried forward into the retry (`planTasks`).
+
+interface StructuredPlanningArgs {
+  mainPrompt: string;
+  retryPrompt: string;
+  cwd: string;
+  plannerModel: string;
+  budget: number | undefined;
+  onLog: (text: string, kind?: "status" | "event") => void;
+  transcriptName: string;
+  turn: AITurn;
+  mainTools?: string[];
+  mainMaxTurns: number;
+  retryMaxTurns: number;
+  outFile?: string;
+  failureLabel: string;
+}
+
+async function runStructuredPlanningQuery(args: StructuredPlanningArgs): Promise<Task[]> {
+  const { mainPrompt, retryPrompt, cwd, plannerModel, budget, onLog,
+          transcriptName, turn, mainTools, mainMaxTurns, retryMaxTurns,
+          outFile, failureLabel } = args;
+
+  let resultText: string;
+  try {
+    resultText = await runPlannerQuery(mainPrompt, {
+      cwd, model: plannerModel, outputFormat: TASKS_SCHEMA,
+      transcriptName, maxTurns: mainMaxTurns, turnId: turn.id,
+      ...(mainTools && { tools: mainTools }),
+    }, onLog);
+  } catch (err: any) {
+    const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
+    endTurn(turn, salvaged ? "done" : "error");
+    if (salvaged) return salvaged;
+    throw err;
+  }
+
+  let tasks: Task[];
+  try {
+    const parsed = await extractTaskJson(resultText, async () => {
+      onLog("Retrying...");
+      return runPlannerQuery(
+        renderPrompt("_shared/retry-json", { vars: { originalPrompt: retryPrompt } }),
+        { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA,
+          transcriptName: `${transcriptName}-retry`, maxTurns: retryMaxTurns, turnId: turn.id },
+        onLog,
+      );
+    }, onLog, outFile);
+    tasks = (parsed.tasks || []).map((t: any, i: number) => ({
+      id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
+    }));
+    tasks = postProcess(tasks, budget, onLog);
+  } catch { endTurn(turn, "error"); throw new Error(failureLabel); }
+
+  endTurn(turn, tasks.length === 0 ? "error" : "done");
+  if (tasks.length === 0) throw new Error(failureLabel);
+  onLog(`${tasks.length} tasks`);
+  return tasks;
+}
+
 // ── Planning functions ──
 
 export async function planTasks(
@@ -90,37 +160,14 @@ export async function planTasks(
   beginTurn(turn);
   const prompt = plannerPrompt(objective, workerModel, budget, concurrency, flexNote);
   const fileInstruction = outFile ? `\n\nAFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
-  let resultText: string;
-  try {
-    resultText = await runPlannerQuery(
-      prompt + fileInstruction,
-      { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 40,
-        tools: ["Read", "Glob", "Grep", "Write"], turnId: turn.id }, onLog,
-    );
-  } catch (err: any) {
-    const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
-    endTurn(turn, salvaged ? "done" : "error");
-    if (salvaged) return salvaged;
-    throw err;
-  }
-  let tasks: Task[];
-  try {
-    const parsed = await extractTaskJson(resultText, async () => {
-      onLog("Retrying...");
-      return runPlannerQuery(
-        renderPrompt("_shared/retry-json", { vars: { originalPrompt: prompt } }),
-        { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 15, turnId: turn.id }, onLog,
-      );
-    }, onLog, outFile);
-    tasks = (parsed.tasks || []).map((t: any, i: number) => ({
-      id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
-    }));
-    tasks = postProcess(tasks, budget, onLog);
-  } catch { endTurn(turn, "error"); throw new Error("Planner generated 0 tasks"); }
-  endTurn(turn, tasks.length === 0 ? "error" : "done");
-  if (tasks.length === 0) throw new Error("Planner generated 0 tasks");
-  onLog(`${tasks.length} tasks`);
-  return tasks;
+  return runStructuredPlanningQuery({
+    mainPrompt: prompt + fileInstruction,
+    retryPrompt: prompt,
+    cwd, plannerModel, budget, onLog, transcriptName, turn,
+    mainTools: ["Read", "Glob", "Grep", "Write"],
+    mainMaxTurns: 40, retryMaxTurns: 15,
+    outFile, failureLabel: "Planner generated 0 tasks",
+  });
 }
 
 export async function identifyThemes(
@@ -161,7 +208,6 @@ export async function orchestrate(
   transcriptName: string = "orchestrate",
 ): Promise<Task[]> {
   const fileInstruction = outFile ? `AFTER generating the JSON, also write it to ${outFile} using the Write tool.` : "";
-
   const prompt = renderPrompt("10_planning/10-4_orchestrate", {
     vars: {
       objective, designDocs, budget, concurrency, flexNote, fileInstruction,
@@ -172,34 +218,13 @@ export async function orchestrate(
   onLog("Synthesizing...");
   const turn = createTurn("orchestrate", "Orchestrate", "orchestrate-0", plannerModel);
   beginTurn(turn);
-  let resultText: string;
-  try {
-    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 25,
-      tools: ["Write"], turnId: turn.id }, onLog);
-  } catch (err: any) {
-    const salvaged = salvageFromFile(outFile, budget, onLog, err?.message ?? String(err));
-    endTurn(turn, salvaged ? "done" : "error");
-    if (salvaged) return salvaged;
-    throw err;
-  }
-  let tasks: Task[];
-  try {
-    const parsed = await extractTaskJson(resultText, async () => {
-      onLog("Retrying...");
-      return runPlannerQuery(
-        renderPrompt("_shared/retry-json", { vars: { originalPrompt: prompt } }),
-        { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 10, turnId: turn.id }, onLog,
-      );
-    }, onLog, outFile);
-    tasks = (parsed.tasks || []).map((t: any, i: number) => ({
-      id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
-    }));
-    tasks = postProcess(tasks, budget, onLog);
-  } catch { endTurn(turn, "error"); throw new Error("Orchestration generated 0 tasks"); }
-  endTurn(turn, tasks.length === 0 ? "error" : "done");
-  if (tasks.length === 0) throw new Error("Orchestration generated 0 tasks");
-  onLog(`${tasks.length} tasks`);
-  return tasks;
+  return runStructuredPlanningQuery({
+    mainPrompt: prompt, retryPrompt: prompt,
+    cwd, plannerModel, budget, onLog, transcriptName, turn,
+    mainTools: ["Write"],
+    mainMaxTurns: 25, retryMaxTurns: 10,
+    outFile, failureLabel: "Orchestration generated 0 tasks",
+  });
 }
 
 export async function refinePlan(
@@ -223,26 +248,10 @@ export async function refinePlan(
     },
   });
 
-  let resultText: string;
-  try {
-    resultText = await runPlannerQuery(prompt, { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName, maxTurns: 15, turnId: turn.id }, onLog);
-  } catch (err) { endTurn(turn, "error"); throw err; }
-  let tasks: Task[];
-  try {
-    const parsed = await extractTaskJson(resultText, async () => {
-      onLog("Retrying...");
-      return runPlannerQuery(
-        renderPrompt("_shared/retry-json", { vars: { originalPrompt: prompt } }),
-        { cwd, model: plannerModel, outputFormat: TASKS_SCHEMA, transcriptName: `${transcriptName}-retry`, maxTurns: 8, turnId: turn.id }, onLog,
-      );
-    }, onLog);
-    tasks = (parsed.tasks || []).map((t: any, i: number) => ({
-      id: String(i), prompt: typeof t === "string" ? t : t.prompt, type: "execute",
-    }));
-    tasks = postProcess(tasks, budget, onLog);
-  } catch { endTurn(turn, "error"); throw new Error("Refinement produced 0 tasks"); }
-  endTurn(turn, tasks.length === 0 ? "error" : "done");
-  if (tasks.length === 0) throw new Error("Refinement produced 0 tasks");
-  onLog(`${tasks.length} tasks`);
-  return tasks;
+  return runStructuredPlanningQuery({
+    mainPrompt: prompt, retryPrompt: prompt,
+    cwd, plannerModel, budget, onLog, transcriptName, turn,
+    mainMaxTurns: 15, retryMaxTurns: 8,
+    failureLabel: "Refinement produced 0 tasks",
+  });
 }
