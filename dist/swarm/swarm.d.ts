@@ -11,9 +11,6 @@ export declare class Swarm {
         agentId: number;
         text: string;
     }[];
-    private readonly allLogs;
-    /** @internal -- friend surface for swarm-message-handler. */
-    readonly _agentTurns: Map<number, AITurn>;
     readonly startedAt: number;
     readonly total: number;
     completed: number;
@@ -29,6 +26,20 @@ export declare class Swarm {
     staleRecovered: number;
     /** Prior-wave orphan branches discarded as unmergeable. */
     staleForceDeleted: number;
+    logFile?: string;
+    mergeBranch?: string;
+    logSequence: number;
+    /** @internal -- friend surface for swarm-message-handler. */
+    readonly config: SwarmConfig;
+    model: string | undefined;
+    usageCap: number | undefined;
+    readonly allowExtraUsage: boolean;
+    extraUsageBudget: number | undefined;
+    readonly baseCostUsd: number;
+    /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
+    targetConcurrency: number;
+    /** When true, dispatch is frozen  -- workers wait without starting new tasks. */
+    paused: boolean;
     rateLimitUtilization: number;
     rateLimitResetsAt?: number;
     rateLimitWindows: Map<string, RateLimitWindow>;
@@ -40,48 +51,39 @@ export declare class Swarm {
     /** @internal -- friend surface for swarm-message-handler. */
     rateLimitExplained: boolean;
     private rateLimitWakers;
-    /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
-    targetConcurrency: number;
-    /** When true, dispatch is frozen  -- workers wait without starting new tasks. */
-    paused: boolean;
     /** Wall-clock ms of the last sign of real progress (assistant msg, tool use, result). */
     lastProgressAt: number;
     /** 0 = normal, 1 = halved once, 2 = halved twice, 3 = long cooldown at c=1, 4 = aborted. */
     stallLevel: number;
     /** Last time the watchdog took an action; used to debounce escalations. */
     private stallActionAt;
-    /** Live worker coroutine count (not agents). */
-    private workerCount;
-    /** Growable list of worker promises; run() awaits until empty. */
-    private workerPromises;
+    private readonly workers;
+    /** @internal -- friend surface for swarm-message-handler. */
+    readonly _agentTurns: Map<number, AITurn>;
     /** @internal -- friend surface for swarm-agent-run. */
     readonly queue: Task[];
-    /** @internal -- friend surface for swarm-message-handler. */
-    readonly config: SwarmConfig;
     /** @internal -- friend surface for swarm-agent-run. */
     nextId: number;
     /** @internal -- friend surface for swarm-agent-run. */
     worktreeBase?: string;
     /** @internal -- friend surface for swarm-agent-run. */
     readonly activeQueries: Set<Query>;
-    /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+    /** @internal -- skill scribe context, friend surface for swarm-agent-run. */
     readonly repoFingerprint?: string;
-    /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+    /** @internal -- skill scribe context, friend surface for swarm-agent-run. */
     readonly runId?: string;
-    /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+    /** @internal -- skill scribe context, friend surface for swarm-agent-run. */
     readonly waveNum?: number;
-    private cleanedUp;
-    /** @internal -- friend surface for swarm-message-handler. */
+    /** Per-agent open tool_use block: cursor-composer-in-claude v0.9 opens the
+     *  block with empty `input` and streams the real payload via
+     *  `input_json_delta`, so we need to wait for content_block_stop before we
+     *  can log the file/path target.
+     *  @internal -- friend surface for swarm-message-handler. */
     readonly pendingTools: WeakMap<AgentState, PendingTool>;
     /** @internal -- friend surface for swarm-message-handler. */
     readonly ctxWarned: WeakSet<AgentState>;
-    logFile?: string;
-    model: string | undefined;
-    usageCap: number | undefined;
-    readonly allowExtraUsage: boolean;
-    extraUsageBudget: number | undefined;
-    readonly baseCostUsd: number;
-    mergeBranch?: string;
+    private readonly allLogs;
+    private cleanedUp;
     constructor(config: SwarmConfig);
     get active(): number;
     get blocked(): number;
@@ -107,7 +109,6 @@ export declare class Swarm {
     abort(): void;
     /** Re-queue all errored agents' tasks for retry within this wave. */
     requeueFailed(): number;
-    logSequence: number;
     log(agentId: number, text: string): void;
     cleanup(): void;
     private worker;

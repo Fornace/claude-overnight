@@ -1,6 +1,6 @@
 import type { MergeStrategy, AgentStatus, AgentState } from "../core/types.js";
-import { gitExec, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees } from "./merge-helpers.js";
-export { gitExec, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees };
+import { gitExec, silentGit, gitErrMsg, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees } from "./merge-helpers.js";
+export { gitExec, silentGit, gitErrMsg, forceMergeOverlay, warnDirtyTree, cleanStaleWorktrees };
 export { autoCommit } from "./merge-autocommit.js";
 export interface MergeResult {
     branch: string;

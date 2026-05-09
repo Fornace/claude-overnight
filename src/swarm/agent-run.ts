@@ -1,7 +1,7 @@
 import { rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Query, type SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import { NudgeError } from "../core/types.js";
 import type { Task, AgentState } from "../core/types.js";
 import { gitExec, autoCommit } from "./merge.js";
@@ -62,41 +62,7 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
   beginTurn(turn);
   host._agentTurns.set(id, turn);
 
-  let agentCwd = task.agentCwd || task.cwd || host.config.cwd;
-  if (host.config.useWorktrees && host.worktreeBase && !task.noWorktree && !task.agentCwd) {
-    const branch = `swarm/task-${id}`;
-    const dir = join(host.worktreeBase, `agent-${id}`);
-    let baseRef: string | undefined;
-    try { baseRef = gitExec("git rev-parse HEAD", host.config.cwd).trim(); } catch {}
-    let worktreeOk = false;
-    for (let wt = 0; wt < 2 && !worktreeOk; wt++) {
-      try {
-        gitExec(`git worktree add -b "${branch}" "${dir}" HEAD`, host.config.cwd);
-        worktreeOk = true;
-      } catch (e: any) {
-        if (wt === 0) {
-          host.log(id, `Worktree failed, cleaning up: ${e.message?.slice(0, 50)}`);
-          try { gitExec(`git branch -D "${branch}"`, host.config.cwd); } catch {}
-          try { rmSync(dir, { recursive: true, force: true }); } catch {}
-          try { gitExec("git worktree prune", host.config.cwd); } catch {}
-        }
-      }
-    }
-    if (worktreeOk) {
-      agentCwd = dir;
-      agent.branch = branch;
-      agent.baseRef = baseRef;
-      host.log(id, `Worktree: ${branch}`);
-      // Opt-in: install the bundled lsp-first hook into this worktree so the
-      // spawned agent blocks Grep on code symbols and is nudged to cclsp/LSP
-      // tools instead. Enabled via CLAUDE_OVERNIGHT_LSP_FIRST=1 (or =true).
-      if (/^(1|true|yes)$/i.test(process.env.CLAUDE_OVERNIGHT_LSP_FIRST ?? "")) {
-        try { installLspFirstHookInto(dir); } catch (e: any) { host.log(id, `lsp-first install skipped: ${String(e?.message || e).slice(0, 60)}`); }
-      }
-    } else {
-      host.log(id, `Worktree failed after retry  -- running without isolation`);
-    }
-  }
+  const agentCwd = setupAgentWorktree(host, id, task, agent);
 
   const effectiveModelInit = task.model || host.model;
   const contextKey = sessionContextKey(effectiveModelInit, agentCwd, host.config.envForModel?.(effectiveModelInit));
@@ -216,12 +182,15 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
             (async () => {
               for await (const msg of agentQuery) {
                 lastActivity = Date.now();
-                if (!sessionId && "session_id" in (msg as any)) sessionId = (msg as any).session_id;
+                // Every SDK message variant carries `session_id` except the
+                // initial `system` init — treat its absence as "not yet known".
+                const sid = (msg as { session_id?: string }).session_id;
+                if (!sessionId && sid) sessionId = sid;
                 sink.append(msg as { type: string } & Record<string, unknown>);
                 handleMsg(host, agent, msg);
                 // Capture assistant text for skill proposal extraction.
                 if (msg.type === "assistant") {
-                  const content = (msg as any).message?.content;
+                  const content = (msg as SDKAssistantMessage).message?.content;
                   if (Array.isArray(content)) {
                     for (const part of content) {
                       if (part?.type === "text" && typeof part.text === "string") agentFinalText += part.text;
@@ -310,21 +279,7 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
           host.log(id, agent.error);
         } else {
           agent.status = "done"; host.completed++;
-          // Skill scribe: extract ### SKILL CANDIDATE block if present.
-          if (host.repoFingerprint && host.runId != null) {
-            const proposal = extractSkillProposal(agentFinalText);
-            if (proposal) {
-              writeCandidate({
-                kind: "skill",
-                proposedBy: `agent-${id}`,
-                wave: host.waveNum ?? 0,
-                runId: host.runId,
-                fingerprint: host.repoFingerprint,
-                trigger: proposal.trigger,
-                body: proposal.body,
-              });
-            }
-          }
+          recordSkillProposal(host, id, agentFinalText);
         }
       }
       break;
@@ -356,25 +311,8 @@ export async function runAgent(host: AgentRunHost, task: Task): Promise<void> {
       }
       // Rate-limit errors: wait and retry WITHOUT burning the retry budget
       if (!host.aborted && isRateLimitError(err)) {
-        const waitMs = host.rateLimitResetsAt && host.rateLimitResetsAt > Date.now()
-          ? Math.max(5000, host.rateLimitResetsAt - Date.now())
-          : 120_000;
-        // If the whole swarm has been making zero progress for a while, stop giving
-        // rate-limit retries a free pass  -- force them to count against maxRetries so
-        // we eventually surrender instead of looping forever.
-        const globallyStalled = Date.now() - host.lastProgressAt > 15 * 60_000;
-        const freebie = !globallyStalled;
-        host.log(id, `Rate limited${host.windowTag()}  -- waiting ${Math.ceil(waitMs / 1000)}s${freebie ? " (attempt not counted)" : " (counted  -- swarm stalled)"} ([r] to retry now)`);
-        agent.blockedAt = Date.now();
-        host.rateLimitPaused++;
-        await host.rateLimitSleep(waitMs);
-        host.rateLimitPaused--;
-        agent.blockedAt = undefined;
-        host.isUsingOverage = false;
-        host.rateLimitUtilization = 0;
-        host.rateLimitResetsAt = undefined;
-        host.checkStall();
-        if (freebie) attempt--; // normal case: don't count against retries
+        const { counted } = await awaitRateLimitWindow(host, agent);
+        if (!counted) attempt--; // normal case: don't count against retries
         continue;
       }
       const canRetry = attempt < maxRetries && !host.aborted && isTransientError(err);
@@ -463,6 +401,95 @@ function sessionContextKey(model: string | undefined, cwd: string, env?: Record<
   const baseUrl = env?.ANTHROPIC_BASE_URL?.trim();
   const provider = isCursor ? "cursor" : baseUrl ? `url:${baseUrl}` : "anthropic";
   return `${provider}|${model ?? "default"}|${cwd}`;
+}
+
+/**
+ * Create the per-agent worktree (if isolation is enabled and the task allows
+ * it), install the optional lsp-first hook, and return the cwd the SDK should
+ * run in. Mutates `agent.branch`/`agent.baseRef` on success. On retry+failure,
+ * falls back to running without isolation rather than aborting.
+ */
+function setupAgentWorktree(host: AgentRunHost, id: number, task: Task, agent: AgentState): string {
+  const fallback = task.agentCwd || task.cwd || host.config.cwd;
+  if (!host.config.useWorktrees || !host.worktreeBase || task.noWorktree || task.agentCwd) return fallback;
+
+  const branch = `swarm/task-${id}`;
+  const dir = join(host.worktreeBase, `agent-${id}`);
+  let baseRef: string | undefined;
+  try { baseRef = gitExec("git rev-parse HEAD", host.config.cwd).trim(); } catch {}
+
+  let worktreeOk = false;
+  for (let wt = 0; wt < 2 && !worktreeOk; wt++) {
+    try {
+      gitExec(`git worktree add -b "${branch}" "${dir}" HEAD`, host.config.cwd);
+      worktreeOk = true;
+    } catch (e: any) {
+      if (wt === 0) {
+        host.log(id, `Worktree failed, cleaning up: ${e.message?.slice(0, 50)}`);
+        try { gitExec(`git branch -D "${branch}"`, host.config.cwd); } catch {}
+        try { rmSync(dir, { recursive: true, force: true }); } catch {}
+        try { gitExec("git worktree prune", host.config.cwd); } catch {}
+      }
+    }
+  }
+
+  if (!worktreeOk) {
+    host.log(id, `Worktree failed after retry  -- running without isolation`);
+    return fallback;
+  }
+
+  agent.branch = branch;
+  agent.baseRef = baseRef;
+  host.log(id, `Worktree: ${branch}`);
+  // Opt-in: install the bundled lsp-first hook into this worktree so the
+  // spawned agent blocks Grep on code symbols and is nudged to cclsp/LSP
+  // tools instead. Enabled via CLAUDE_OVERNIGHT_LSP_FIRST=1 (or =true).
+  if (/^(1|true|yes)$/i.test(process.env.CLAUDE_OVERNIGHT_LSP_FIRST ?? "")) {
+    try { installLspFirstHookInto(dir); }
+    catch (e: any) { host.log(id, `lsp-first install skipped: ${String(e?.message || e).slice(0, 60)}`); }
+  }
+  return dir;
+}
+
+/**
+ * Wait for the active rate-limit window to clear, mutating host counters so
+ * the UI reflects the block. Returns whether the wait should count against
+ * `maxRetries` — when the whole swarm has been making zero progress for a
+ * while, retries are no longer free and we eventually surrender.
+ */
+async function awaitRateLimitWindow(host: AgentRunHost, agent: AgentState): Promise<{ counted: boolean }> {
+  const waitMs = host.rateLimitResetsAt && host.rateLimitResetsAt > Date.now()
+    ? Math.max(5000, host.rateLimitResetsAt - Date.now())
+    : 120_000;
+  const globallyStalled = Date.now() - host.lastProgressAt > 15 * 60_000;
+  const counted = globallyStalled;
+  host.log(agent.id, `Rate limited${host.windowTag()}  -- waiting ${Math.ceil(waitMs / 1000)}s${counted ? " (counted  -- swarm stalled)" : " (attempt not counted)"} ([r] to retry now)`);
+  agent.blockedAt = Date.now();
+  host.rateLimitPaused++;
+  await host.rateLimitSleep(waitMs);
+  host.rateLimitPaused--;
+  agent.blockedAt = undefined;
+  host.isUsingOverage = false;
+  host.rateLimitUtilization = 0;
+  host.rateLimitResetsAt = undefined;
+  host.checkStall();
+  return { counted };
+}
+
+/** Persist a ### SKILL CANDIDATE block (when present) for the scribe pipeline. */
+function recordSkillProposal(host: AgentRunHost, agentId: number, finalText: string): void {
+  if (!host.repoFingerprint || host.runId == null) return;
+  const proposal = extractSkillProposal(finalText);
+  if (!proposal) return;
+  writeCandidate({
+    kind: "skill",
+    proposedBy: `agent-${agentId}`,
+    wave: host.waveNum ?? 0,
+    runId: host.runId,
+    fingerprint: host.repoFingerprint,
+    trigger: proposal.trigger,
+    body: proposal.body,
+  });
 }
 
 /** Extract a ### SKILL CANDIDATE block from agent text. Returns undefined if not found. */

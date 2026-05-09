@@ -24,27 +24,36 @@ export function isStreamStalledError(err: unknown): err is StreamStalledError {
   return err instanceof StreamStalledError;
 }
 
+/** Shape a thrown value can have when it's an `Error`-like or fetch-style failure. */
+type ErrorLike = { message?: unknown; status?: unknown; statusCode?: unknown; cause?: unknown };
+const asErrorLike = (e: unknown): ErrorLike => (e ?? {}) as ErrorLike;
+const errStatus = (e: ErrorLike): number | undefined => {
+  const v = e.status ?? e.statusCode;
+  return typeof v === "number" ? v : undefined;
+};
+const errMessage = (e: ErrorLike, raw: unknown): string =>
+  String(typeof e.message === "string" ? e.message : raw).toLowerCase();
+
 export function isRateLimitError(err: unknown): boolean {
-  const status: number | undefined = (err as any)?.status ?? (err as any)?.statusCode;
-  if (status === 429) return true;
-  const msg = String((err as any)?.message || err).toLowerCase();
+  const e = asErrorLike(err);
+  if (errStatus(e) === 429) return true;
+  const msg = errMessage(e, err);
   if (msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("too many requests")) return true;
-  const cause = (err as any)?.cause;
-  if (cause && cause !== err) return isRateLimitError(cause);
+  if (e.cause && e.cause !== err) return isRateLimitError(e.cause);
   return false;
 }
 
 export function isTransientError(err: unknown): boolean {
   if (err instanceof AgentTimeoutError || err instanceof StreamStalledError) return false;
-  const msg = String((err as any)?.message || err).toLowerCase();
-  const status: number | undefined = (err as any)?.status ?? (err as any)?.statusCode;
+  const e = asErrorLike(err);
+  const msg = errMessage(e, err);
+  const status = errStatus(e);
   if (status === 429 || (status != null && status >= 500 && status < 600) ||
     msg.includes("rate limit") || msg.includes("overloaded") || msg.includes("econnreset") ||
     msg.includes("etimedout") || msg.includes("socket hang up") || msg.includes("epipe") ||
     msg.includes("econnrefused") || msg.includes("ehostunreach") || msg.includes("network error") ||
     msg.includes("fetch failed") || msg.includes("aborted")) return true;
-  const cause = (err as any)?.cause;
-  if (cause && cause !== err) return isTransientError(cause);
+  if (e.cause && e.cause !== err) return isTransientError(e.cause);
   return false;
 }
 

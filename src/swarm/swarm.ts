@@ -16,14 +16,11 @@ import { runAgent as runAgentImpl, buildErroredBranchEvaluator } from "./agent-r
 export type { SwarmConfig };
 
 export class Swarm {
+  // ── Public progress state ──
   readonly agents: AgentState[] = [];
   readonly logs: { time: number; agentId: number; text: string }[] = [];
-  private readonly allLogs: { time: number; agentId: number; text: string }[] = [];
-  /** @internal -- friend surface for swarm-message-handler. */
-  readonly _agentTurns: Map<number, AITurn> = new Map();
   readonly startedAt = Date.now();
   readonly total: number;
-
   completed = 0;
   failed = 0;
   totalCostUsd = 0;
@@ -33,12 +30,31 @@ export class Swarm {
   aborted = false;
   cappedOut = false;
   mergeResults: MergeResult[] = [];
-
   /** Prior-wave orphan branches recovered during stale worktree cleanup. */
   staleRecovered = 0;
   /** Prior-wave orphan branches discarded as unmergeable. */
   staleForceDeleted = 0;
+  logFile?: string;
+  mergeBranch?: string;
+  logSequence = 0;
 
+  // ── Configuration & live-adjustable knobs ──
+  /** @internal -- friend surface for swarm-message-handler. */
+  readonly config: SwarmConfig;
+  model: string | undefined;
+  usageCap: number | undefined;
+  readonly allowExtraUsage: boolean;
+  extraUsageBudget: number | undefined;
+  readonly baseCostUsd: number;
+  /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
+  targetConcurrency: number;
+  /** When true, dispatch is frozen  -- workers wait without starting new tasks. */
+  paused = false;
+
+  // ── Rate-limit state ──
+  // Read via friend interfaces in message-handler / agent-run AND directly by
+  // src/ui/bars.tsx and src/ui/header.tsx — the names are part of the public
+  // contract until those readers move to a grouped accessor.
   rateLimitUtilization = 0;
   rateLimitResetsAt?: number;
   rateLimitWindows: Map<string, RateLimitWindow> = new Map();
@@ -51,52 +67,46 @@ export class Swarm {
   rateLimitExplained = false;
   private rateLimitWakers: (() => void)[] = [];
 
-  /** Live-adjustable concurrency target. Workers above this count exit on the next task boundary. */
-  targetConcurrency: number;
-  /** When true, dispatch is frozen  -- workers wait without starting new tasks. */
-  paused = false;
+  // ── Stall-detection state ──
   /** Wall-clock ms of the last sign of real progress (assistant msg, tool use, result). */
   lastProgressAt = Date.now();
   /** 0 = normal, 1 = halved once, 2 = halved twice, 3 = long cooldown at c=1, 4 = aborted. */
   stallLevel = 0;
   /** Last time the watchdog took an action; used to debounce escalations. */
   private stallActionAt = 0;
-  /** Live worker coroutine count (not agents). */
-  private workerCount = 0;
-  /** Growable list of worker promises; run() awaits until empty. */
-  private workerPromises: Promise<void>[] = [];
 
+  // ── Worker pool (private — managed by run()/setConcurrency()) ──
+  private readonly workers = { count: 0, promises: [] as Promise<void>[] };
+
+  // ── Friend surface for swarm-agent-run / swarm-message-handler ──
+  /** @internal -- friend surface for swarm-message-handler. */
+  readonly _agentTurns: Map<number, AITurn> = new Map();
   /** @internal -- friend surface for swarm-agent-run. */
   readonly queue: Task[];
-  /** @internal -- friend surface for swarm-message-handler. */
-  readonly config: SwarmConfig;
   /** @internal -- friend surface for swarm-agent-run. */
   nextId = 0;
   /** @internal -- friend surface for swarm-agent-run. */
   worktreeBase?: string;
   /** @internal -- friend surface for swarm-agent-run. */
   readonly activeQueries = new Set<Query>();
-  /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+  /** @internal -- skill scribe context, friend surface for swarm-agent-run. */
   readonly repoFingerprint?: string;
-  /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+  /** @internal -- skill scribe context, friend surface for swarm-agent-run. */
   readonly runId?: string;
-  /** @internal -- friend surface for swarm-agent-run; skill scribe context. */
+  /** @internal -- skill scribe context, friend surface for swarm-agent-run. */
   readonly waveNum?: number;
-  private cleanedUp = false;
-  // Per-agent open tool_use block: cursor-composer-in-claude v0.9 opens the block
-  // with empty `input` and streams the real payload via `input_json_delta`, so we
-  // need to wait for content_block_stop before we can log the file/path target.
-  /** @internal -- friend surface for swarm-message-handler. */
+  /** Per-agent open tool_use block: cursor-composer-in-claude v0.9 opens the
+   *  block with empty `input` and streams the real payload via
+   *  `input_json_delta`, so we need to wait for content_block_stop before we
+   *  can log the file/path target.
+   *  @internal -- friend surface for swarm-message-handler. */
   readonly pendingTools = new WeakMap<AgentState, PendingTool>();
   /** @internal -- friend surface for swarm-message-handler. */
   readonly ctxWarned = new WeakSet<AgentState>();
-  logFile?: string;
-  model: string | undefined;
-  usageCap: number | undefined;
-  readonly allowExtraUsage: boolean;
-  extraUsageBudget: number | undefined;
-  readonly baseCostUsd: number;
-  mergeBranch?: string;
+
+  // ── Truly private internals ──
+  private readonly allLogs: { time: number; agentId: number; text: string }[] = [];
+  private cleanedUp = false;
 
   constructor(config: SwarmConfig) {
     if (!config.tasks.length) throw new Error("SwarmConfig: tasks array must not be empty");
@@ -135,8 +145,8 @@ export class Swarm {
     this.targetConcurrency = n;
     this.log(-1, `Concurrency changed: ${prev} → ${n}`);
     if (n > prev && this.queue.length > 0 && !this.aborted && !this.cappedOut) {
-      const toSpawn = Math.min(n - this.workerCount, this.queue.length);
-      for (let i = 0; i < toSpawn; i++) this.workerPromises.push(this.worker());
+      const toSpawn = Math.min(n - this.workers.count, this.queue.length);
+      for (let i = 0; i < toSpawn; i++) this.workers.promises.push(this.worker());
     }
   }
 
@@ -236,11 +246,11 @@ export class Swarm {
       }
       this.phase = "running";
       const n = Math.min(this.targetConcurrency, this.queue.length);
-      for (let i = 0; i < n; i++) this.workerPromises.push(this.worker());
-      // setConcurrency() can grow workerPromises during execution, so drain in a loop.
-      while (this.workerPromises.length > 0) {
-        const batch = this.workerPromises.slice();
-        this.workerPromises.length = 0;
+      for (let i = 0; i < n; i++) this.workers.promises.push(this.worker());
+      // setConcurrency() can grow workers.promises during execution, so drain in a loop.
+      while (this.workers.promises.length > 0) {
+        const batch = this.workers.promises.slice();
+        this.workers.promises.length = 0;
         await Promise.all(batch);
       }
       if (this.config.useWorktrees) {
@@ -287,8 +297,6 @@ export class Swarm {
     return errored.length;
   }
 
-  logSequence = 0;
-
   log(agentId: number, text: string) {
     const entry = { time: Date.now(), agentId, text };
     this.logs.push(entry);
@@ -309,12 +317,12 @@ export class Swarm {
   // ── Worker loop ──
 
   private async worker(): Promise<void> {
-    this.workerCount++;
+    this.workers.count++;
     let tasksProcessed = 0;
     try {
       while (this.queue.length > 0 && !this.aborted && !this.cappedOut) {
         // Shrink: exit if we're above the live target.
-        if (this.workerCount > this.targetConcurrency) {
+        if (this.workers.count > this.targetConcurrency) {
           this.log(-1, `Worker exiting (concurrency shrunk to ${this.targetConcurrency})`);
           return;
         }
@@ -322,7 +330,7 @@ export class Swarm {
         while (this.paused && !this.aborted && !this.cappedOut) await sleep(500);
         await this.throttle();
         if (this.cappedOut || this.aborted) break;
-        if (this.workerCount > this.targetConcurrency) return;
+        if (this.workers.count > this.targetConcurrency) return;
         const task = this.queue.shift();
         if (!task) break;
         const watchdogMs = this.config.agentTimeoutMs ?? getAgentTimeout();
@@ -345,7 +353,7 @@ export class Swarm {
       }
       this.log(-1, `Worker finished (${tasksProcessed} tasks)`);
     } finally {
-      this.workerCount--;
+      this.workers.count--;
     }
   }
 
