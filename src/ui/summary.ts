@@ -9,10 +9,10 @@ import chalk from "chalk";
 import type { Swarm } from "../swarm/swarm.js";
 import type { AgentState } from "../core/types.js";
 import { getModelCapability, modelDisplayName } from "../core/models.js";
-import { contextFillInfo, fmtDur, truncate } from "./primitives.js";
+import { contextFillInfo, fmtDur, terminalWidth, truncate } from "./primitives.js";
 
 export function renderSummary(swarm: Swarm): string {
-  const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
+  const w = terminalWidth();
   const out: string[] = [];
 
   const ctxW = 5;

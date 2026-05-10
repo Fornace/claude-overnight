@@ -1,9 +1,10 @@
 // Provider registry: types + persistence (~/.claude/claude-overnight/providers.json).
 // Kept separate from env-building/picker so the store can be mocked in tests.
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "fs";
+import { existsSync, chmodSync } from "fs";
 import { homedir } from "os";
-import { dirname, join } from "path";
+import { join } from "path";
 import { clearTokenCache } from "../core/auth.js";
+import { readJsonOrNull, writeJson } from "../core/fs-helpers.js";
 
 /**
  * A non-Anthropic model provider reachable via an Anthropic-compatible endpoint
@@ -31,12 +32,8 @@ const STORE_PATH = join(homedir(), ".claude", "claude-overnight", "providers.jso
 export function getStorePath(): string { return STORE_PATH; }
 
 export function loadProviders(): ProviderConfig[] {
-  try {
-    const raw = readFileSync(STORE_PATH, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed?.providers)) return parsed.providers.filter(isValidProvider);
-  } catch {}
-  return [];
+  const parsed = readJsonOrNull<{ providers?: unknown[] }>(STORE_PATH);
+  return Array.isArray(parsed?.providers) ? parsed.providers.filter(isValidProvider) : [];
 }
 
 export function saveProvider(p: ProviderConfig): void {
@@ -49,8 +46,7 @@ export function deleteProvider(id: string): void {
 }
 
 function writeStore(providers: ProviderConfig[]): void {
-  mkdirSync(dirname(STORE_PATH), { recursive: true });
-  writeFileSync(STORE_PATH, JSON.stringify({ providers }, null, 2), "utf-8");
+  writeJson(STORE_PATH, { providers });
   try { chmodSync(STORE_PATH, 0o600); } catch {}
   clearTokenCache();
 }

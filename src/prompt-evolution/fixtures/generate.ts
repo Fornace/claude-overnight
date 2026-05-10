@@ -16,11 +16,11 @@
  * is primed.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { defaultCallModel, attemptJsonParse, type CallModelOpts } from "../transport.js";
 import type { BenchmarkCase } from "../types.js";
+import { readJsonOrNull, writeJson } from "../../core/fs-helpers.js";
 
 const DEFAULT_CACHE = join(homedir(), ".claude-overnight", "prompt-evolution", "_generated-cases.json");
 
@@ -225,19 +225,13 @@ function hashCase(c: BenchmarkCase): string {
 }
 
 function readCache(path: string): BenchmarkCase[] {
-  if (!existsSync(path)) return [];
-  try {
-    const arr = JSON.parse(readFileSync(path, "utf-8")) as BenchmarkCase[];
-    // Re-hash in case schema changed
-    for (const c of arr) c.hash = hashCase(c);
-    return arr;
-  } catch {
-    return [];
-  }
+  const arr = readJsonOrNull<BenchmarkCase[]>(path);
+  if (!arr) return [];
+  // Re-hash in case schema changed
+  for (const c of arr) c.hash = hashCase(c);
+  return arr;
 }
 
 function writeCache(path: string, cases: BenchmarkCase[]): void {
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(cases, null, 2));
+  writeJson(path, cases);
 }

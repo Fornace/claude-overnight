@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { mkdirSync, writeFileSync } from "fs";
+import { readMdEntries } from "../core/fs-helpers.js";
 import chalk from "chalk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Swarm } from "../swarm/swarm.js";
@@ -164,12 +164,12 @@ export async function runPlanPhase(input: PlanPhaseInput): Promise<PlanPhaseResu
       process.stdout.write("\x1B[?25l");
 
       mkdirSync(designDir, { recursive: true });
-      const existingDesigns = readMdDir(designDir);
-      if (existingDesigns) {
-        const designFiles = readdirSync(designDir).filter(f => f.endsWith(".md")).sort();
-        console.log(chalk.green(`\n  ✓ Reusing ${designFiles.length} design docs`) + chalk.dim(` (from prior attempt)`));
-        for (const f of designFiles) {
-          try { const firstLine = readFileSync(join(designDir, f), "utf-8").split("\n")[0].replace(/^#+\s*/, "").trim(); if (firstLine) console.log(chalk.dim(`    ${firstLine.slice(0, 80)}`)); } catch {}
+      const priorDesigns = readMdEntries(designDir);
+      if (priorDesigns.length > 0) {
+        console.log(chalk.green(`\n  ✓ Reusing ${priorDesigns.length} design docs`) + chalk.dim(` (from prior attempt)`));
+        for (const { body } of priorDesigns) {
+          const firstLine = body.split("\n")[0].replace(/^#+\s*/, "").trim();
+          if (firstLine) console.log(chalk.dim(`    ${firstLine.slice(0, 80)}`));
         }
         console.log("");
       } else {

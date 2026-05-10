@@ -1,12 +1,12 @@
-import { readFileSync } from "fs";
 import chalk from "chalk";
+import { readFileOrEmpty, readJsonOrNull } from "../core/fs-helpers.js";
 import {
   saveRunState, findIncompleteRuns, showRunHistory, formatTimeAgo,
   autoMergeBranches, readMdDir,
 } from "../state/state.js";
 import { orchestrate, salvageFromFile } from "../planner/planner.js";
 import { setTranscriptRunDir } from "../core/transcripts.js";
-import { wrap } from "../ui/primitives.js";
+import { wrap, terminalWidth } from "../ui/primitives.js";
 import { selectKey } from "./prompts.js";
 import { makeProgressLog } from "./display.js";
 import { editRunSettings, printRunSettings } from "./settings.js";
@@ -15,18 +15,14 @@ import type { RunState, MutableRunSettings, Task } from "../core/types.js";
 import { renderPrompt } from "../prompts/load.js";
 
 export function countTasksInFile(path: string): number {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8"));
-    return Array.isArray(parsed?.tasks) ? parsed.tasks.length : 0;
-  } catch { return 0; }
+  const parsed = readJsonOrNull<{ tasks?: unknown[] }>(path);
+  return parsed && Array.isArray(parsed.tasks) ? parsed.tasks.length : 0;
 }
 
 /** Read the first line / preview of a run's status.md. Returns "" if missing. */
 function readStatusPreview(runDir: string, maxLen: number, firstLineOnly = false): string {
-  try {
-    const raw = readFileSync(statusMdPath(runDir), "utf-8").trim();
-    return (firstLineOnly ? raw.split("\n")[0] : raw).slice(0, maxLen);
-  } catch { return ""; }
+  const raw = readFileOrEmpty(statusMdPath(runDir)).trim();
+  return (firstLineOnly ? raw.split("\n")[0] : raw).slice(0, maxLen);
 }
 
 export async function promptResumeOverrides(
@@ -159,8 +155,7 @@ export async function detectResume(input: DetectResumeInput): Promise<DetectResu
         const lastStatus = readStatusPreview(run.dir, 200);
         const planTaskCount = prev.phase === "planning" ? countTasksInFile(tasksJsonPath(run.dir)) : 0;
         console.log(chalk.yellow(`\n  ⚠ Unfinished run`) + chalk.dim(` · ${ago}`));
-        const termW = Math.max(process.stdout.columns ?? 80, 60);
-        const statusMaxW = Math.min(termW - 8, 80);
+        const statusMaxW = Math.min(terminalWidth() - 8, 80);
         const leftover = prev.currentTasks?.length ?? 0;
         const leftoverNote = prev.phase === "stopped" && leftover > 0
           ? ` · ${leftover} leftover task${leftover === 1 ? "" : "s"} preserved`
@@ -206,8 +201,7 @@ export async function detectResume(input: DetectResumeInput): Promise<DetectResu
             console.log(chalk.dim(`     ${s.accCompleted}/${s.budget} · $${s.accCost.toFixed(2)} · ${ago} · ${s.phase} at wave ${s.waveNum + 1}${merged ? ` · ${merged} merged` : ""}`));
           }
           if (lastStatus) {
-            const termW = Math.max(process.stdout.columns ?? 80, 60);
-            for (const wl of wrap(lastStatus, termW - 6)) console.log(chalk.dim(`     ${wl}`));
+            for (const wl of wrap(lastStatus, terminalWidth() - 6)) console.log(chalk.dim(`     ${wl}`));
           }
           console.log("");
         }

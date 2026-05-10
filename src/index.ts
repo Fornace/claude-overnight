@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync } from "fs";
+import { readFileOrEmpty } from "./core/fs-helpers.js";
 import { resolve, join } from "path";
 import chalk from "chalk";
 import { VERSION } from "./core/_version.js";
@@ -147,8 +148,7 @@ async function main() {
       const cost = r.state.accCost > 0 ? ` · $${r.state.accCost.toFixed(0)}` : "";
       const merged = r.state.branches.filter(b => b.status === "merged").length;
       console.log(chalk.dim(`     ${date} · ${r.state.accCompleted} done · ${merged} merged${cost}${obj ? ` · ${obj}` : ""}${obj.length >= 50 ? "…" : ""}`));
-      let status = "";
-      try { status = readFileSync(join(r.dir, "status.md"), "utf-8").trim().split("\n")[0].slice(0, 80); } catch {}
+      const status = readFileOrEmpty(join(r.dir, "status.md")).trim().split("\n")[0].slice(0, 80);
       if (status) console.log(chalk.dim(`       ${status}`));
     }
   }

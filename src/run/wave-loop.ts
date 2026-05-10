@@ -3,7 +3,8 @@
 // Mutable state lives in `WaveState` — a plain struct shared with run.ts.
 // `WaveLoopDeps` carries config + callbacks (cwd, display, runSteering, …).
 
-import { readFileSync, existsSync, writeFileSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
+import { readFileOrEmpty } from "../core/fs-helpers.js";
 import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
@@ -119,7 +120,7 @@ export async function runWaveLoop(state: WaveState, deps: WaveLoopDeps): Promise
           deps.display.appendSteeringEvent(`Health check: build broken — heal skipped after ${healFailStreak} failed attempts, needs manual intervention`);
           try {
             const statusPath2 = join(deps.runDir, "status.md");
-            const existing2 = existsSync(statusPath2) ? readFileSync(statusPath2, "utf-8") : "";
+            const existing2 = readFileOrEmpty(statusPath2);
             const marker = "## Heal blocked";
             if (!existing2.includes(marker)) {
               writeFileSync(statusPath2, `${existing2}${existing2 ? "\n\n" : ""}${marker}\nBuild has been broken for ${healFailStreak} waves, heal agents unable to fix — intervene manually.\n`, "utf-8");
@@ -293,13 +294,13 @@ export async function runWaveLoop(state: WaveState, deps: WaveLoopDeps): Promise
       if (hookBlocked.length > 0) {
         const msg = `⚠ ${hookBlocked.length} agent(s) touched files that didn't land — check hooks/gitignore/absolute paths`;
         deps.display.appendSteeringEvent(msg);
-        try {
-          const statusPath = join(deps.runDir, "status.md");
-          const existing = readFileSync(statusPath, "utf-8");
+        const statusPath = join(deps.runDir, "status.md");
+        if (existsSync(statusPath)) {
+          const existing = readFileOrEmpty(statusPath);
           if (!existing.includes(msg)) {
-            writeFileSync(statusPath, existing + `\n\n${msg}`, "utf-8");
+            try { writeFileSync(statusPath, existing + `\n\n${msg}`, "utf-8"); } catch {}
           }
-        } catch {}
+        }
       }
 
       // ── Merge-failed status.md + GC ──
@@ -310,7 +311,7 @@ export async function runWaveLoop(state: WaveState, deps: WaveLoopDeps): Promise
           catch { return false; }
         });
         const statusPath = join(deps.runDir, "status.md");
-        const existing = existsSync(statusPath) ? readFileSync(statusPath, "utf-8") : "";
+        const existing = readFileOrEmpty(statusPath);
         const marker = "## Unresolved merge failures";
         const idx = existing.indexOf(marker);
         const base = idx >= 0 ? existing.slice(0, idx).replace(/\n+$/, "") : existing;
