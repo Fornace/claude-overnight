@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 // Resolve <pkg>/prompts whether running from dist/ (installed) or src/ (dev).
@@ -6,21 +6,18 @@ export const PROMPTS_ROOT = (() => {
     const here = dirname(fileURLToPath(import.meta.url));
     for (const depth of [2, 3, 4]) {
         const candidate = join(here, ...Array(depth).fill(".."), "prompts");
-        try {
-            readFileSync(join(candidate, "_shared", "design-thinking.md"), "utf-8");
+        if (existsSync(join(candidate, "_shared", "design-thinking.md")))
             return candidate;
-        }
-        catch { }
     }
     throw new Error("prompts/ directory not found relative to " + here);
 })();
 const cache = new Map();
 function readRaw(rel) {
-    const cached = cache.get(rel);
-    if (cached !== undefined)
-        return cached;
-    const text = readFileSync(join(PROMPTS_ROOT, rel + ".md"), "utf-8");
-    cache.set(rel, text);
+    let text = cache.get(rel);
+    if (text === undefined) {
+        text = readFileSync(join(PROMPTS_ROOT, rel + ".md"), "utf-8");
+        cache.set(rel, text);
+    }
     return text;
 }
 function stripFrontmatter(t) {
@@ -38,23 +35,22 @@ function pickVariant(t, name) {
     }
     throw new Error(`Prompt variant "${name}" not found`);
 }
-function isTruthy(v) {
-    return v !== undefined && v !== null && v !== false && v !== "" && v !== 0;
-}
 function applyTemplate(t, vars) {
     // Partial includes — render verbatim, no template processing on the partial body
     // beyond stripping its frontmatter and surface comments.
-    t = t.replace(/\{\{>\s*([\w./-]+)\s*\}\}/g, (_, p) => {
-        const raw = stripFrontmatter(readRaw(p));
-        return raw.replace(/<!--[\s\S]*?-->/g, "").trim();
-    });
-    t = t.replace(/<!--[\s\S]*?-->/g, "");
-    t = t.replace(/\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (_, key, body) => isTruthy(vars[key]) ? body : "");
-    t = t.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    return t
+        .replace(/\{\{>\s*([\w./-]+)\s*\}\}/g, (_, p) => stripFrontmatter(readRaw(p)).replace(/<!--[\s\S]*?-->/g, "").trim())
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (_, key, body) => {
+        const v = vars[key];
+        return v !== undefined && v !== null && v !== false && v !== "" && v !== 0 ? body : "";
+    })
+        .replace(/\{\{(\w+)\}\}/g, (_, key) => {
         const v = vars[key];
         return v === undefined || v === null ? "" : String(v);
-    });
-    return t.replace(/\n{3,}/g, "\n\n").trim();
+    })
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
 }
 export function renderPrompt(file, opts = {}) {
     let t = stripFrontmatter(readRaw(file));

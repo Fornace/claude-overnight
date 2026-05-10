@@ -1,6 +1,7 @@
-import { readFileSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+import { readJsonOrNull } from "../core/fs-helpers.js";
 import { renderPrompt } from "../prompts/load.js";
 /** Detect build errors and return one or more heal tasks. If errors span ≥2 files,
  *  emit one task per file so they heal in parallel without merge conflicts. */
@@ -45,19 +46,16 @@ export function checkProjectHealth(cwd) {
 }
 export function detectHealthCommand(cwd) {
     const has = (p) => existsSync(join(cwd, p));
-    try {
-        const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8"));
-        const scripts = pkg.scripts || {};
-        for (const name of ["typecheck", "check:types", "type-check", "build"]) {
-            if (scripts[name]) {
-                const pm = has("pnpm-lock.yaml") ? "pnpm"
-                    : has("bun.lockb") || has("bun.lock") ? "bun"
-                        : has("yarn.lock") ? "yarn" : "npm";
-                return `${pm} run ${name}`;
-            }
+    const pkg = readJsonOrNull(join(cwd, "package.json"));
+    const scripts = pkg?.scripts ?? {};
+    for (const name of ["typecheck", "check:types", "type-check", "build"]) {
+        if (scripts[name]) {
+            const pm = has("pnpm-lock.yaml") ? "pnpm"
+                : has("bun.lockb") || has("bun.lock") ? "bun"
+                    : has("yarn.lock") ? "yarn" : "npm";
+            return `${pm} run ${name}`;
         }
     }
-    catch { }
     if (has("tsconfig.json"))
         return "npx -y tsc --noEmit";
     if (has("Cargo.toml"))

@@ -6,9 +6,9 @@
 // output for log capture).
 import chalk from "chalk";
 import { getModelCapability, modelDisplayName } from "../core/models.js";
-import { contextFillInfo, fmtDur, truncate } from "./primitives.js";
+import { contextFillInfo, fmtDur, terminalWidth, truncate } from "./primitives.js";
 export function renderSummary(swarm) {
-    const w = Math.max((process.stdout.columns ?? 80) || 80, 60);
+    const w = terminalWidth();
     const out = [];
     const ctxW = 5;
     const modelW = 16;

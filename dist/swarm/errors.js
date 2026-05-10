@@ -21,38 +21,29 @@ export class StreamStalledError extends Error {
 export function isStreamStalledError(err) {
     return err instanceof StreamStalledError;
 }
-const asErrorLike = (e) => (e ?? {});
-const errStatus = (e) => {
-    const v = e.status ?? e.statusCode;
-    return typeof v === "number" ? v : undefined;
-};
-const errMessage = (e, raw) => String(typeof e.message === "string" ? e.message : raw).toLowerCase();
+import { errStatus, errMessage, errCause } from "../core/errors.js";
 export function isRateLimitError(err) {
-    const e = asErrorLike(err);
-    if (errStatus(e) === 429)
+    if (errStatus(err) === 429)
         return true;
-    const msg = errMessage(e, err);
+    const msg = errMessage(err);
     if (msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("too many requests"))
         return true;
-    if (e.cause && e.cause !== err)
-        return isRateLimitError(e.cause);
-    return false;
+    const cause = errCause(err);
+    return cause ? isRateLimitError(cause) : false;
 }
 export function isTransientError(err) {
     if (err instanceof AgentTimeoutError || err instanceof StreamStalledError)
         return false;
-    const e = asErrorLike(err);
-    const msg = errMessage(e, err);
-    const status = errStatus(e);
+    const msg = errMessage(err);
+    const status = errStatus(err);
     if (status === 429 || (status != null && status >= 500 && status < 600) ||
         msg.includes("rate limit") || msg.includes("overloaded") || msg.includes("econnreset") ||
         msg.includes("etimedout") || msg.includes("socket hang up") || msg.includes("epipe") ||
         msg.includes("econnrefused") || msg.includes("ehostunreach") || msg.includes("network error") ||
         msg.includes("fetch failed") || msg.includes("aborted"))
         return true;
-    if (e.cause && e.cause !== err)
-        return isTransientError(e.cause);
-    return false;
+    const cause = errCause(err);
+    return cause ? isTransientError(cause) : false;
 }
 export function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));

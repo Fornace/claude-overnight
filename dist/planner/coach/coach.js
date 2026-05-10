@@ -1,5 +1,6 @@
-import { readFileSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import { join, dirname } from "path";
+import { readFileOrEmpty } from "../../core/fs-helpers.js";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
 import { runPlannerQuery, attemptJsonParse } from "../query.js";
@@ -37,11 +38,8 @@ export async function runSetupCoach(rawObjective, cwd, ctx) {
         console.log(chalk.dim("  coach skipped: skill unavailable"));
         return null;
     }
-    let skill = "";
-    try {
-        skill = readFileSync(skillPath, "utf-8");
-    }
-    catch {
+    const skill = readFileOrEmpty(skillPath);
+    if (!skill) {
         console.log(chalk.dim("  coach skipped: skill unreadable"));
         return null;
     }

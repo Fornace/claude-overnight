@@ -33,6 +33,11 @@ export function renderWaitingIndicator(label, startedAt, opts = {}) {
         out += chalk.dim(` \u00b7 ${opts.hint}`);
     return out;
 }
+/** Current terminal width clamped to a 60-char floor — what every panel uses
+ *  to decide bar/column sizes. Stays here so the heuristic lives in one spot. */
+export function terminalWidth() {
+    return Math.max((process.stdout.columns ?? 80) || 80, 60);
+}
 export function truncate(s, max) {
     return s.length <= max ? s : s.slice(0, max - 1) + "\u2026";
 }

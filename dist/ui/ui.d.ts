@@ -23,6 +23,7 @@ export declare class RunDisplay {
     start(): void;
     pause(): void;
     resume(): void;
+    private mountInk;
     stop(): void;
     setWave(swarm: Swarm): void;
     setSteering(rlGetter?: RLGetter, ctx?: SteeringContext): void;

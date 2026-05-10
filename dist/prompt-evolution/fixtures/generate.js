@@ -15,10 +15,10 @@
  * ~$0.01-0.05 on Haiku for 50 cases). No recurring cost after the cache
  * is primed.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { defaultCallModel, attemptJsonParse } from "../transport.js";
+import { readJsonOrNull, writeJson } from "../../core/fs-helpers.js";
 const DEFAULT_CACHE = join(homedir(), ".claude-overnight", "prompt-evolution", "_generated-cases.json");
 /**
  * Produce enough generated cases to hit `targetCount`, reading cache first
@@ -193,22 +193,14 @@ function hashCase(c) {
     return Math.abs(h).toString(36).slice(0, 8);
 }
 function readCache(path) {
-    if (!existsSync(path))
+    const arr = readJsonOrNull(path);
+    if (!arr)
         return [];
-    try {
-        const arr = JSON.parse(readFileSync(path, "utf-8"));
-        // Re-hash in case schema changed
-        for (const c of arr)
-            c.hash = hashCase(c);
-        return arr;
-    }
-    catch {
-        return [];
-    }
+    // Re-hash in case schema changed
+    for (const c of arr)
+        c.hash = hashCase(c);
+    return arr;
 }
 function writeCache(path, cases) {
-    const dir = dirname(path);
-    if (!existsSync(dir))
-        mkdirSync(dir, { recursive: true });
-    writeFileSync(path, JSON.stringify(cases, null, 2));
+    writeJson(path, cases);
 }

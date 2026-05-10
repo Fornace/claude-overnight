@@ -13,6 +13,7 @@
  *
  * Cost: ~1 judge call per case per generation (~$0.002-0.01 each).
  */
+import { attemptJsonParse } from "./transport.js";
 const DEFAULT_RUBRIC = [
     { name: "parse", question: "Is the output well-formed and parseable (valid JSON if expected, clear structure otherwise)?" },
     { name: "schema", question: "Does the output contain all required fields / follow the expected schema?" },
@@ -31,7 +32,6 @@ const DEFAULT_RUBRIC = [
 export async function judgeOutput(rawOutput, c, opts) {
     const baseUrl = (opts.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/$/, "");
     const authToken = opts.authToken ?? process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY ?? "";
-    const isKimi = /kimi\.com/i.test(baseUrl);
     const prompt = buildJudgePrompt(rawOutput, c);
     const body = JSON.stringify({
         model: opts.model,
@@ -106,28 +106,11 @@ Respond ONLY with a JSON object in this exact shape (no markdown fences, no extr
 `;
 }
 export function parseJudgeOutput(raw) {
-    // Strip fences
-    const cleaned = raw
-        .replace(/^\`\`\`(?:json)?\s*\n?/i, "")
-        .replace(/\n?\`\`\`\s*$/i, "")
-        .trim();
-    let obj;
-    try {
-        obj = JSON.parse(cleaned);
+    const parsed = attemptJsonParse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { score: 0.5, dimensions: {}, justification: "Judge returned unparseable JSON. Falling back to neutral." };
     }
-    catch {
-        // Try to extract first JSON object
-        const m = cleaned.match(/\{[\s\S]*\}/);
-        if (!m) {
-            return { score: 0.5, dimensions: {}, justification: "Judge returned unparseable JSON. Falling back to neutral." };
-        }
-        try {
-            obj = JSON.parse(m[0]);
-        }
-        catch {
-            return { score: 0.5, dimensions: {}, justification: "Judge returned unparseable JSON. Falling back to neutral." };
-        }
-    }
+    const obj = parsed;
     const getNum = (k) => {
         const v = obj[k];
         if (typeof v === "number")

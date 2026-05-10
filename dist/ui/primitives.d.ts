@@ -12,6 +12,9 @@ export declare function renderWaitingIndicator(label: string, startedAt: number 
     hint?: string;
     style?: "info" | "warn" | "wait" | "thinking";
 }): string;
+/** Current terminal width clamped to a 60-char floor — what every panel uses
+ *  to decide bar/column sizes. Stays here so the heuristic lives in one spot. */
+export declare function terminalWidth(): number;
 export declare function truncate(s: string, max: number): string;
 /** Visible length of a string — ANSI escapes stripped. Use when aligning
  *  columns of chalk-colored text. */

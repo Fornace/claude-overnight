@@ -1,12 +1,12 @@
-import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
 import { VERSION } from "../core/_version.js";
+import { readJsonOrNull } from "../core/fs-helpers.js";
 export function printVersion() {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "..", "package.json"), "utf-8"));
-    console.log(`claude-overnight v${pkg.version}`);
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = readJsonOrNull(join(here, "..", "..", "package.json"));
+    console.log(`claude-overnight v${pkg?.version ?? VERSION}`);
 }
 export function printHelp() {
     console.log(`
