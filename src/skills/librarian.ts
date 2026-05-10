@@ -1,9 +1,10 @@
 import {
-  readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, readdirSync, appendFileSync,
+  readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, appendFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { openSkillsDb } from "./index-db.js";
 import { renderPrompt } from "../prompts/load.js";
+import { listMd, readMdEntries } from "../core/fs-helpers.js";
 import { skillsRoot, canonDir, quarantineDir, candidatesDir, recipeDir } from "./paths.js";
 
 const BODY_MAX = 15_360;
@@ -63,7 +64,7 @@ export async function runLibrarian(input: LibrarianInput): Promise<LibrarianResu
     const actions = await callLibrarianSubagent(input, subagentInput);
     if (!actions) return { ...result, elapsedMs: Date.now() - started };
 
-    applyActions(fp, actions, input.runId, input.wave, result);
+    applyActions(fp, actions, result);
     archiveCandidates(fp, input.runId);
     appendLibrarianLog(input.runId, input.wave, actions);
   } catch (err: unknown) {
@@ -96,22 +97,15 @@ interface CandidateFile {
 }
 
 function loadCandidates(fp: string): CandidateFile[] {
-  const dir = candidatesDir(fp);
-  if (!existsSync(dir)) return [];
-  const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort().slice(0, CANDIDATE_CAP);
-  const results: CandidateFile[] = [];
-  for (const f of files) {
-    try {
-      const text = readFileSync(join(dir, f), "utf-8");
-      const kind = extractFrontmatterField(text, "kind") || "skill";
-      const proposedBy = extractFrontmatterField(text, "proposed_by") || "unknown";
-      const waveRaw = extractFrontmatterField(text, "wave") || "0";
-      const trigger = extractFrontmatterField(text, "trigger") || "";
-      const body = text.split(/^---\s*$/m, 2).pop()?.trim() ?? "";
-      results.push({ candidate_file: f, kind, proposed_by: proposedBy, wave: parseInt(waveRaw, 10) || 0, trigger, body });
-    } catch { /* skip corrupt files */ }
-  }
-  return results;
+  const entries = readMdEntries(candidatesDir(fp)).slice(0, CANDIDATE_CAP);
+  return entries.filter(e => e.body).map(({ name, body: text }) => ({
+    candidate_file: name,
+    kind: extractFrontmatterField(text, "kind") || "skill",
+    proposed_by: extractFrontmatterField(text, "proposed_by") || "unknown",
+    wave: parseInt(extractFrontmatterField(text, "wave") || "0", 10) || 0,
+    trigger: extractFrontmatterField(text, "trigger") || "",
+    body: text.split(/^---\s*$/m, 2).pop()?.trim() ?? "",
+  }));
 }
 
 interface AbOutcome { skill_name: string; trials: number; wins: number; losses: number; ties: number; cost_saved_usd: number; }
@@ -176,7 +170,17 @@ async function callLibrarianSubagent(input: LibrarianInput, data: string): Promi
 
 // ── Action application ──
 
-function applyActions(fp: string, actions: LibrarianAction[], runId: string, wave: number, result: LibrarianResult): void {
+/** Bump version + patched_at on an existing skill md, write body, return new version. */
+function patchExisting(mdPath: string, body: string, descOverride: string | undefined): { newVersion: number; fm: Record<string, unknown> } {
+  const fm = extractFrontmatter(readFileSync(mdPath, "utf-8"));
+  const newVersion = (typeof fm.version === "number" ? fm.version : 1) + 1;
+  const updatedFm: Record<string, unknown> = { ...fm, version: newVersion, patched_at: new Date().toISOString() };
+  if (descOverride) updatedFm.description = descOverride.slice(0, 120);
+  writeFileSync(mdPath, renderFrontmatter(updatedFm) + "\n" + body, "utf-8");
+  return { newVersion, fm };
+}
+
+function applyActions(fp: string, actions: LibrarianAction[], result: LibrarianResult): void {
   const cDir = canonDir(fp);
   const qDir = quarantineDir(fp);
 
@@ -200,13 +204,8 @@ function applyActions(fp: string, actions: LibrarianAction[], runId: string, wav
         const mdPath = join(destDir, `${a.name}.md`);
         if (existsSync(mdPath)) {
           // Already exists — treat as patch instead
-          const existing = readFileSync(mdPath, "utf-8");
-          const fm = extractFrontmatter(existing);
-          const oldVersion = typeof fm.version === "number" ? fm.version : 1;
-          const newVersion = oldVersion + 1;
-          const updatedFm: Record<string, unknown> = { ...fm, version: newVersion, patched_at: new Date().toISOString() };
-          writeFileSync(mdPath, renderFrontmatter(updatedFm) + "\n" + a.body, "utf-8");
-          updateSkillRow(fp, a.name, a.description, newVersion, a.triggers, a.requires_tools ?? [], a.languages ?? [], a.toolsets ?? [], mdPath, a.body, runId, wave);
+          const { newVersion } = patchExisting(mdPath, a.body, undefined);
+          updateSkillRow(a.name, a.description, newVersion, a.triggers, a.requires_tools ?? [], a.languages ?? [], a.toolsets ?? [], mdPath, a.body);
           result.patched++;
         } else {
           const now = new Date().toISOString();
@@ -234,26 +233,17 @@ function applyActions(fp: string, actions: LibrarianAction[], runId: string, wav
       case "patch": {
         const mdPath = join(cDir, `${a.name}.md`);
         if (!existsSync(mdPath)) continue;
-        const existing = readFileSync(mdPath, "utf-8");
         if (Buffer.byteLength(a.patch_body, "utf-8") > BODY_MAX) continue;
-        const fm = extractFrontmatter(existing);
-        const oldVersion = typeof fm.version === "number" ? fm.version : 1;
-        const newVersion = oldVersion + 1;
-        const updatedFm: Record<string, unknown> = { ...fm, version: newVersion, patched_at: new Date().toISOString() };
-        if (a.description) updatedFm.description = a.description.slice(0, 120);
-        writeFileSync(mdPath, renderFrontmatter(updatedFm) + "\n" + a.patch_body, "utf-8");
-        const db = openSkillsDb();
-        const newDesc = (a.description || (typeof fm.description === "string" ? fm.description : "")) as string;
-        db.prepare("UPDATE skills SET version = ?, description = ? WHERE name = ?").run(newVersion, newDesc, a.name);
+        const { newVersion, fm } = patchExisting(mdPath, a.patch_body, a.description);
+        const newDesc = a.description || (typeof fm.description === "string" ? fm.description : "");
+        openSkillsDb().prepare("UPDATE skills SET version = ?, description = ? WHERE name = ?").run(newVersion, newDesc, a.name);
         result.patched++;
         break;
       }
       case "quarantine": {
         const src = join(cDir, `${a.name}.md`);
-        const dest = join(qDir, `${a.name}.md`);
-        if (existsSync(src)) renameSync(src, dest);
-        const db = openSkillsDb();
-        db.prepare("UPDATE skills SET quarantined = 1 WHERE name = ?").run(a.name);
+        if (existsSync(src)) renameSync(src, join(qDir, `${a.name}.md`));
+        openSkillsDb().prepare("UPDATE skills SET quarantined = 1 WHERE name = ?").run(a.name);
         result.quarantined++;
         break;
       }
@@ -269,10 +259,8 @@ function applyActions(fp: string, actions: LibrarianAction[], runId: string, wav
 
 function archiveCandidates(fp: string, runId: string): void {
   const srcDir = candidatesDir(fp);
-  if (!existsSync(srcDir)) return;
-  const files = readdirSync(srcDir).filter(f => f.endsWith(".md"));
+  const files = listMd(srcDir);
   if (files.length === 0) return;
-
   const destDir = join(skillsRoot(), fp, "processed", runId);
   mkdirSync(destDir, { recursive: true });
   for (const f of files) {
@@ -308,9 +296,8 @@ function insertSkillRow(fp: string, name: string, desc: string, triggers: string
   `).run(name, fp, desc, JSON.stringify(languages), JSON.stringify(toolsets), JSON.stringify(requiresTools), JSON.stringify(triggers), bodyPath, Buffer.byteLength(body, "utf-8"), createdAt, kind);
 }
 
-function updateSkillRow(_fp: string, name: string, desc: string | undefined, version: number, triggers: string[], requiresTools: string[], languages: string[], toolsets: string[], bodyPath: string, body: string, _runId: string, _wave: number): void {
-  const db = openSkillsDb();
-  db.prepare(`
+function updateSkillRow(name: string, desc: string | undefined, version: number, triggers: string[], requiresTools: string[], languages: string[], toolsets: string[], bodyPath: string, body: string): void {
+  openSkillsDb().prepare(`
     UPDATE skills SET description = COALESCE(?, description), version = ?, triggers = ?, requires_tools = ?, languages = ?, toolsets = ?, body_path = ?, size_bytes = ?
     WHERE name = ?
   `).run(desc ?? null, version, JSON.stringify(triggers), JSON.stringify(requiresTools), JSON.stringify(languages), JSON.stringify(toolsets), bodyPath, Buffer.byteLength(body, "utf-8"), name);
