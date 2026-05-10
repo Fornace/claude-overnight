@@ -54,13 +54,12 @@ export async function runLibrarian(input: LibrarianInput): Promise<LibrarianResu
 
   try {
     const fp = input.fingerprint;
-    const canonMeta = loadCanonMeta(fp);
     const candidates = loadCandidates(fp);
     if (candidates.length === 0) return { ...result, elapsedMs: Date.now() - started };
 
-    const abOutcomes = loadAbOutcomes(input.runId);
-    const subagentInput = buildSubagentInput(canonMeta, candidates, abOutcomes);
-
+    const subagentInput = JSON.stringify({
+      canon: loadCanonMeta(fp), candidates, ab_outcomes: loadAbOutcomes(input.runId),
+    });
     const actions = await callLibrarianSubagent(input, subagentInput);
     if (!actions) return { ...result, elapsedMs: Date.now() - started };
 
@@ -120,10 +119,6 @@ function loadAbOutcomes(runId: string): AbOutcome[] {
       COALESCE(SUM(CASE WHEN event='cost_saved' THEN value ELSE 0 END), 0) as cost_saved_usd
     FROM skill_events WHERE run_id = ? GROUP BY skill_name
   `).all(runId) as AbOutcome[];
-}
-
-function buildSubagentInput(canon: CanonEntry[], candidates: CandidateFile[], abOutcomes: AbOutcome[]): string {
-  return JSON.stringify({ canon, candidates, ab_outcomes: abOutcomes });
 }
 
 // ── Subagent call ──
