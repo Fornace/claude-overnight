@@ -1,8 +1,8 @@
-import { readFileSync } from "fs";
 import { join } from "path";
+import { readFileOrEmpty } from "../core/fs-helpers.js";
 import chalk from "chalk";
 import { getPeakPlannerContext, runPlannerQuery } from "../planner/query.js";
-import { fmtTokens } from "../ui/primitives.js";
+import { fmtTokens, terminalWidth, truncate } from "../ui/primitives.js";
 import { getModelCapability } from "../core/models.js";
 import { readRunMemory } from "../state/state.js";
 import { renderPrompt } from "../prompts/load.js";
@@ -12,7 +12,7 @@ export async function generateFinalNarrative(deps, phase) {
     const { cwd, runDir, objective, previousKnowledge, workerModel, fastModel, waveHistory } = deps;
     const debriefModel = fastModel || workerModel;
     const memory = readRunMemory(runDir, previousKnowledge || undefined);
-    const cap = (s, n) => !s ? "" : s.length > n ? s.slice(0, n) + "…" : s;
+    const cap = (s, n) => s ? truncate(s, n) : "";
     const prompt = renderPrompt("50_review/50-2_summary", {
         vars: {
             phase, objective,
@@ -38,7 +38,9 @@ export async function printFinalSummary(args) {
     const elapsedStr = elapsed < 60 ? `${elapsed}s` : elapsed < 3600 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m`;
     const totalMerged = branches.filter(b => b.status === "merged").length;
     const totalConflicts = branches.filter(b => b.status === "merge-failed").length;
-    const termW = Math.max((process.stdout.columns ?? 80) || 80, 50);
+    // terminalWidth() clamps to ≥60; prior local code clamped to ≥50, so worst-case
+    // we render 10 cols wider on a tiny terminal — acceptable for the post-run summary.
+    const termW = terminalWidth();
     const rule = (c = "─") => chalk.dim(`  ${c.repeat(Math.min(termW - 4, 60))}`);
     const bannerChar = accFailed === 0 ? "━" : "─";
     // Banner: title + subtitle explaining why the run ended
@@ -138,19 +140,15 @@ export async function printFinalSummary(args) {
         }
         console.log("");
     }
-    const statusFile = join(runDir, "status.md");
-    try {
-        const statusContent = readFileSync(statusFile, "utf-8").trim();
-        if (statusContent) {
-            console.log(rule());
-            console.log(chalk.bold("  Status"));
-            console.log("");
-            for (const line of statusContent.split("\n"))
-                console.log(`  ${line}`);
-            console.log("");
-        }
+    const statusContent = readFileOrEmpty(join(runDir, "status.md")).trim();
+    if (statusContent) {
+        console.log(rule());
+        console.log(chalk.bold("  Status"));
+        console.log("");
+        for (const line of statusContent.split("\n"))
+            console.log(`  ${line}`);
+        console.log("");
     }
-    catch { }
     if (totalConflicts > 0) {
         console.log(rule());
         const conflictBranches = branches.filter(b => b.status === "merge-failed");

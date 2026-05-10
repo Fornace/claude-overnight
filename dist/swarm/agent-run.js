@@ -1,4 +1,5 @@
-import { rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
+import { rmSync, existsSync } from "fs";
+import { readFileOrEmpty, writeJson } from "../core/fs-helpers.js";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -338,16 +339,10 @@ function hasLspMcp() {
         join(process.env.HOME ?? "", ".config", "claude", "claude.json"),
     ];
     for (const p of candidates) {
-        try {
-            if (!existsSync(p))
-                continue;
-            const text = readFileSync(p, "utf-8");
-            if (/\b(cclsp|serena)\b/.test(text)) {
-                _lspMcpPresent = true;
-                return true;
-            }
+        if (/\b(cclsp|serena)\b/.test(readFileOrEmpty(p))) {
+            _lspMcpPresent = true;
+            return true;
         }
-        catch { }
     }
     _lspMcpPresent = false;
     return false;
@@ -367,10 +362,8 @@ function installLspFirstHookInto(worktreeDir) {
             ],
         },
     };
-    const dir = join(worktreeDir, ".claude");
-    mkdirSync(dir, { recursive: true });
     // settings.local.json is gitignored by Claude Code convention — won't pollute the agent's commit.
-    writeFileSync(join(dir, "settings.local.json"), JSON.stringify(settings, null, 2), "utf-8");
+    writeJson(join(worktreeDir, ".claude", "settings.local.json"), settings);
 }
 /**
  * Stable per-(provider, model, cwd) tag for scoping `resume` session ids.

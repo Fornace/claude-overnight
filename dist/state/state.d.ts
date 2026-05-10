@@ -1,4 +1,5 @@
 import type { RunState, BranchRecord, AgentState, RunMemory, WaveSummary } from "../core/types.js";
+/** Concatenate every `.md` in `dir` as `### name\n<body>` blocks. Empty if missing. */
 export declare function readMdDir(dir: string): string;
 export declare function readRunMemory(runDir: string, previousRuns?: string): RunMemory;
 /** Read pending .md files in steer-inbox/ (top-level only, not processed/). */

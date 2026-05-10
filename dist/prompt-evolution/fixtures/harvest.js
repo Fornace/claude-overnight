@@ -14,8 +14,9 @@
  * cases are meant to be scored with the llm-judge: real objective + a
  * heuristic that the run actually finished.
  */
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { readFileOrEmpty, readJsonOrNull } from "../../core/fs-helpers.js";
 export function harvestRealCases(opts) {
     const runsDir = join(opts.cwd, ".claude-overnight", "runs");
     if (!existsSync(runsDir))
@@ -26,27 +27,20 @@ export function harvestRealCases(opts) {
     const entries = [];
     for (const id of readdirSync(runsDir)) {
         const runDir = join(runsDir, id);
-        const goalPath = join(runDir, "goal.md");
-        const statePath = join(runDir, "state.json");
-        if (!existsSync(goalPath) || !existsSync(statePath))
+        const state = readJsonOrNull(join(runDir, "state.json"));
+        if (!state)
             continue;
-        try {
-            const state = JSON.parse(readFileSync(statePath, "utf-8"));
-            if (state.phase && !allow.has(state.phase))
-                continue;
-            const objective = extractObjective(readFileSync(goalPath, "utf-8"));
-            if (!objective)
-                continue;
-            entries.push({
-                id,
-                objective,
-                budget: typeof state.budget === "number" && state.budget > 0 ? state.budget : 8,
-                startedAt: state.startedAt ?? "",
-            });
-        }
-        catch {
-            // Skip unreadable runs.
-        }
+        if (state.phase && !allow.has(state.phase))
+            continue;
+        const objective = extractObjective(readFileOrEmpty(join(runDir, "goal.md")));
+        if (!objective)
+            continue;
+        entries.push({
+            id,
+            objective,
+            budget: typeof state.budget === "number" && state.budget > 0 ? state.budget : 8,
+            startedAt: state.startedAt ?? "",
+        });
     }
     entries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     return entries.slice(0, limit).map((e) => toCase(e, opts.promptPath, variant));

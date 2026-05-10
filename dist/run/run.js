@@ -1,4 +1,5 @@
-import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { readFileOrEmpty } from "../core/fs-helpers.js";
 import { join } from "path";
 import { execSync } from "child_process";
 import chalk from "chalk";
@@ -8,8 +9,8 @@ import { verifyWave } from "../planner/verifier.js";
 import { getTotalPlannerCost, getPlannerRateLimitInfo, runPlannerQuery, setPlannerEnvResolver, attemptJsonParse } from "../planner/query.js";
 import { buildEnvResolver, isCursorProxyProvider } from "../providers/index.js";
 import { RunDisplay } from "../ui/ui.js";
-import { renderSummary } from "../ui/summary.js";
-import { readRunMemory, writeStatus, writeGoalUpdate, saveRunState, saveWaveSession, loadWaveHistory, recordBranches, archiveMilestone, writeSteerInbox, consumeSteerInbox, countSteerInbox, appendOvernightLogStart, updateOvernightLogEnd, } from "../state/state.js";
+import { truncate } from "../ui/primitives.js";
+import { readRunMemory, writeStatus, writeGoalUpdate, saveRunState, saveWaveSession, loadWaveHistory, archiveMilestone, writeSteerInbox, consumeSteerInbox, countSteerInbox, appendOvernightLogStart, updateOvernightLogEnd, } from "../state/state.js";
 import { composeRunState } from "../state/run-state.js";
 import { runPostRunReview } from "./review.js";
 import { printFinalSummary } from "./summary.js";
@@ -21,84 +22,83 @@ export async function executeRun(cfg) {
     }
     catch { } };
     const { objective, cwd, beforeWave: beforeWaveCmds, afterWave: afterWaveCmds, afterRun: afterRunCmds, runDir, previousKnowledge } = cfg;
-    let { workerModel, plannerModel, fastModel, concurrency } = cfg;
     const envForModel = buildEnvResolver({
-        plannerModel, plannerProvider: cfg.plannerProvider,
-        workerModel, workerProvider: cfg.workerProvider,
+        plannerModel: cfg.plannerModel, plannerProvider: cfg.plannerProvider,
+        workerModel: cfg.workerModel, workerProvider: cfg.workerProvider,
         fastModel: cfg.fastModel, fastProvider: cfg.fastProvider,
     });
     setPlannerEnvResolver(envForModel);
-    let { usageCap, flex } = cfg;
+    let { flex } = cfg;
     const useWorktrees = cfg.useWorktrees;
     const mergeStrategy = cfg.mergeStrategy;
     mkdirSync(join(runDir, "reflections"), { recursive: true });
     mkdirSync(join(runDir, "milestones"), { recursive: true });
     mkdirSync(join(runDir, "sessions"), { recursive: true });
-    let currentSwarm;
-    let remaining;
-    let currentTasks;
-    const liveConfig = {
-        remaining: 0, usageCap, concurrency, paused: false, dirty: false,
-        extraUsageBudget: cfg.extraUsageBudget,
-        workerModel, plannerModel, fastModel,
+    // Single mutable state struct shared with the wave loop.
+    // No getter/setter shim: both modules read & write `state.X` directly.
+    const state = {
+        currentSwarm: undefined,
+        remaining: 0, currentTasks: [], waveNum: 0,
+        accCost: 0, accIn: 0, accOut: 0, accCompleted: 0, accFailed: 0, accTools: 0,
+        peakWorkerCtxPct: 0, peakWorkerCtxTokens: 0,
+        lastCapped: false, lastAborted: false, objectiveComplete: false,
+        lastEstimate: undefined,
+        workerModel: cfg.workerModel, plannerModel: cfg.plannerModel, fastModel: cfg.fastModel,
+        concurrency: cfg.concurrency, usageCap: cfg.usageCap,
+        branches: [], waveHistory: [],
     };
-    let waveNum;
-    const waveHistory = [];
-    let accCost, accCompleted, accFailed, accTools;
-    let accIn = 0, accOut = 0;
-    let peakWorkerCtxPct = 0, peakWorkerCtxTokens = 0;
-    let lastCapped = false, lastAborted = false, objectiveComplete = false;
-    let lastEstimate;
-    const branches = [];
+    const liveConfig = {
+        remaining: 0, usageCap: state.usageCap, concurrency: state.concurrency, paused: false, dirty: false,
+        extraUsageBudget: cfg.extraUsageBudget,
+        workerModel: state.workerModel, plannerModel: state.plannerModel, fastModel: state.fastModel,
+    };
     // Skills telemetry accumulators
     let skillsPromoted = 0, skillsPatched = 0, skillsQuarantined = 0, skillsRejected = 0;
     if (cfg.resuming && cfg.resumeState) {
         const rs = cfg.resumeState;
-        remaining = Math.max(1, rs.remaining);
-        currentTasks = rs.currentTasks;
-        waveNum = rs.waveNum;
-        accCost = rs.accCost;
-        accCompleted = rs.accCompleted;
-        accFailed = rs.accFailed;
-        accTools = rs.accTools ?? 0;
-        accIn = rs.accIn ?? 0;
-        accOut = rs.accOut ?? 0;
-        branches.push(...rs.branches);
+        state.remaining = Math.max(1, rs.remaining);
+        state.currentTasks = rs.currentTasks;
+        state.waveNum = rs.waveNum;
+        state.accCost = rs.accCost;
+        state.accCompleted = rs.accCompleted;
+        state.accFailed = rs.accFailed;
+        state.accTools = rs.accTools ?? 0;
+        state.accIn = rs.accIn ?? 0;
+        state.accOut = rs.accOut ?? 0;
+        state.branches.push(...rs.branches);
         flex = rs.flex;
-        waveHistory.push(...loadWaveHistory(runDir));
+        state.waveHistory.push(...loadWaveHistory(runDir));
         // Planning-phase resume starts at wave 0 (nothing ran before); all other
         // resumes bump to the next wave since rs.waveNum is the last completed one.
         const fromPlanning = rs.phase === "planning";
         if (fromPlanning && !existsSync(join(runDir, "goal.md")) && objective) {
             writeFileSync(join(runDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
         }
-        const detail = fromPlanning ? `${currentTasks.length} tasks from plan` : `${waveHistory.length} prior waves`;
-        console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${waveNum + 1} · ${remaining} remaining · $${accCost.toFixed(2)} spent · ${detail}\n`));
+        const detail = fromPlanning ? `${state.currentTasks.length} tasks from plan` : `${state.waveHistory.length} prior waves`;
+        console.log(chalk.green(`\n  ✓ Resumed`) + chalk.dim(` · wave ${state.waveNum + 1} · ${state.remaining} remaining · $${state.accCost.toFixed(2)} spent · ${detail}\n`));
         if (!fromPlanning)
-            waveNum++;
+            state.waveNum++;
     }
     else {
         if (objective && !existsSync(join(runDir, "goal.md"))) {
             writeFileSync(join(runDir, "goal.md"), `## Original Objective\n${objective}`, "utf-8");
         }
-        remaining = cfg.budget - cfg.thinkingUsed;
-        currentTasks = cfg.tasks;
-        waveNum = 0;
+        state.remaining = cfg.budget - cfg.thinkingUsed;
+        state.currentTasks = cfg.tasks;
         if (cfg.thinkingHistory)
-            waveHistory.push(cfg.thinkingHistory);
-        accCost = cfg.thinkingCost;
-        accCompleted = 0;
-        accFailed = 0;
-        accTools = cfg.thinkingTools;
-        accIn = cfg.thinkingIn;
-        accOut = cfg.thinkingOut;
+            state.waveHistory.push(cfg.thinkingHistory);
+        state.accCost = cfg.thinkingCost;
+        state.accTools = cfg.thinkingTools;
+        state.accIn = cfg.thinkingIn;
+        state.accOut = cfg.thinkingOut;
     }
-    liveConfig.remaining = remaining;
-    liveConfig.usageCap = usageCap;
+    liveConfig.remaining = state.remaining;
+    liveConfig.usageCap = state.usageCap;
     const runInfoRef = {
-        accIn, accOut, accCost, accCompleted, accFailed,
-        sessionsBudget: cfg.budget, waveNum, remaining,
-        model: workerModel, startedAt: cfg.runStartedAt,
+        accIn: state.accIn, accOut: state.accOut, accCost: state.accCost,
+        accCompleted: state.accCompleted, accFailed: state.accFailed,
+        sessionsBudget: cfg.budget, waveNum: state.waveNum, remaining: state.remaining,
+        model: state.workerModel, startedAt: cfg.runStartedAt,
         pendingSteer: countSteerInbox(runDir),
     };
     let display;
@@ -106,8 +106,8 @@ export async function executeRun(cfg) {
         try {
             writeSteerInbox(runDir, text);
             runInfoRef.pendingSteer = countSteerInbox(runDir);
-            if (currentSwarm)
-                currentSwarm.log(-1, `Steer queued: ${text.slice(0, 80)}`);
+            if (state.currentSwarm)
+                state.currentSwarm.log(-1, `Steer queued: ${text.slice(0, 80)}`);
         }
         catch { }
     };
@@ -122,23 +122,22 @@ export async function executeRun(cfg) {
             const plannerCostBefore = getTotalPlannerCost();
             try {
                 const memory = readRunMemory(runDir, previousKnowledge || undefined);
-                const cap = (s, max) => s && s.length > max ? s.slice(0, max) + "\n...(truncated)" : (s || "");
                 const context = [
                     objective ? `Objective: ${objective}` : "",
-                    memory.goal ? `Goal:\n${cap(memory.goal, 1500)}` : "",
-                    memory.status ? `Current status:\n${cap(memory.status, 2000)}` : "",
-                    memory.verifications ? `Latest verification:\n${cap(memory.verifications, 1500)}` : "",
-                    memory.reflections ? `Latest reflections:\n${cap(memory.reflections, 1500)}` : "",
-                    waveHistory.length ? `Waves completed: ${waveHistory.length}` : "",
+                    memory.goal ? `Goal:\n${truncate(memory.goal, 1501)}` : "",
+                    memory.status ? `Current status:\n${truncate(memory.status, 2001)}` : "",
+                    memory.verifications ? `Latest verification:\n${truncate(memory.verifications, 1501)}` : "",
+                    memory.reflections ? `Latest reflections:\n${truncate(memory.reflections, 1501)}` : "",
+                    state.waveHistory.length ? `Waves completed: ${state.waveHistory.length}` : "",
                 ].filter(Boolean).join("\n\n");
                 const prompt = renderPrompt("60_runtime/60-1_ask", { vars: { context, question } });
-                const answer = await runPlannerQuery(prompt, { cwd, model: plannerModel }, () => { });
-                accCost += getTotalPlannerCost() - plannerCostBefore;
+                const answer = await runPlannerQuery(prompt, { cwd, model: state.plannerModel }, () => { });
+                state.accCost += getTotalPlannerCost() - plannerCostBefore;
                 syncRunInfo();
                 display.setAsk({ question, answer: answer.trim() || "(no answer)", streaming: false });
             }
             catch (err) {
-                accCost += getTotalPlannerCost() - plannerCostBefore;
+                state.accCost += getTotalPlannerCost() - plannerCostBefore;
                 syncRunInfo();
                 display.setAsk({ question, answer: "", streaming: false, error: err?.message?.slice(0, 200) || "ask failed" });
             }
@@ -156,11 +155,11 @@ export async function executeRun(cfg) {
     // live swarm so in-flight agents stop immediately.
     const onQuit = () => {
         if (stopping) {
-            currentSwarm?.abort();
+            state.currentSwarm?.abort();
             return;
         }
         stopping = true;
-        currentSwarm?.abort();
+        state.currentSwarm?.abort();
         try {
             display.appendSteeringEvent("Quit requested — stopping after current work.");
         }
@@ -171,19 +170,16 @@ export async function executeRun(cfg) {
         const rl = getPlannerRateLimitInfo();
         return { utilization: rl.utilization, isUsingOverage: rl.isUsingOverage, windows: rl.windows, resetsAt: rl.resetsAt };
     };
-    const syncRunInfo = () => Object.assign(runInfoRef, { accIn, accOut, accCost, accCompleted, accFailed, waveNum, remaining });
-    const buildSteeringContext = () => {
-        let status;
-        try {
-            status = readFileSync(join(runDir, "status.md"), "utf-8");
-        }
-        catch { }
-        return {
-            objective: objective || undefined,
-            status,
-            lastWave: waveHistory[waveHistory.length - 1],
-        };
-    };
+    const syncRunInfo = () => Object.assign(runInfoRef, {
+        accIn: state.accIn, accOut: state.accOut, accCost: state.accCost,
+        accCompleted: state.accCompleted, accFailed: state.accFailed,
+        waveNum: state.waveNum, remaining: state.remaining,
+    });
+    const buildSteeringContext = () => ({
+        objective: objective || undefined,
+        status: readFileOrEmpty(join(runDir, "status.md")) || undefined,
+        lastWave: state.waveHistory[state.waveHistory.length - 1],
+    });
     const steeringLog = (text, kind) => {
         if (kind === "event")
             display.appendSteeringEvent(text);
@@ -191,18 +187,17 @@ export async function executeRun(cfg) {
             display.updateSteeringStatus(text);
     };
     const runDebrief = (label) => {
-        const debriefModel = fastModel || workerModel;
+        const debriefModel = state.fastModel || state.workerModel;
         const memory = readRunMemory(runDir, previousKnowledge || undefined);
-        const cap = (s, n) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
         const context = [
             objective ? `Objective: ${objective}` : "",
-            memory.status ? `Status:\n${cap(memory.status, 800)}` : "",
-            waveHistory.length ? `Waves done: ${waveHistory.length}` : "",
-            memory.reflections ? `Reflections:\n${cap(memory.reflections, 600)}` : "",
+            memory.status ? `Status:\n${truncate(memory.status, 801)}` : "",
+            state.waveHistory.length ? `Waves done: ${state.waveHistory.length}` : "",
+            memory.reflections ? `Reflections:\n${truncate(memory.reflections, 601)}` : "",
         ].filter(Boolean).join("\n\n");
         const prompt = renderPrompt("60_runtime/60-2_debrief", { vars: { label, context } });
         // Show in-flight feedback so the panel isn't empty while the planner thinks.
-        display.setDebrief(`Summarizing ${label.toLowerCase().replace(/\.$/, "")}\u2026`);
+        display.setDebrief(`Summarizing ${label.toLowerCase().replace(/\.$/, "")}…`);
         void runPlannerQuery(prompt, { cwd, model: debriefModel }, () => { })
             .then(text => { display.setDebrief(text.trim().slice(0, 210), label); })
             .catch(() => { display.setDebrief(undefined); });
@@ -244,15 +239,16 @@ export async function executeRun(cfg) {
         try {
             appendOvernightLogStart(cwd, runId, {
                 objective: objective || "",
-                model: workerModel,
+                model: state.workerModel,
                 budget: cfg.budget,
                 flex,
-                usageCap,
+                usageCap: state.usageCap,
                 branch: runBranch,
             });
         }
         catch { }
     }
+    // Static fields of the persisted RunState — never change during the run.
     const runStateBase = {
         cwd,
         id: `run-${new Date(cfg.runStartedAt).toISOString().slice(0, 19)}`,
@@ -271,28 +267,35 @@ export async function executeRun(cfg) {
         runBranch,
         originalRef,
     };
-    const buildRunState = (varying) => composeRunState({ ...runStateBase, workerModel, plannerModel, fastModel, concurrency, usageCap }, { remaining: varying.remaining, waveNum, accCost, accCompleted, accFailed, accIn, accOut, accTools, branches }, { phase: varying.phase, currentTasks: varying.currentTasks });
+    /** Persist the full RunState with the current state + given phase + tasks. */
+    const persistState = (phase, tasks = state.currentTasks) => {
+        saveRunState(runDir, composeRunState({ ...runStateBase,
+            workerModel: state.workerModel, plannerModel: state.plannerModel, fastModel: state.fastModel,
+            concurrency: state.concurrency, usageCap: state.usageCap }, { remaining: state.remaining, waveNum: state.waveNum,
+            accCost: state.accCost, accCompleted: state.accCompleted, accFailed: state.accFailed,
+            accIn: state.accIn, accOut: state.accOut, accTools: state.accTools, branches: state.branches }, { phase, currentTasks: tasks }));
+    };
     const gracefulStop = () => {
         if (stopping) {
-            currentSwarm?.cleanup();
+            state.currentSwarm?.cleanup();
             display.stop();
             restore();
             process.exit(0);
         }
         stopping = true;
-        currentSwarm?.abort();
+        state.currentSwarm?.abort();
     };
     process.on("SIGINT", gracefulStop);
     process.on("SIGTERM", gracefulStop);
     const crashHandler = (label, detail) => {
         try {
-            saveRunState(runDir, buildRunState({ remaining, phase: "stopped", currentTasks }));
+            persistState("stopped");
         }
         catch { }
         // Save partial wave session if swarm was running.
-        if (currentSwarm?.agents.length) {
+        if (state.currentSwarm?.agents.length) {
             try {
-                saveWaveSession(runDir, waveNum, currentSwarm.agents, currentSwarm.totalCostUsd);
+                saveWaveSession(runDir, state.waveNum, state.currentSwarm.agents, state.currentSwarm.totalCostUsd);
             }
             catch { }
         }
@@ -301,19 +304,19 @@ export async function executeRun(cfg) {
         console.error(chalk.red(`\n  ${label}: ${detail}`));
         process.exit(1);
     };
-    const cleanupSwarm = () => { currentSwarm?.abort(); currentSwarm?.cleanup(); };
+    const cleanupSwarm = () => { state.currentSwarm?.abort(); state.currentSwarm?.cleanup(); };
     process.on("uncaughtException", (err) => { cleanupSwarm(); crashHandler("Uncaught", err instanceof Error ? err.message : String(err)); });
     process.on("unhandledRejection", (reason) => { cleanupSwarm(); crashHandler("Unhandled", reason instanceof Error ? reason.message : String(reason)); });
     // Shared steering logic used by both resume-steering and in-loop steering
     const runSteering = async () => {
         let steered = false;
         // ── B1: Skip steering when ≥2 unresolved merge-failed branches exist ──
-        const mergeFailedBranches = branches.filter(b => b.status === "merge-failed");
+        const mergeFailedBranches = state.branches.filter(b => b.status === "merge-failed");
         if (mergeFailedBranches.length >= 2) {
-            currentTasks = mergeFailedBranches.map((b, i) => ({
+            state.currentTasks = mergeFailedBranches.map((b, i) => ({
                 id: `branch-retry-${i}`,
                 prompt: renderPrompt("30_wave/30-3_branch-retry", { vars: { originalTask: b.taskPrompt } }),
-                model: workerModel,
+                model: state.workerModel,
                 postcondition: "pnpm run build",
             }));
             display.appendSteeringEvent(`Skipping steering — ${mergeFailedBranches.length} merge-failed branches form the wave`);
@@ -321,7 +324,7 @@ export async function executeRun(cfg) {
         }
         let steerAttempts = 0;
         const MAX_STEER_ATTEMPTS = 2; // B2: retry threshold 3 → 2
-        while (!steered && remaining > 0 && !stopping && steerAttempts < MAX_STEER_ATTEMPTS) {
+        while (!steered && state.remaining > 0 && !stopping && steerAttempts < MAX_STEER_ATTEMPTS) {
             steerAttempts++;
             const plannerCostBefore = getTotalPlannerCost();
             try {
@@ -329,51 +332,51 @@ export async function executeRun(cfg) {
                 const appliedGuidance = memory.userGuidance;
                 if (appliedGuidance)
                     display.appendSteeringEvent(`User directives applied: ${appliedGuidance.slice(0, 80)}`);
-                const steer = await steerWave(objective, waveHistory, remaining, cwd, plannerModel, workerModel, fastModel, concurrency, steeringLog, memory, `steer-wave-${waveNum}-attempt-${steerAttempts}`);
-                accCost += getTotalPlannerCost() - plannerCostBefore;
+                const steer = await steerWave(objective, state.waveHistory, state.remaining, cwd, state.plannerModel, state.workerModel, state.fastModel, state.concurrency, steeringLog, memory, `steer-wave-${state.waveNum}-attempt-${steerAttempts}`);
+                state.accCost += getTotalPlannerCost() - plannerCostBefore;
                 syncRunInfo();
                 if (steer.statusUpdate)
                     writeStatus(runDir, steer.statusUpdate);
                 if (steer.goalUpdate)
                     writeGoalUpdate(runDir, steer.goalUpdate);
                 if (typeof steer.estimatedSessionsRemaining === "number")
-                    lastEstimate = steer.estimatedSessionsRemaining;
+                    state.lastEstimate = steer.estimatedSessionsRemaining;
                 const steerDir = join(runDir, "steering");
                 mkdirSync(steerDir, { recursive: true });
-                writeFileSync(join(steerDir, `wave-${waveNum}-attempt-${steerAttempts}.json`), JSON.stringify({
+                writeFileSync(join(steerDir, `wave-${state.waveNum}-attempt-${steerAttempts}.json`), JSON.stringify({
                     done: steer.done, reasoning: steer.reasoning,
                     taskCount: steer.tasks.length, statusUpdate: steer.statusUpdate, goalUpdate: steer.goalUpdate,
                     appliedGuidance: appliedGuidance || undefined,
                 }, null, 2), "utf-8");
                 if (appliedGuidance) {
-                    consumeSteerInbox(runDir, waveNum);
+                    consumeSteerInbox(runDir, state.waveNum);
                     runInfoRef.pendingSteer = countSteerInbox(runDir);
                 }
-                if (waveHistory.length > 0 && waveHistory.length % 5 === 0)
-                    archiveMilestone(runDir, waveNum);
+                if (state.waveHistory.length > 0 && state.waveHistory.length % 5 === 0)
+                    archiveMilestone(runDir, state.waveNum);
                 if (steer.done || steer.tasks.length === 0) {
-                    const hasVerification = waveHistory.some(w => w.tasks.some(t => t.prompt.toLowerCase().includes("verif")));
-                    if (!hasVerification && remaining >= 1) {
+                    const hasVerification = state.waveHistory.some(w => w.tasks.some(t => t.prompt.toLowerCase().includes("verif")));
+                    if (!hasVerification && state.remaining >= 1) {
                         display.appendSteeringEvent("Done blocked  -- auto-composing verification wave");
-                        currentTasks = [{
+                        state.currentTasks = [{
                                 id: "verify-0",
                                 prompt: renderPrompt("30_wave/30-5_auto-verify"),
-                                noWorktree: true, model: plannerModel, type: "verify",
+                                noWorktree: true, model: state.plannerModel, type: "verify",
                             }];
                         steered = true;
                         break;
                     }
-                    objectiveComplete = true;
-                    remaining = 0;
+                    state.objectiveComplete = true;
+                    state.remaining = 0;
                     break;
                 }
                 // steerWave already resolves role strings ("worker"/"planner"/"fast") to concrete model IDs
                 // using the current model variables, so tasks come back with a real model already.
-                currentTasks = steer.tasks;
+                state.currentTasks = steer.tasks;
                 steered = true;
             }
             catch (err) {
-                accCost += getTotalPlannerCost() - plannerCostBefore;
+                state.accCost += getTotalPlannerCost() - plannerCostBefore;
                 const rawPreview = err?.message?.slice(0, 200) || "(no details)";
                 if (steerAttempts < MAX_STEER_ATTEMPTS) {
                     display.appendSteeringEvent(`Steering failed (attempt ${steerAttempts}/${MAX_STEER_ATTEMPTS})  -- retrying... ${rawPreview}`);
@@ -382,12 +385,12 @@ export async function executeRun(cfg) {
                 // ── B3: Decomposer fallback (replaces single-giant-fallback) ──
                 display.appendSteeringEvent(`Steering failed ${MAX_STEER_ATTEMPTS}×  — decomposer fallback`);
                 // First: try merge-failed recycling even if only 1 unresolved branch exists
-                const stillFailed = branches.filter(b => b.status === "merge-failed");
+                const stillFailed = state.branches.filter(b => b.status === "merge-failed");
                 if (stillFailed.length >= 1) {
-                    currentTasks = stillFailed.map((b, i) => ({
+                    state.currentTasks = stillFailed.map((b, i) => ({
                         id: `branch-retry-${i}`,
                         prompt: renderPrompt("30_wave/30-3_branch-retry", { vars: { originalTask: b.taskPrompt } }),
-                        model: workerModel,
+                        model: state.workerModel,
                         postcondition: "pnpm run build",
                     }));
                     display.appendSteeringEvent(`Decomposer: ${stillFailed.length} merge-failed branch(es) retried as swarm tasks`);
@@ -397,23 +400,18 @@ export async function executeRun(cfg) {
                 // Second: minimal-prompt planner query
                 display.appendSteeringEvent("Decomposer: minimal planner query…");
                 try {
-                    let statusText = "";
-                    try {
-                        statusText = readFileSync(join(runDir, "status.md"), "utf-8");
-                    }
-                    catch { }
                     const minimalPrompt = renderPrompt("30_wave/30-4_decomposer-minimal", {
-                        vars: { objective, status: statusText || "(none)" },
+                        vars: { objective, status: readFileOrEmpty(join(runDir, "status.md")) || "(none)" },
                     });
-                    const minimalText = await runPlannerQuery(minimalPrompt, { cwd, model: plannerModel, outputFormat: STEER_SCHEMA, transcriptName: "decomposer-minimal", maxTurns: 40 }, () => { });
+                    const minimalText = await runPlannerQuery(minimalPrompt, { cwd, model: state.plannerModel, outputFormat: STEER_SCHEMA, transcriptName: "decomposer-minimal", maxTurns: 40 }, () => { });
                     const parsed = attemptJsonParse(minimalText);
                     if (parsed?.tasks?.length > 0) {
-                        currentTasks = parsed.tasks.map((t, i) => ({
+                        state.currentTasks = parsed.tasks.map((t, i) => ({
                             id: `decompose-${i}`,
                             prompt: typeof t === "string" ? t : t.prompt,
-                            model: workerModel,
+                            model: state.workerModel,
                         }));
-                        display.appendSteeringEvent(`Decomposer: ${currentTasks.length} tasks from minimal planner`);
+                        display.appendSteeringEvent(`Decomposer: ${state.currentTasks.length} tasks from minimal planner`);
                         steered = true;
                         break;
                     }
@@ -432,29 +430,29 @@ export async function executeRun(cfg) {
             return false;
         const plannerCostBefore = getTotalPlannerCost();
         try {
-            const result = await verifyWave(objective, currentTasks, waveHistory[waveHistory.length - 1], remaining, cwd, plannerModel, concurrency, steeringLog, `verify-wave-${waveNum}`);
-            accCost += getTotalPlannerCost() - plannerCostBefore;
+            const result = await verifyWave(objective, state.currentTasks, state.waveHistory[state.waveHistory.length - 1], state.remaining, cwd, state.plannerModel, state.concurrency, steeringLog, `verify-wave-${state.waveNum}`);
+            state.accCost += getTotalPlannerCost() - plannerCostBefore;
             syncRunInfo();
             if (result.statusUpdate)
                 writeStatus(runDir, result.statusUpdate);
             if (typeof result.estimatedSessionsRemaining === "number")
-                lastEstimate = result.estimatedSessionsRemaining;
+                state.lastEstimate = result.estimatedSessionsRemaining;
             if (result.done || result.tasks.length === 0) {
-                objectiveComplete = result.done;
-                remaining = 0;
+                state.objectiveComplete = result.done;
+                state.remaining = 0;
                 return false;
             }
-            currentTasks = result.tasks;
+            state.currentTasks = result.tasks;
             return true;
         }
         catch (err) {
-            accCost += getTotalPlannerCost() - plannerCostBefore;
+            state.accCost += getTotalPlannerCost() - plannerCostBefore;
             display.appendSteeringEvent(`Verifier failed: ${err?.message?.slice(0, 200) || "(no details)"}`);
             return false;
         }
     };
     // Resume: steer immediately if no queued tasks
-    if (cfg.resuming && flex && currentTasks.length === 0 && remaining > 0) {
+    if (cfg.resuming && flex && state.currentTasks.length === 0 && state.remaining > 0) {
         display.setSteering(rlGetter, buildSteeringContext());
         display.start();
         await runSteering();
@@ -464,131 +462,78 @@ export async function executeRun(cfg) {
         display.runInfo.startedAt = cfg.runStartedAt;
     display.start();
     // ── Main wave loop (extracted to wave-loop.ts) ──
-    const { runAnotherRound: _runAnotherRound } = await runWaveLoop(
-    // host
-    {
-        get currentSwarm() { return currentSwarm; },
-        set currentSwarm(v) { currentSwarm = v; },
-        get remaining() { return remaining; },
-        set remaining(v) { remaining = v; },
-        get currentTasks() { return currentTasks; },
-        set currentTasks(v) { currentTasks = v; },
-        get waveNum() { return waveNum; },
-        set waveNum(v) { waveNum = v; },
-        get accCost() { return accCost; },
-        set accCost(v) { accCost = v; },
-        get accIn() { return accIn; },
-        set accIn(v) { accIn = v; },
-        get accOut() { return accOut; },
-        set accOut(v) { accOut = v; },
-        get accCompleted() { return accCompleted; },
-        set accCompleted(v) { accCompleted = v; },
-        get accFailed() { return accFailed; },
-        set accFailed(v) { accFailed = v; },
-        get accTools() { return accTools; },
-        set accTools(v) { accTools = v; },
-        peakWorkerCtxPct, peakWorkerCtxTokens,
-        get lastCapped() { return lastCapped; },
-        set lastCapped(v) { lastCapped = v; },
-        get lastAborted() { return lastAborted; },
-        set lastAborted(v) { lastAborted = v; },
-        get objectiveComplete() { return objectiveComplete; },
-        set objectiveComplete(v) { objectiveComplete = v; },
-        liveConfig,
-        get workerModel() { return workerModel; },
-        set workerModel(v) { workerModel = v; },
-        get plannerModel() { return plannerModel; },
-        set plannerModel(v) { plannerModel = v; },
-        get fastModel() { return fastModel; },
-        set fastModel(v) { fastModel = v; },
-        get concurrency() { return concurrency; },
-        set concurrency(v) { concurrency = v; },
-        get usageCap() { return usageCap; },
-        set usageCap(v) { usageCap = v; },
-        branches,
-        waveHistory,
-        repoFingerprint,
-        runId,
-        allowSkillProposals: true,
-    }, 
-    // ctx
-    {
-        cwd, runDir, agentTimeoutMs: cfg.agentTimeoutMs,
-        envForModel: envForModel,
+    const deps = {
+        cwd, runDir, agentTimeoutMs: cfg.agentTimeoutMs, envForModel,
         beforeWaveCmds, afterWaveCmds,
         flex, useWorktrees, waveMerge,
         budget: cfg.budget,
         cursorProxy: [cfg.workerProvider, cfg.plannerProvider, cfg.fastProvider].some(p => p && isCursorProxyProvider(p)),
         allowExtraUsage: cfg.allowExtraUsage ?? false,
         extraUsageBudget: cfg.extraUsageBudget ?? 0,
-        lastEstimate,
+        repoFingerprint, runId, allowSkillProposals: true,
+        liveConfig,
         display,
-        runSteering,
-        runVerifier,
-        buildSteeringContext,
-        rlGetter,
+        runSteering, runVerifier,
+        buildSteeringContext, rlGetter,
         isStopping: () => stopping,
         syncRunInfo,
-        buildRunState,
-        renderSummary,
+        persistState,
         runDebrief,
-        recordBranches: (agents, mergeResults, currentWave) => {
-            recordBranches(agents, mergeResults, branches, currentWave);
-        },
         onLibrarianResult: (p, pa, q, r) => {
             skillsPromoted += p;
             skillsPatched += pa;
             skillsQuarantined += q;
             skillsRejected += r;
         },
-    });
+    };
+    await runWaveLoop(state, deps);
     display.stop();
     // ── Finalize ──
-    const trulyDone = objectiveComplete || (!flex && remaining <= 0);
-    const userQuit = stopping || lastAborted;
-    const wasCapped = lastCapped && !userQuit;
+    const trulyDone = state.objectiveComplete || (!flex && state.remaining <= 0);
+    const userQuit = stopping || state.lastAborted;
+    const wasCapped = state.lastCapped && !userQuit;
     // Determine specific exit reason for the end brief
     let exitReason;
     if (trulyDone)
         exitReason = "done";
     else if (userQuit)
         exitReason = "user-interrupted";
-    else if (wasCapped || remaining <= 0)
+    else if (wasCapped || state.remaining <= 0)
         exitReason = "budget-exhausted";
     else
         exitReason = "planner-gave-up"; // steering returned false, planner couldn't produce tasks
     const finalPhase = trulyDone ? "done"
         : userQuit ? "stopped"
             : wasCapped ? "capped"
-                : remaining <= 0 ? "capped"
+                : state.remaining <= 0 ? "capped"
                     : "stopped";
     // Preserve currentTasks when stopped mid-wave so resume has the leftover work.
-    const finalTasks = finalPhase === "stopped" ? currentTasks : [];
-    saveRunState(runDir, buildRunState({ remaining, phase: finalPhase, currentTasks: finalTasks }));
+    const finalTasks = finalPhase === "stopped" ? state.currentTasks : [];
+    persistState(finalPhase, finalTasks);
     // Post-run final review: comprehensive review of the entire diff before shipping.
     // This can take several minutes — keep the display alive so the user sees the
     // review agent working in real time instead of staring at a frozen terminal.
     // Skip entirely when the user quit — they asked to stop, don't burn budget.
-    if (flex && remaining > 0 && waveNum > 0 && !userQuit) {
-        console.log(chalk.dim(`\n  Final review: scanning full run diff\u2026`));
+    if (flex && state.remaining > 0 && state.waveNum > 0 && !userQuit) {
+        console.log(chalk.dim(`\n  Final review: scanning full run diff…`));
         display.start();
         const finalReview = await runPostRunReview(objective || "", {
-            cwd, plannerModel, concurrency,
-            remaining, usageCap, allowExtraUsage: cfg.allowExtraUsage,
-            extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: accCost,
+            cwd, plannerModel: state.plannerModel, concurrency: state.concurrency,
+            remaining: state.remaining, usageCap: state.usageCap, allowExtraUsage: cfg.allowExtraUsage,
+            extraUsageBudget: cfg.extraUsageBudget, baseCostUsd: state.accCost,
             envForModel, mergeStrategy: waveMerge, useWorktrees,
         }, (reviewSwarm) => {
-            currentSwarm = reviewSwarm;
+            state.currentSwarm = reviewSwarm;
             display.setWave(reviewSwarm);
             display.resume();
         });
         display.stop();
         if (finalReview) {
-            accCost += finalReview.costUsd;
-            accIn += finalReview.inputTokens;
-            accOut += finalReview.outputTokens;
-            accCompleted += finalReview.completed;
-            remaining = Math.max(0, remaining - finalReview.completed);
+            state.accCost += finalReview.costUsd;
+            state.accIn += finalReview.inputTokens;
+            state.accOut += finalReview.outputTokens;
+            state.accCompleted += finalReview.completed;
+            state.remaining = Math.max(0, state.remaining - finalReview.completed);
         }
     }
     if (trulyDone) {
@@ -600,10 +545,10 @@ export async function executeRun(cfg) {
     }
     try {
         updateOvernightLogEnd(cwd, runId, {
-            cost: accCost,
-            completed: accCompleted,
-            failed: accFailed,
-            waves: waveNum + 1,
+            cost: state.accCost,
+            completed: state.accCompleted,
+            failed: state.accFailed,
+            waves: state.waveNum + 1,
             phase: finalPhase,
             elapsedSec: Math.round((Date.now() - cfg.runStartedAt) / 1000),
         });
@@ -637,19 +582,21 @@ export async function executeRun(cfg) {
         console.log(chalk.dim(`\n  Skills: promoted=${skillsPromoted} patched=${skillsPatched} quarantined=${skillsQuarantined} rejected=${skillsRejected}`));
     }
     await printFinalSummary({
-        runDir, runBranch, objective, waveNum, runStartedAt: cfg.runStartedAt,
-        branches, waveHistory,
-        accCost, accCompleted, accFailed, accTools, accIn, accOut,
-        remaining, lastCapped, lastAborted, stopping, trulyDone, exitReason,
-        peakWorkerCtxTokens, peakWorkerCtxPct,
-        currentSwarmLogFile: currentSwarm?.logFile,
+        runDir, runBranch, objective, waveNum: state.waveNum, runStartedAt: cfg.runStartedAt,
+        branches: state.branches, waveHistory: state.waveHistory,
+        accCost: state.accCost, accCompleted: state.accCompleted, accFailed: state.accFailed,
+        accTools: state.accTools, accIn: state.accIn, accOut: state.accOut,
+        remaining: state.remaining, lastCapped: state.lastCapped, lastAborted: state.lastAborted,
+        stopping, trulyDone, exitReason,
+        peakWorkerCtxTokens: state.peakWorkerCtxTokens, peakWorkerCtxPct: state.peakWorkerCtxPct,
+        currentSwarmLogFile: state.currentSwarm?.logFile,
         narrativeDeps: {
             cwd, runDir, objective, previousKnowledge,
-            workerModel, fastModel, waveHistory,
+            workerModel: state.workerModel, fastModel: state.fastModel, waveHistory: state.waveHistory,
         },
     });
-    if (accFailed > 0)
+    if (state.accFailed > 0)
         process.exit(1);
-    if (lastAborted || accCompleted === 0)
+    if (state.lastAborted || state.accCompleted === 0)
         process.exit(2);
 }

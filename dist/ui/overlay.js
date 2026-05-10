@@ -1,8 +1,7 @@
 import { jsxs as _jsxs } from "react/jsx-runtime";
 import { Text, Box } from "ink";
 import chalk from "chalk";
-import { wrap } from "./primitives.js";
-function terminalWidth() { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
+import { terminalWidth, wrap } from "./primitives.js";
 const ASK_BODY_LINES = 8;
 const DEBRIEF_BODY_LINES = 6;
 export function Overlay({ ask, debrief }) {

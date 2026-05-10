@@ -1,9 +1,8 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { Text, Box } from "ink";
 import chalk from "chalk";
-import { fmtDur, fmtTokens, visibleLen } from "./primitives.js";
+import { fmtDur, fmtTokens, terminalWidth, visibleLen } from "./primitives.js";
 import { UsageBars, SteeringBars } from "./bars.js";
-function terminalWidth() { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
 // Scales with terminal width so narrow panes get a short bar and wide ones
 // don't waste the right half of the screen.
 function headerBarWidth(termW) {

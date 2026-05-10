@@ -1,6 +1,7 @@
-import { readFileSync, existsSync, readdirSync, statSync } from "fs";
+import { existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+import { readFileOrEmpty, readJsonOrNull } from "../../core/fs-helpers.js";
 export const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
 export async function fetchUrlContent(url, timeoutMs = 5_000) {
     try {
@@ -26,29 +27,22 @@ export async function fetchUrlContent(url, timeoutMs = 5_000) {
 export function collectRepoFacts(cwd) {
     const readmeHead = (() => {
         for (const name of ["README.md", "README", "readme.md"]) {
-            const p = join(cwd, name);
-            try {
-                if (existsSync(p))
-                    return readFileSync(p, "utf-8").slice(0, 1500);
-            }
-            catch { }
+            const body = readFileOrEmpty(join(cwd, name));
+            if (body)
+                return body.slice(0, 1500);
         }
         return "";
     })();
     const packageJson = (() => {
-        try {
-            const raw = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8"));
-            const deps = { ...(raw.dependencies ?? {}), ...(raw.devDependencies ?? {}) };
-            const depNames = Object.keys(deps).slice(0, 40);
-            return {
-                name: typeof raw.name === "string" ? raw.name : undefined,
-                scripts: raw.scripts && typeof raw.scripts === "object" ? raw.scripts : undefined,
-                depSummary: depNames.join(", "),
-            };
-        }
-        catch {
+        const raw = readJsonOrNull(join(cwd, "package.json"));
+        if (!raw)
             return null;
-        }
+        const deps = { ...(raw.dependencies ?? {}), ...(raw.devDependencies ?? {}) };
+        return {
+            name: typeof raw.name === "string" ? raw.name : undefined,
+            scripts: raw.scripts && typeof raw.scripts === "object" ? raw.scripts : undefined,
+            depSummary: Object.keys(deps).slice(0, 40).join(", "),
+        };
     })();
     const safeExec = (cmd, timeoutMs = 1_500) => {
         try {

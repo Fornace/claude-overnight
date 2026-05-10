@@ -2,8 +2,10 @@ import type { Task, MergeStrategy, BranchRecord, WaveSummary, RLGetter, RunState
 import { Swarm } from "../swarm/swarm.js";
 import { RunDisplay } from "../ui/ui.js";
 import type { LiveConfig, SteeringContext } from "../ui/ui.js";
-/** Mutable state the wave loop reads and writes. */
-export interface WaveLoopHost {
+/** Mutable state shared between run.ts and the wave loop.
+ *  Both modules read and write these fields directly — no getter/setter
+ *  shim — so updates from either side are visible to the other. */
+export interface WaveState {
     currentSwarm: Swarm | undefined;
     remaining: number;
     currentTasks: Task[];
@@ -19,7 +21,9 @@ export interface WaveLoopHost {
     lastCapped: boolean;
     lastAborted: boolean;
     objectiveComplete: boolean;
-    liveConfig: LiveConfig;
+    /** Planner's most recent "sessions to complete" estimate; used to size the
+     *  budget-extension prompt when the run runs out of sessions. */
+    lastEstimate: number | undefined;
     workerModel: string;
     plannerModel: string;
     fastModel: string | undefined;
@@ -27,12 +31,9 @@ export interface WaveLoopHost {
     usageCap: number | undefined;
     branches: BranchRecord[];
     waveHistory: WaveSummary[];
-    repoFingerprint: string;
-    runId: string;
-    allowSkillProposals: boolean;
 }
-/** Callbacks and read-only config for the wave loop. */
-export interface WaveLoopCtx {
+/** Read-only config + callbacks for the wave loop. */
+export interface WaveLoopDeps {
     cwd: string;
     runDir: string;
     agentTimeoutMs: number | undefined;
@@ -46,41 +47,22 @@ export interface WaveLoopCtx {
     cursorProxy: boolean;
     allowExtraUsage: boolean;
     extraUsageBudget: number;
-    lastEstimate: number | undefined;
+    repoFingerprint: string;
+    runId: string;
+    allowSkillProposals: boolean;
+    liveConfig: LiveConfig;
     display: RunDisplay;
     runSteering: () => Promise<boolean>;
-    /** Verifier invoked between waves in no-flex mode. Mirrors runSteering's contract. */
-    runVerifier?: () => Promise<boolean>;
+    /** Verifier invoked between waves in no-flex mode. Mirrors runSteering. */
+    runVerifier: () => Promise<boolean>;
     buildSteeringContext: () => SteeringContext;
     rlGetter: RLGetter;
     isStopping: () => boolean;
     syncRunInfo: () => void;
-    renderSummary: (swarm: Swarm) => string;
     runDebrief: (label: string) => void;
-    recordBranches: (agents: {
-        branch?: string;
-        task: {
-            prompt: string;
-        };
-        status: string;
-        filesChanged?: number;
-        costUsd?: number;
-    }[], mergeResults: {
-        branch: string;
-        ok: boolean;
-    }[], currentWave?: number) => void;
     onLibrarianResult?: (promoted: number, patched: number, quarantined: number, rejected: number) => void;
-    /** Builds a full RunState snapshot. Provided by run.ts so cwd, budget, branches,
-     * provider ids, etc. are preserved — the wave loop used to rebuild a truncated
-     * state that omitted cwd, which made saved runs invisible to `findIncompleteRuns`
-     * (the cwd-equality filter dropped them). */
-    buildRunState: (varying: {
-        remaining: number;
-        phase: RunState["phase"];
-        currentTasks: Task[];
-    }) => RunState;
+    /** Persist a RunState snapshot. Closes over runStateBase + state in run.ts
+     *  so callers only supply the per-snapshot phase + (optional) task slice. */
+    persistState: (phase: RunState["phase"], currentTasks?: Task[]) => void;
 }
-export interface WaveLoopResult {
-    runAnotherRound: boolean;
-}
-export declare function runWaveLoop(host: WaveLoopHost, ctx: WaveLoopCtx): Promise<WaveLoopResult>;
+export declare function runWaveLoop(state: WaveState, deps: WaveLoopDeps): Promise<void>;

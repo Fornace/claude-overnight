@@ -2,8 +2,7 @@ import { jsx as _jsx } from "react/jsx-runtime";
 import { Text, Box } from "ink";
 import chalk from "chalk";
 import { modelDisplayName } from "../core/models.js";
-import { colorEvent, renderWaitingIndicator, truncate, wrap } from "./primitives.js";
-function terminalWidth() { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
+import { colorEvent, renderWaitingIndicator, terminalWidth, truncate, wrap } from "./primitives.js";
 function divider(w, title) {
     const inner = ` ${title} `;
     const dashW = Math.max(3, Math.min(w - 6, 96) - inner.length);

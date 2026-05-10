@@ -43,23 +43,10 @@ export class RunDisplay {
         if (this.started)
             return;
         this.started = true;
-        if (this.isTTY) {
-            const callbacks = {
-                onSteer: (t) => this.onSteer?.(t),
-                onAsk: (t) => this.onAsk?.(t),
-                clearAsk: () => this.clearAskState(),
-                openAskTempFile: () => this.openAskTempFile(),
-                cycleAgent: (dir) => this.cycleSelectedAgent(dir),
-                selectAgent: (id) => this.selectAgent(id),
-                clearSelectedAgent: () => this.clearSelectedAgent(),
-                settingsTick: () => this.nudge(),
-                requestQuit: () => this.onQuit?.(),
-            };
-            this.ink = inkRender(_jsx(App, { store: this.store, callbacks: callbacks }));
-        }
-        else {
+        if (this.isTTY)
+            this.mountInk();
+        else
             this.plainInterval = setInterval(() => this.plainTick(), 500);
-        }
     }
     pause() {
         // Ink mode: unmount to free stdout so a string block (summary, prompts)
@@ -80,23 +67,26 @@ export class RunDisplay {
         if (!this.started)
             return;
         if (this.isTTY && !this.ink) {
-            const callbacks = {
-                onSteer: (t) => this.onSteer?.(t),
-                onAsk: (t) => this.onAsk?.(t),
-                clearAsk: () => this.clearAskState(),
-                openAskTempFile: () => this.openAskTempFile(),
-                cycleAgent: (dir) => this.cycleSelectedAgent(dir),
-                selectAgent: (id) => this.selectAgent(id),
-                clearSelectedAgent: () => this.clearSelectedAgent(),
-                settingsTick: () => this.nudge(),
-                requestQuit: () => this.onQuit?.(),
-            };
-            this.ink = inkRender(_jsx(App, { store: this.store, callbacks: callbacks }));
+            this.mountInk();
             return;
         }
         if (!this.isTTY && !this.plainInterval) {
             this.plainInterval = setInterval(() => this.plainTick(), 500);
         }
+    }
+    mountInk() {
+        const callbacks = {
+            onSteer: (t) => this.onSteer?.(t),
+            onAsk: (t) => this.onAsk?.(t),
+            clearAsk: () => this.clearAskState(),
+            openAskTempFile: () => this.openAskTempFile(),
+            cycleAgent: (dir) => this.cycleSelectedAgent(dir),
+            selectAgent: (id) => this.selectAgent(id),
+            clearSelectedAgent: () => this.clearSelectedAgent(),
+            settingsTick: () => this.nudge(),
+            requestQuit: () => this.onQuit?.(),
+        };
+        this.ink = inkRender(_jsx(App, { store: this.store, callbacks: callbacks }));
     }
     stop() {
         this.pause();

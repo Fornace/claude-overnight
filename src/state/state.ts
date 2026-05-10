@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync, symlinkSync, unlinkSync, renameSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync, symlinkSync, unlinkSync, renameSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
 import chalk from "chalk";
@@ -6,7 +6,7 @@ import type { RunState, BranchRecord, AgentState, RunMemory, WaveSummary } from 
 import { forceMergeOverlay } from "../swarm/merge.js";
 import { FALLBACK_MODEL } from "../core/models.js";
 import { selectKey } from "../cli/cli.js";
-import { readFileOrEmpty, readMdEntries, readJsonOrNull, writeJson } from "../core/fs-helpers.js";
+import { readFileOrEmpty, listMd, readMdEntries, readJsonOrNull, writeJson } from "../core/fs-helpers.js";
 import { terminalWidth } from "../ui/primitives.js";
 
 // ── File I/O helpers ──
@@ -14,11 +14,6 @@ import { terminalWidth } from "../ui/primitives.js";
 /** Concatenate every `.md` in `dir` as `### name\n<body>` blocks. Empty if missing. */
 export function readMdDir(dir: string): string {
   return readMdEntries(dir).map(({ name, body }) => `### ${name}\n${body}`).join("\n\n");
-}
-
-function hasMdFiles(dir: string): boolean {
-  try { return readdirSync(dir).some(f => f.endsWith(".md")); }
-  catch { return false; }
 }
 
 export function readRunMemory(runDir: string, previousRuns?: string): RunMemory {
@@ -46,8 +41,7 @@ export function readSteerInbox(runDir: string): string {
 
 /** Count pending steer files without reading them. */
 export function countSteerInbox(runDir: string): number {
-  try { return readdirSync(join(runDir, "steer-inbox")).filter(f => f.endsWith(".md")).length; }
-  catch { return 0; }
+  return listMd(join(runDir, "steer-inbox")).length;
 }
 
 /** Append a user directive to the inbox as its own timestamped file. Returns the file path. */
@@ -64,16 +58,14 @@ export function writeSteerInbox(runDir: string, text: string): string {
 /** Move all pending .md files from steer-inbox/ into steer-inbox/processed/wave-N/. Returns moved count. */
 export function consumeSteerInbox(runDir: string, waveNum: number): number {
   const dir = join(runDir, "steer-inbox");
+  const files = listMd(dir);
+  if (files.length === 0) return 0;
+  const processedDir = join(dir, "processed", `wave-${waveNum}`);
+  mkdirSync(processedDir, { recursive: true });
   let moved = 0;
-  try {
-    const files = readdirSync(dir).filter(f => f.endsWith(".md"));
-    if (files.length === 0) return 0;
-    const processedDir = join(dir, "processed", `wave-${waveNum}`);
-    mkdirSync(processedDir, { recursive: true });
-    for (const f of files) {
-      try { renameSync(join(dir, f), join(processedDir, f)); moved++; } catch {}
-    }
-  } catch {}
+  for (const f of files) {
+    try { renameSync(join(dir, f), join(processedDir, f)); moved++; } catch {}
+  }
   return moved;
 }
 
@@ -188,42 +180,43 @@ export function loadRunState(runDir: string): RunState | null {
   return state;
 }
 
+/** List run dir names. Newest-first when `newestFirst`, otherwise insertion order. Missing → []. */
+function listRunDirs(rootDir: string, newestFirst = true): string[] {
+  try {
+    const names = readdirSync(join(rootDir, "runs"));
+    return newestFirst ? names.sort().reverse() : names;
+  } catch { return []; }
+}
+
 export function findIncompleteRuns(rootDir: string, filterCwd: string): { dir: string; state: RunState }[] {
   const runsDir = join(rootDir, "runs");
-  try {
-    const dirs = readdirSync(runsDir).sort().reverse();
-    const results: { dir: string; state: RunState }[] = [];
-    for (const d of dirs) {
-      const runDir = join(runsDir, d);
-      const state = loadRunState(runDir);
-      if (!state || state.phase === "done" || state.cwd !== filterCwd) continue;
-      // Filter empty planning shells: no tasks.json, no designs/, no spent
-      // cost or completed sessions — nothing to resume.
-      if (state.phase === "planning"
-          && !existsSync(join(runDir, "tasks.json"))
-          && !hasMdFiles(join(runDir, "designs"))
-          && (state.accCost ?? 0) === 0
-          && (state.accCompleted ?? 0) === 0
-          && (state.accFailed ?? 0) === 0) {
-        continue;
-      }
-      results.push({ dir: runDir, state });
+  const results: { dir: string; state: RunState }[] = [];
+  for (const d of listRunDirs(rootDir)) {
+    const runDir = join(runsDir, d);
+    const state = loadRunState(runDir);
+    if (!state || state.phase === "done" || state.cwd !== filterCwd) continue;
+    // Filter empty planning shells: no tasks.json, no designs/, no spent
+    // cost or completed sessions — nothing to resume.
+    if (state.phase === "planning"
+        && !existsSync(join(runDir, "tasks.json"))
+        && listMd(join(runDir, "designs")).length === 0
+        && (state.accCost ?? 0) === 0
+        && (state.accCompleted ?? 0) === 0
+        && (state.accFailed ?? 0) === 0) {
+      continue;
     }
-    return results;
-  } catch { return []; }
+    results.push({ dir: runDir, state });
+  }
+  return results;
 }
 
 export function findOrphanedDesigns(rootDir: string): string | null {
   const runsDir = join(rootDir, "runs");
-  try {
-    const dirs = readdirSync(runsDir).sort().reverse();
-    for (const d of dirs) {
-      const runDir = join(runsDir, d);
-      if (existsSync(join(runDir, "run.json"))) continue;
-      const designs = readMdDir(join(runDir, "designs"));
-      if (designs) return runDir;
-    }
-  } catch {}
+  for (const d of listRunDirs(rootDir)) {
+    const runDir = join(runsDir, d);
+    if (existsSync(join(runDir, "run.json"))) continue;
+    if (readMdDir(join(runDir, "designs"))) return runDir;
+  }
   return null;
 }
 
@@ -242,42 +235,38 @@ export function findOrphanedDesigns(rootDir: string): string | null {
 export function backfillOrphanedPlans(rootDir: string, filterCwd: string): number {
   const runsDir = join(rootDir, "runs");
   let count = 0;
-  try {
-    const dirs = readdirSync(runsDir);
-    for (const d of dirs) {
-      const runDir = join(runsDir, d);
-      if (existsSync(join(runDir, "run.json"))) continue;
-      const tasksFile = join(runDir, "tasks.json");
-      const parsed = readJsonOrNull<{ tasks?: unknown[] }>(tasksFile);
-      if (!parsed || !Array.isArray(parsed.tasks) || parsed.tasks.length === 0) continue;
-      const taskCount = parsed.tasks.length;
+  for (const d of listRunDirs(rootDir, false)) {
+    const runDir = join(runsDir, d);
+    if (existsSync(join(runDir, "run.json"))) continue;
+    const parsed = readJsonOrNull<{ tasks?: unknown[] }>(join(runDir, "tasks.json"));
+    if (!parsed || !Array.isArray(parsed.tasks) || parsed.tasks.length === 0) continue;
+    const taskCount = parsed.tasks.length;
 
-      // Dir name format: 2026-04-12T13-03-57 (UTC). Convert to ISO.
-      const m = d.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/);
-      const startedAt = m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}.000Z` : new Date(0).toISOString();
+    // Dir name format: 2026-04-12T13-03-57 (UTC). Convert to ISO.
+    const m = d.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/);
+    const startedAt = m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}.000Z` : new Date(0).toISOString();
 
-      try {
-        saveRunState(runDir, {
-          id: d,
-          objective: `(recovered pre-1.11.7 plan · ${taskCount} tasks)`,
-          budget: taskCount, remaining: taskCount,
-          workerModel: FALLBACK_MODEL, plannerModel: FALLBACK_MODEL,
-          concurrency: 5,
-          flex: false, useWorktrees: true, mergeStrategy: "yolo",
-          allowExtraUsage: false,
-          waveNum: 0, currentTasks: [],
-          accCost: 0, accCompleted: 0, accFailed: 0,
-          accIn: 0, accOut: 0, accTools: 0,
-          branches: [],
-          phase: "planning",
-          startedAt,
-          cwd: filterCwd,
-          repoFingerprint: "000000000000",
-        });
-        count++;
-      } catch {}
-    }
-  } catch {}
+    try {
+      saveRunState(runDir, {
+        id: d,
+        objective: `(recovered pre-1.11.7 plan · ${taskCount} tasks)`,
+        budget: taskCount, remaining: taskCount,
+        workerModel: FALLBACK_MODEL, plannerModel: FALLBACK_MODEL,
+        concurrency: 5,
+        flex: false, useWorktrees: true, mergeStrategy: "yolo",
+        allowExtraUsage: false,
+        waveNum: 0, currentTasks: [],
+        accCost: 0, accCompleted: 0, accFailed: 0,
+        accIn: 0, accOut: 0, accTools: 0,
+        branches: [],
+        phase: "planning",
+        startedAt,
+        cwd: filterCwd,
+        repoFingerprint: "000000000000",
+      });
+      count++;
+    } catch {}
+  }
   return count;
 }
 
@@ -332,21 +321,18 @@ export async function showRunHistory(allRuns: { dir: string; state: RunState }[]
 
 export function readPreviousRunKnowledge(rootDir: string): string {
   const runsDir = join(rootDir, "runs");
-  try {
-    const dirs = readdirSync(runsDir).sort().reverse();
-    const summaries: string[] = [];
-    for (const d of dirs) {
-      if (summaries.length >= 5) break;
-      const state = loadRunState(join(runsDir, d));
-      if (!state || state.phase !== "done") continue;
-      const status = readFileOrEmpty(join(runsDir, d, "status.md"));
-      const goal = readFileOrEmpty(join(runsDir, d, "goal.md"));
-      const date = d.replace("T", " ").slice(0, 19);
-      const cost = state.accCost > 0 ? ` · $${state.accCost.toFixed(2)}` : "";
-      summaries.push(`### Run ${date} (${state.accCompleted} tasks${cost})\n${status || "(no status recorded)"}\n${goal ? `Goal: ${goal.slice(0, 500)}` : ""}`);
-    }
-    return summaries.join("\n\n");
-  } catch { return ""; }
+  const summaries: string[] = [];
+  for (const d of listRunDirs(rootDir)) {
+    if (summaries.length >= 5) break;
+    const state = loadRunState(join(runsDir, d));
+    if (!state || state.phase !== "done") continue;
+    const status = readFileOrEmpty(join(runsDir, d, "status.md"));
+    const goal = readFileOrEmpty(join(runsDir, d, "goal.md"));
+    const date = d.replace("T", " ").slice(0, 19);
+    const cost = state.accCost > 0 ? ` · $${state.accCost.toFixed(2)}` : "";
+    summaries.push(`### Run ${date} (${state.accCompleted} tasks${cost})\n${status || "(no status recorded)"}\n${goal ? `Goal: ${goal.slice(0, 500)}` : ""}`);
+  }
+  return summaries.join("\n\n");
 }
 
 // ── Run directory management ──
@@ -393,9 +379,10 @@ export function loadWaveHistory(runDir: string): WaveSummary[] {
   try { names = readdirSync(dir).filter(f => f.startsWith("wave-") && f.endsWith(".json")); }
   catch { return []; }
   names.sort((a, b) => parseInt(a.slice(5)) - parseInt(b.slice(5)));
+  type Agent = { prompt: string; status: string; filesChanged: number; error?: string };
   const out: WaveSummary[] = [];
   for (const f of names) {
-    const data = readJsonOrNull<{ wave: number; agents?: { prompt: string; status: string; filesChanged: number; error?: string }[] }>(join(dir, f));
+    const data = readJsonOrNull<{ wave: number; agents?: Agent[] }>(join(dir, f));
     if (!data) continue;
     out.push({
       wave: data.wave,
@@ -470,9 +457,7 @@ export function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: 
 }
 
 export function archiveMilestone(baseDir: string, waveNum: number): void {
-  const statusPath = join(baseDir, "status.md");
-  if (!existsSync(statusPath)) return;
-  const content = readFileSync(statusPath, "utf-8");
+  const content = readFileOrEmpty(join(baseDir, "status.md"));
   if (!content.trim()) return;
   const milestoneDir = join(baseDir, "milestones");
   mkdirSync(milestoneDir, { recursive: true });

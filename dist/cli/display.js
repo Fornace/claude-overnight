@@ -1,7 +1,8 @@
 // Terminal display helpers: spinner frames, plan listing, dual-mode progress log.
 import chalk from "chalk";
+import { terminalWidth } from "../ui/primitives.js";
 export const BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const termWidth = (margin = 6) => Math.max((process.stdout.columns ?? 80) - margin, 40);
+const termWidth = (margin = 6) => Math.max(terminalWidth() - margin, 40);
 export function showPlan(tasks) {
     const w = termWidth();
     const ruleLen = Math.min(w, 70);

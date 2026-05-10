@@ -2,7 +2,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { Text, Box } from "ink";
 import chalk from "chalk";
 import { deriveFooter } from "./footer-state.js";
-import { visibleLen } from "./primitives.js";
+import { terminalWidth, visibleLen } from "./primitives.js";
 function renderAction(a) {
     const keyTag = `[${a.key}]`;
     if (a.state === "enabled")
@@ -11,7 +11,6 @@ function renderAction(a) {
     // surfaced only via the toast when pressed.
     return chalk.dim(`${keyTag} ${a.label}`);
 }
-function terminalWidth() { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
 /** Join rendered actions into one line, or two evenly-split lines if a single
  *  line would overflow the terminal. Keeps the canonical slot order. */
 function layoutActions(rendered, pendingChip, termW) {

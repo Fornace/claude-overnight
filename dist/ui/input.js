@@ -17,7 +17,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Text, Box, useInput, useStdin } from "ink";
 import chalk from "chalk";
-import { visibleLen, wrap } from "./primitives.js";
+import { terminalWidth, visibleLen, wrap } from "./primitives.js";
 import { SETTINGS_FIELDS, SETTINGS_LABELS, NUMERIC_SETTINGS_FIELDS, applySettingEdit, readSettingValue, } from "./settings.js";
 import { parseChunk, setBracketedPaste, deleteWordBackward as rawDeleteWordBackward } from "./raw-input.js";
 export const MAX_INPUT_LEN = 600;
@@ -43,6 +43,11 @@ export function InputLayer({ store, callbacks, onToast }) {
             return;
         setRawMode(true);
         setBracketedPaste(process.stdout, true);
+        // Spread on every call so other input-slot fields (mode, settingsField)
+        // aren't clobbered when only the buffer changes.
+        const patchInput = (partial) => {
+            store.patch({ input: { ...store.get().input, ...partial } });
+        };
         // Snapshot the overlay-relevant state locally; callbacks always pull the
         // latest live state via `store.get()` on each event.
         const onData = (buf) => {
@@ -52,109 +57,104 @@ export function InputLayer({ store, callbacks, onToast }) {
                 return;
             const swarm = cur.swarm;
             const lc = cur.liveConfig;
+            // A chunk can hold multiple buffer edits (e.g. paste + backspace). Track
+            // them in `next` so each edit sees the previous one without waiting for
+            // the React state batch to land.
+            let next = buffer;
+            const setNext = (b) => { next = b; patchInput({ buffer: b }); };
             const closeOverlay = () => {
-                setBuffer("");
                 setSettingsField(0);
+                next = "";
                 store.patch({ input: { mode: "none", buffer: "", settingsField: 0 } });
             };
             const advanceSettings = () => {
-                const next = settingsField + 1;
-                setBuffer("");
-                if (next >= SETTINGS_FIELDS.length) {
+                const nextField = settingsField + 1;
+                next = "";
+                if (nextField >= SETTINGS_FIELDS.length) {
                     setSettingsField(0);
                     store.patch({ input: { mode: "none", buffer: "", settingsField: 0 } });
                 }
                 else {
-                    setSettingsField(next);
-                    store.patch({ input: { mode: "settings", buffer: "", settingsField: next } });
+                    setSettingsField(nextField);
+                    store.patch({ input: { mode: "settings", buffer: "", settingsField: nextField } });
                 }
             };
-            for (const ev of parseChunk(buf.toString())) {
+            const settingsField0 = () => SETTINGS_FIELDS[settingsField % SETTINGS_FIELDS.length];
+            const sanitizeForSettings = (raw) => {
+                const field = settingsField0();
+                if (field === "pause")
+                    return "";
+                let text = raw;
+                if (NUMERIC_SETTINGS_FIELDS.has(field))
+                    text = text.replace(/[^0-9.]/g, "");
+                return text.replace(/\n/g, " ");
+            };
+            // Returns true iff the chunk should stop being processed (overlay closed).
+            const dispatch = (ev) => {
                 switch (ev.type) {
                     case "cancel":
+                    case "interrupt": // ^C inside overlay = cancel, not process exit
                         closeOverlay();
-                        return;
-                    case "interrupt":
-                        // Treat ^C inside overlay as cancel, not process exit.
-                        closeOverlay();
-                        return;
+                        return true;
                     case "submit": {
-                        const text = buffer.trim();
+                        const text = next.trim();
                         if (m === "steer" && text)
                             callbacks.onSteer(text);
                         else if (m === "ask" && text)
                             callbacks.onAsk(text);
                         else if (m === "settings") {
-                            const field = SETTINGS_FIELDS[settingsField % SETTINGS_FIELDS.length];
                             if (lc)
-                                applySettingEdit(field, text, lc, swarm);
+                                applySettingEdit(settingsField0(), text, lc, swarm);
                             callbacks.settingsTick();
                             advanceSettings();
-                            return;
+                            return false;
                         }
                         closeOverlay();
-                        return;
+                        return true;
                     }
                     case "tab":
-                        if (m === "settings") {
-                            const field = SETTINGS_FIELDS[settingsField % SETTINGS_FIELDS.length];
-                            if (field === "pause" && swarm && lc) {
-                                const next = !swarm.paused;
-                                swarm.setPaused(next);
-                                lc.paused = next;
-                                lc.dirty = true;
-                                callbacks.settingsTick();
-                            }
-                            advanceSettings();
+                        if (m !== "settings")
+                            return false;
+                        if (settingsField0() === "pause" && swarm && lc) {
+                            const paused = !swarm.paused;
+                            swarm.setPaused(paused);
+                            lc.paused = paused;
+                            lc.dirty = true;
+                            callbacks.settingsTick();
                         }
-                        break;
+                        advanceSettings();
+                        return false;
                     case "backspace":
-                        setBuffer((prev) => {
-                            const next = prev.slice(0, -1);
-                            store.patch({ input: { ...store.get().input, buffer: next } });
-                            return next;
-                        });
-                        break;
+                        setNext(next.slice(0, -1));
+                        return false;
                     case "word-delete":
-                        setBuffer((prev) => {
-                            const next = rawDeleteWordBackward(prev);
-                            store.patch({ input: { ...store.get().input, buffer: next } });
-                            return next;
-                        });
-                        break;
+                        setNext(rawDeleteWordBackward(next));
+                        return false;
                     case "clear-line":
-                        if (m !== "settings") {
-                            setBuffer("");
-                            store.patch({ input: { ...store.get().input, buffer: "" } });
-                        }
-                        break;
+                        if (m !== "settings")
+                            setNext("");
+                        return false;
                     case "nav":
-                        // Navigation keys are a no-op inside the overlay. Used to leak
-                        // as stray letters because cmd+→ on macOS sends ctrl+e.
-                        break;
+                        // Swallow inside the overlay. Used to leak as stray letters because
+                        // cmd+→ on macOS sends ctrl+e, which the typed-char branch then
+                        // appended verbatim.
+                        return false;
                     case "char":
                     case "paste": {
-                        let text = ev.type === "paste" ? ev.text.replace(/\r\n?/g, "\n") : ev.text;
-                        // Settings mode is single-line and numeric fields are digits-only.
-                        if (m === "settings") {
-                            const field = SETTINGS_FIELDS[settingsField % SETTINGS_FIELDS.length];
-                            if (field === "pause")
-                                break;
-                            if (NUMERIC_SETTINGS_FIELDS.has(field))
-                                text = text.replace(/[^0-9.]/g, "");
-                            text = text.replace(/\n/g, " ");
-                        }
-                        if (!text)
-                            break;
-                        setBuffer((prev) => {
-                            const next = (prev + text).slice(0, MAX_INPUT_LEN);
-                            store.patch({ input: { ...store.get().input, buffer: next } });
-                            return next;
-                        });
-                        break;
+                        const raw = ev.type === "paste" ? ev.text.replace(/\r\n?/g, "\n") : ev.text;
+                        const text = m === "settings" ? sanitizeForSettings(raw) : raw;
+                        if (text)
+                            setNext((next + text).slice(0, MAX_INPUT_LEN));
+                        return false;
                     }
                 }
+            };
+            for (const ev of parseChunk(buf.toString())) {
+                if (dispatch(ev))
+                    break;
             }
+            if (next !== buffer)
+                setBuffer(next);
         };
         stdin.on("data", onData);
         return () => {
@@ -309,7 +309,6 @@ export function InputLayer({ store, callbacks, onToast }) {
     const caretOn = state.tick % 2 === 0;
     return (_jsx(InputPrompt, { mode: state.input.mode, buffer: buffer, settingsField: settingsField, state: state, caretOn: caretOn }));
 }
-function terminalWidth() { return Math.max((process.stdout.columns ?? 80) || 80, 60); }
 function InputPrompt({ mode, buffer, settingsField, state, caretOn }) {
     const termW = terminalWidth();
     const boxW = Math.min(Math.max(44, termW - 6), 120);

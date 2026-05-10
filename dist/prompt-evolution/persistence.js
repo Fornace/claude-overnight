@@ -12,14 +12,11 @@
  * This makes every run fully inspectable after the fact and enables
  * longitudinal analysis ("did our planner prompts get better over time?").
  */
-import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readFileOrEmpty, readJsonOrNull, writeJson } from "../core/fs-helpers.js";
 const DEFAULT_ROOT = join(homedir(), ".claude-overnight", "prompt-evolution");
-function ensureDir(p) {
-    if (!existsSync(p))
-        mkdirSync(p, { recursive: true });
-}
 function storeRoot() {
     return process.env.PROMPT_EVOLUTION_STORE ?? DEFAULT_ROOT;
 }
@@ -29,9 +26,8 @@ export function runDir(runId) {
 /** Initialise a new run directory and write meta.json. */
 export function initRun(meta) {
     const root = runDir(meta.runId);
-    ensureDir(root);
-    ensureDir(join(root, "prompts"));
-    writeFileSync(join(root, "meta.json"), JSON.stringify(meta, null, 2) + "\n");
+    mkdirSync(join(root, "prompts"), { recursive: true });
+    writeJson(join(root, "meta.json"), meta);
     return root;
 }
 /** Append a generation's matrix to matrix.jsonl. */
@@ -63,7 +59,7 @@ export function appendLearning(runId, entries) {
 /** Snapshot every prompt variant text to prompts/<variantId>.md. */
 export function snapshotPrompts(runId, rows) {
     const dir = join(runDir(runId), "prompts");
-    ensureDir(dir);
+    mkdirSync(dir, { recursive: true });
     for (const r of rows) {
         const safeId = r.variantId.replace(/[^a-zA-Z0-9_-]/g, "_");
         writeFileSync(join(dir, `${safeId}.md`), `<!-- generation=${r.generation} gmean=${(r.gmean * 100).toFixed(1)}% -->\n\n${r.text}\n`);
@@ -73,14 +69,16 @@ export function snapshotPrompts(runId, rows) {
 export function finalizeRun(runId, result, metaPartial) {
     const root = runDir(runId);
     const metaPath = join(root, "meta.json");
-    const existing = JSON.parse(readFileSync(metaPath, "utf-8"));
+    const existing = readJsonOrNull(metaPath);
+    if (!existing)
+        throw new Error(`finalizeRun: missing or unreadable meta.json at ${metaPath}`);
     const merged = {
         ...existing,
         ...metaPartial,
         status: "done",
         finishedAt: new Date().toISOString(),
     };
-    writeFileSync(metaPath, JSON.stringify(merged, null, 2) + "\n");
+    writeJson(metaPath, merged);
     const best = result.bestVariant;
     const report = `# Prompt Evolution Run — ${runId}
 
@@ -123,47 +121,39 @@ export function listRuns() {
     const root = storeRoot();
     if (!existsSync(root))
         return [];
-    const dirs = readdirSync(root, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name);
-    const runs = dirs
-        .map((id) => {
-        try {
-            const meta = JSON.parse(readFileSync(join(root, id, "meta.json"), "utf-8"));
-            return { runId: id, meta };
-        }
-        catch {
-            return null;
-        }
-    })
-        .filter(Boolean);
+    const runs = [];
+    for (const d of readdirSync(root, { withFileTypes: true })) {
+        if (!d.isDirectory())
+            continue;
+        const meta = readJsonOrNull(join(root, d.name, "meta.json"));
+        if (meta)
+            runs.push({ runId: d.name, meta });
+    }
     runs.sort((a, b) => (b.meta.startedAt ?? "").localeCompare(a.meta.startedAt ?? ""));
     return runs;
+}
+/** Parse a JSONL file (line-per-JSON) into an array; missing or empty → []. */
+function readJsonLines(path) {
+    const out = [];
+    for (const line of readFileOrEmpty(path).trim().split("\n")) {
+        if (line)
+            try {
+                out.push(JSON.parse(line));
+            }
+            catch { /* skip bad line */ }
+    }
+    return out;
 }
 /** Read a full run for inspection. */
 export function loadRun(runId) {
     const root = runDir(runId);
-    const meta = JSON.parse(readFileSync(join(root, "meta.json"), "utf-8"));
-    const matrix = [];
-    try {
-        const ml = readFileSync(join(root, "matrix.jsonl"), "utf-8").trim().split("\n");
-        for (const line of ml)
-            if (line)
-                matrix.push(JSON.parse(line));
-    }
-    catch { /* empty matrix */ }
-    const learning = [];
-    try {
-        const ll = readFileSync(join(root, "learning.jsonl"), "utf-8").trim().split("\n");
-        for (const line of ll)
-            if (line)
-                learning.push(JSON.parse(line));
-    }
-    catch { /* empty learning */ }
-    let bestMd = "";
-    try {
-        bestMd = readFileSync(join(root, "best.md"), "utf-8");
-    }
-    catch { /* no best.md yet */ }
-    return { meta, matrix, learning, bestMd };
+    const meta = readJsonOrNull(join(root, "meta.json"));
+    if (!meta)
+        throw new Error(`loadRun: missing or unreadable meta.json at ${root}`);
+    return {
+        meta,
+        matrix: readJsonLines(join(root, "matrix.jsonl")),
+        learning: readJsonLines(join(root, "learning.jsonl")),
+        bestMd: readFileOrEmpty(join(root, "best.md")),
+    };
 }
