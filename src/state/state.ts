@@ -430,28 +430,22 @@ export function autoMergeBranches(cwd: string, branches: BranchRecord[], onLog: 
   // Feed every unmerged branch to git; it will no-op harmlessly if truly empty.
   const unmerged = branches.filter(b => b.status === "unmerged");
   if (unmerged.length === 0) return;
+  const opts = { cwd, encoding: "utf-8" as const, stdio: "pipe" as const };
+  const tryGit = (cmd: string): boolean => { try { execSync(cmd, opts); return true; } catch { return false; } };
   onLog(`Merging ${unmerged.length} unmerged branches...`);
   for (const br of unmerged) {
-    try {
-      execSync(`git merge --no-edit "${br.branch}"`, { cwd, encoding: "utf-8", stdio: "pipe" });
-      br.status = "merged";
-      onLog(`  ✓ ${br.branch} (${br.filesChanged} files)`);
-    } catch {
-      try {
-        try { execSync("git merge --abort", { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
-        execSync(`git merge --no-edit -X theirs "${br.branch}"`, { cwd, encoding: "utf-8", stdio: "pipe" });
-        br.status = "merged";
-        onLog(`  ✓ ${br.branch} (auto-resolved)`);
-      } catch {
-        try { execSync("git merge --abort", { cwd, encoding: "utf-8", stdio: "pipe" }); } catch {}
-        if (forceMergeOverlay(br.branch, cwd)) {
-          br.status = "merged";
-          onLog(`  ✓ ${br.branch} (force-merged)`);
-        } else {
-          br.status = "merge-failed";
-          onLog(`  ✗ ${br.branch} (conflict  -- preserved for manual merge)`);
-        }
-      }
+    if (tryGit(`git merge --no-edit "${br.branch}"`)) {
+      br.status = "merged"; onLog(`  ✓ ${br.branch} (${br.filesChanged} files)`); continue;
+    }
+    tryGit("git merge --abort");
+    if (tryGit(`git merge --no-edit -X theirs "${br.branch}"`)) {
+      br.status = "merged"; onLog(`  ✓ ${br.branch} (auto-resolved)`); continue;
+    }
+    tryGit("git merge --abort");
+    if (forceMergeOverlay(br.branch, cwd)) {
+      br.status = "merged"; onLog(`  ✓ ${br.branch} (force-merged)`);
+    } else {
+      br.status = "merge-failed"; onLog(`  ✗ ${br.branch} (conflict  -- preserved for manual merge)`);
     }
   }
 }
